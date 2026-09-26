@@ -1,0 +1,22 @@
+currency: EUR
+thresholds:
+  - max_amount: 10
+    approval: automatic
+  - max_amount: 50
+    approval: department_head
+  - max_amount: 200
+    approval: [cfo, ceo]
+  - above_amount: 200
+    approval: founder
+limits:
+  company_monthly: null
+  project: null
+  department: null
+  agent: null
+categories:
+  ai_api: null
+  infrastructure: null
+  marketing: null
+hard_stop_on_budget_exceeded: true
+founder_can_override: true
+self_authority_changes_allowed: false
