@@ -44,6 +44,11 @@ def _safe_failure_detail_code(message: str) -> str:
         return "invalid_recommendation"
     if "evidence" in message.lower() or "source" in message.lower():
         return "invalid_evidence"
+    for field in ("assumptions", "risks", "milestones", "acceptance_criteria"):
+        if message.lower().startswith(f"artifact {field} "):
+            return f"invalid_{field}"
+    if message.lower().startswith("product plan requires"):
+        return "missing_product_plan_sections"
     if "acceptance" in message.lower():
         return "invalid_acceptance_criteria"
     if "decision" in message.lower():
@@ -219,6 +224,8 @@ class HermesAgentClient:
                 "\"assumptions\":[\"...\"],\"risks\":[\"...\"],\"milestones\":[\"...\"],"
                 "\"acceptance_criteria\":[\"...\"]}. Replace every placeholder with supported content. "
                 "Evidence, milestones, and acceptance_criteria must be non-empty arrays of 1-10 concise items. "
+                "Every assumptions, risks, milestones, and acceptance_criteria item must be a string, never "
+                "an object or nested array; evidence items are the only nested objects in the response. "
                 "Carry forward the CPO's cited sources for material customer and market claims; do not "
                 "invent findings or treat a proposed budget as approved spending."
             )
