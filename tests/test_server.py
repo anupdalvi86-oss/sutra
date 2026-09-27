@@ -53,6 +53,60 @@ class InternalEndpointTests(unittest.TestCase):
         request = Request(f"{self.base}/internal/spend", data=payload if isinstance(payload, bytes) else json.dumps(payload).encode(), headers=headers, method="POST")
         return urlopen(request, timeout=2)
 
+    def get(self, path):
+        return urlopen(f"{self.base}{path}", timeout=2)
+
+    def test_liveness_stays_ok_while_readiness_reports_missing_database(self):
+        old_store = self.app.store
+        self.addCleanup(setattr, self.app, "store", old_store)
+        self.app.store = None
+        with patch.dict("os.environ", {
+            "SUTRA_ENABLE_TELEGRAM": "false",
+            "SUTRA_ENABLE_AGENT_WORKER": "false",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+        }, clear=False):
+            with self.get("/health") as response:
+                self.assertEqual(response.status, 200)
+            with self.assertRaises(HTTPError) as caught:
+                self.get("/ready")
+        self.assertEqual(caught.exception.code, 503)
+        body = json.loads(caught.exception.read())
+        self.assertFalse(body["ready"])
+        self.assertIn("database", body["blockers"])
+
+    def test_readiness_passes_when_database_is_reachable_and_integrations_are_disabled(self):
+        old_store = self.app.store
+        self.addCleanup(setattr, self.app, "store", old_store)
+        self.app.store = FakeStore()
+        with patch.dict("os.environ", {
+            "SUTRA_ENABLE_TELEGRAM": "false",
+            "SUTRA_ENABLE_AGENT_WORKER": "false",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+        }, clear=False):
+            with self.get("/ready") as response:
+                body = json.loads(response.read())
+        self.assertEqual(response.status, 200)
+        self.assertTrue(body["ready"])
+        self.assertEqual(body["blockers"], [])
+        self.assertEqual(body["checks"]["database"], "reachable")
+
+    def test_readiness_blocks_an_enabled_telegram_integration_until_it_is_running(self):
+        old_store, old_status = self.app.store, self.app.telegram_status
+        self.addCleanup(setattr, self.app, "store", old_store)
+        self.addCleanup(setattr, self.app, "telegram_status", old_status)
+        self.app.store = FakeStore()
+        self.app.telegram_status = "unconfigured"
+        with patch.dict("os.environ", {
+            "SUTRA_ENABLE_TELEGRAM": "true",
+            "SUTRA_ENABLE_AGENT_WORKER": "false",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+        }, clear=False):
+            with self.assertRaises(HTTPError) as caught:
+                self.get("/ready")
+        self.assertEqual(caught.exception.code, 503)
+        body = json.loads(caught.exception.read())
+        self.assertEqual(body["blockers"], ["telegram"])
+
     def test_internal_spend_requires_server_token(self):
         before = len(self.app.store.calls)
         with self.assertRaises(HTTPError) as caught:
