@@ -54,6 +54,34 @@ class FounderCommandTests(unittest.TestCase):
         self.assertEqual(self.store.rpc.call_args.args[0], "sutra_founder_decide_approval")
         self.assertEqual(self.store.rpc.call_args.args[1]["p_comment"], "go ahead")
 
+    def test_founder_can_request_bounded_pm_review_retry(self):
+        self.store.rpc.return_value = {"run_id": APPROVAL, "status": "queued"}
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry PM review {APPROVAL}").text
+        self.assertIn("Unknown earlier usage remains reserved", reply)
+        self.assertIn("project spending is not authorized", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_retry_pm_review", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_run_id": APPROVAL,
+        })
+
+    def test_pm_review_retry_rejects_wrong_founder_or_group_chat(self):
+        for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):
+            with self.subTest(user_id=user_id, chat_id=chat_id):
+                reply = self.router.handle(user_id, chat_id, f"retry PM review {APPROVAL}").text
+                self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+    def test_pm_review_retry_rejects_malformed_run_id(self):
+        self.assertEqual(parse_founder_command("retry PM review not-a-uuid").kind, "unsupported")
+        self.router.handle(FOUNDER, FOUNDER, "retry PM review 00000000-0000-4000-8000-00000000000z")
+        self.store.rpc.assert_not_called()
+
+    def test_pm_review_retry_database_rejection_is_fail_closed(self):
+        self.store.rpc.side_effect = IntegrationError("not eligible")
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry PM review {APPROVAL}").text
+        self.assertIn("was not retried", reply)
+        self.store.rpc.assert_called_once()
+
     def test_founder_can_list_pending_approvals_without_deciding_them(self):
         self.store.founder_pending_approvals.return_value = [{
             "approval_id": APPROVAL, "summary": "AI QA opportunity", "amount": 500,
