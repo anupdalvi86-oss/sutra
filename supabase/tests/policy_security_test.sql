@@ -274,6 +274,9 @@ select is((select count(*)::integer from public.audit_log where action='github.i
 select is((select details->>'issue_url' from public.audit_log where action='github.issue_created'
   and resource_id=(select (payload->>'task_id')::uuid::text from github_dispatch_claim) limit 1),
   'https://github.com/acme/sutra/issues/41','audit log retains the durable GitHub issue link');
+select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
+  (select (payload->>'task_id')::uuid from github_dispatch_claim),'done','{"pull_request":"draft","ci":"passed"}'::jsonb)$$,
+  '42501',null,'generic task updates cannot bypass the merged PR and matching CI completion gate');
 select is(public.sutra_claim_github_task('sutra-github-worker-abcdefgh')::text,null::text,
   'the same task is not dispatched twice');
 select throws_ok($$select public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
