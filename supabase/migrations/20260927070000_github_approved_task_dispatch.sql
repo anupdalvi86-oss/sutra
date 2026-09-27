@@ -104,7 +104,7 @@ begin
   select p.status into project_state from public.projects p where p.id=task_row.project_id;
   task_status := case when task_row.status='ready' and project_state in ('approved','active') and exists (
     select 1 from public.agents a where a.id=task_row.assigned_agent_id and a.active and a.slug='developer'
-  ) then 'in_progress' when task_row.status='ready' then 'blocked' else task_row.status end;
+  ) then 'in_progress' else task_row.status end;
   update public.github_task_dispatches set status='created',issue_number=p_issue_number,issue_url=p_issue_url,
     lease_token=null,lease_expires_at=null,last_error=null,updated_at=now() where id=dispatch_row.id;
   update public.tasks set status=task_status,updated_at=now() where id=p_task_id;
