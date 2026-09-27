@@ -102,7 +102,7 @@ class GitHubIssues:
         )
 
     def _existing_issue(self, task_id: str) -> dict[str, Any] | None:
-        query = f"repo:{self.repository} is:issue in:body sutra-task-id:{task_id}"
+        query = f'repo:{self.repository} is:issue in:body "{task_id}"'
         path = "/search/issues?" + urllib.parse.urlencode({"q": query, "per_page": 10})
         result = self._request(path)
         items = result.get("items") if isinstance(result, dict) else None

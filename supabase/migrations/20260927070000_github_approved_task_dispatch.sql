@@ -18,6 +18,10 @@ create table public.github_task_dispatches (
       and lease_token is null and lease_expires_at is null)
     or (status <> 'created' and issue_number is null and issue_url is null)
   ),
+  constraint github_task_dispatch_lease_shape check (
+    (status='creating' and lease_token is not null and lease_expires_at is not null)
+    or (status<>'creating' and lease_token is null and lease_expires_at is null)
+  ),
   constraint github_task_dispatch_issue_url check (
     issue_url is null or issue_url ~ '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$'
   )
@@ -95,20 +99,17 @@ begin
   if not found or dispatch_row.lease_expires_at < now() then
     raise exception 'GitHub task dispatch lease is invalid or expired' using errcode='42501';
   end if;
-  select * into task_row from public.tasks t where t.id=p_task_id and t.status='ready' for update;
-  if not found then raise exception 'dispatched task is no longer ready' using errcode='42501'; end if;
+  select * into task_row from public.tasks t where t.id=p_task_id for update;
+  if not found then raise exception 'dispatched task no longer exists' using errcode='42501'; end if;
   select p.status into project_state from public.projects p where p.id=task_row.project_id;
-  task_status := case when project_state in ('approved','active') and exists (
+  task_status := case when task_row.status='ready' and project_state in ('approved','active') and exists (
     select 1 from public.agents a where a.id=task_row.assigned_agent_id and a.active and a.slug='developer'
-  ) then 'in_progress' else 'blocked' end;
+  ) then 'in_progress' when task_row.status='ready' then 'blocked' else task_row.status end;
   update public.github_task_dispatches set status='created',issue_number=p_issue_number,issue_url=p_issue_url,
     lease_token=null,lease_expires_at=null,last_error=null,updated_at=now() where id=dispatch_row.id;
-  update public.tasks set status=task_status,updated_at=now(),
-    evidence=(case when jsonb_typeof(evidence)='array' then evidence else jsonb_build_array(evidence) end)||jsonb_build_array(jsonb_build_object(
-      'type','github_issue','dispatch_id',dispatch_row.id,'issue_number',p_issue_number,'url',p_issue_url))
-    where id=p_task_id;
+  update public.tasks set status=task_status,updated_at=now() where id=p_task_id;
   insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)
-  values('system',p_worker_id,case when task_status='in_progress' then 'github.issue_created' else 'github.issue_created_task_blocked' end,
+  values('system',p_worker_id,case when task_status='in_progress' then 'github.issue_created' else 'github.issue_linked' end,
     'task',p_task_id::text,jsonb_build_object('dispatch_id',dispatch_row.id,'issue_number',p_issue_number,
       'issue_url',p_issue_url,'project_status',project_state));
   return jsonb_build_object('task_id',p_task_id,'status',task_status,'issue_number',p_issue_number,'issue_url',p_issue_url);

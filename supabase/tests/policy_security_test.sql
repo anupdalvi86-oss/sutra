@@ -264,11 +264,12 @@ select lives_ok($$select public.sutra_complete_github_task_dispatch('sutra-githu
   'valid GitHub issue is durably linked to its approved task');
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
   'in_progress','issue creation starts the assigned Developer task');
-select is((select status from public.github_task_dispatches where task_id=(select (payload->>'task_id')::uuid from github_dispatch_claim)),
-  'created','GitHub issue linkage is persisted');
 select is((select count(*)::integer from public.audit_log where action='github.issue_created'
   and resource_id=(select (payload->>'task_id')::uuid::text from github_dispatch_claim)),
   1,'GitHub task issue creation is audit logged');
+select is((select details->>'issue_url' from public.audit_log where action='github.issue_created'
+  and resource_id=(select (payload->>'task_id')::uuid::text from github_dispatch_claim) limit 1),
+  'https://github.com/acme/sutra/issues/41','audit log retains the durable GitHub issue link');
 select is(public.sutra_claim_github_task('sutra-github-worker-abcdefgh')::text,null::text,
   'the same task is not dispatched twice');
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
