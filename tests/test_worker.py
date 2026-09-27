@@ -69,7 +69,81 @@ def task_review_artifact(role="qa"):
     return result
 
 
+def task_artifact_run(role="product_manager"):
+    artifact_types = {
+        "product_manager": "product_plan", "architect": "technical_design", "coo": "operations_plan",
+        "devops": "release_plan", "cmo": "campaign_draft", "sales": "sales_handoff",
+        "governance_audit": "governance_review",
+    }
+    run = claimed_run(role)
+    run["task_artifact"] = {
+        "task_id": "00000000-0000-4000-8000-000000000010", "role": role,
+        "artifact_type": artifact_types[role], "title": "Prepare an internal task deliverable",
+        "description": "Create a specific, reviewable output for the approved project.",
+        "acceptance_criteria": ["The output is recorded", "The handoff is actionable"],
+    }
+    return run
+
+
+def task_artifact_output(role="product_manager"):
+    role_artifacts = {
+        "product_manager": {"scope": "A bounded product scope for the approved proposal.", "milestones": ["Discovery"], "acceptance_criteria": ["Buyer need documented"]},
+        "architect": {"design": "A clear component and interface design.", "components": ["API service"], "security_risks": ["Protect service credentials"]},
+        "coo": {"operational_dependencies": ["On-call owner"], "readiness_checklist": ["Recovery procedure"], "incident_plan": "Route incidents to the service owner."},
+        "devops": {"deployment_steps": ["Deploy candidate"], "health_checks": ["Verify health endpoint"], "rollback_steps": ["Restore previous image"]},
+        "cmo": {"audience": "Engineering leaders evaluating quality tooling.", "positioning": "Reduce repetitive quality checks.", "draft_copy": "A draft for founder review only.", "claims": ["Supports this workflow"], "success_metrics": ["Qualified interest"]},
+        "sales": {"ideal_customer_profile": "Software teams with repeatable release processes.", "lead_criteria": ["Relevant team size"], "qualification_questions": ["How do you verify releases?"], "first_contact_draft": "Internal draft; do not send without approval."},
+        "governance_audit": {"controls_checked": ["Approval gate"], "findings": ["No open finding"], "recommendation": "Retain the existing founder approval gate."},
+    }
+    result = {
+        "summary": "A durable role-specific artifact has been prepared.",
+        "recommendation": "Proceed to the next assigned review stage.",
+        "evidence": [],
+        "task_acceptance": [
+            {"criterion": criterion, "evidence": "Recorded in the bounded role artifact."}
+            for criterion in task_artifact_run(role)["task_artifact"]["acceptance_criteria"]
+        ],
+        "artifact": role_artifacts[role],
+    }
+    if role == "cmo":
+        result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the campaign claim."}]
+    return result
+
+
 class AgentArtifactTests(unittest.TestCase):
+    def test_task_artifact_contracts_cover_internal_role_handoffs(self):
+        roles = ("product_manager", "architect", "coo", "devops", "cmo", "sales", "governance_audit")
+        for role in roles:
+            with self.subTest(role=role):
+                result = validate_agent_artifact(role, task_artifact_output(role), task_artifact_run(role))
+                self.assertEqual(len(result["task_acceptance"]), 2)
+                self.assertTrue(result["artifact"])
+
+    def test_task_artifacts_require_matching_acceptance_criteria_and_cited_campaign_claims(self):
+        run = task_artifact_run("architect")
+        invalid = task_artifact_output("architect")
+        invalid["task_acceptance"][0]["criterion"] = "not assigned"
+        with self.assertRaises(AgentOutputError):
+            validate_agent_artifact("architect", invalid, run)
+        campaign = task_artifact_output("cmo")
+        campaign["evidence"] = []
+        with self.assertRaises(AgentOutputError):
+            validate_agent_artifact("cmo", campaign, task_artifact_run("cmo"))
+
+    def test_task_artifact_prompt_has_no_external_action_authority(self):
+        response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("sales"))}}],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+        fake_response = Mock()
+        fake_response.__enter__ = Mock(return_value=fake_response)
+        fake_response.__exit__ = Mock(return_value=False)
+        fake_response.read.return_value = json.dumps(response).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=fake_response) as request:
+            client = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-4o-mini")
+            client.review(task_artifact_run("sales"), max_output_tokens=500)
+        prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
+        self.assertIn("Do not invent actual leads, contact anyone, or send messages", prompt)
+        self.assertIn("task_acceptance", request.call_args.args[0].data.decode())
+
     def test_qa_and_security_artifacts_are_bound_to_database_claim_and_have_complete_evidence(self):
         for role in ("qa", "security"):
             result = validate_agent_artifact(role, task_review_artifact(role), task_review_run(role))
@@ -221,6 +295,21 @@ class AgentArtifactTests(unittest.TestCase):
         evidence = store.submit_task_review.call_args.args[1]
         self.assertEqual(evidence["tested_commit_sha"], "a" * 40)
         self.assertEqual(store.complete_agent_run.call_args.args[2], "succeeded")
+
+    def test_task_artifact_submission_follows_spend_settlement_and_bypasses_generic_completion(self):
+        events = []
+        store = self.approved_store("product_manager")
+        store.claim_agent_run.return_value = task_artifact_run("product_manager")
+        store.reconcile_agent_run_spend.side_effect = lambda *_args: (events.append("reconcile") or {"status": "reconciled"})
+        store.submit_task_agent_artifact.side_effect = lambda *_args: events.append("persist_artifact")
+        hermes = Mock()
+        hermes.review.side_effect = lambda *_args: (events.append("hermes") or (task_artifact_output(), {"prompt_tokens": 20, "completion_tokens": 30}))
+        worker = AgentWorker(store, hermes, "openai", "gpt-4o-mini", worker_id="sutra-worker-12345678")
+        self.assertEqual(worker.run_once(), "task_artifact_succeeded")
+        self.assertEqual(events, ["hermes", "reconcile", "persist_artifact"])
+        store.submit_task_agent_artifact.assert_called_once_with(
+            "sutra-worker-12345678", task_artifact_run("product_manager"), task_artifact_output())
+        store.complete_agent_run.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -67,6 +67,8 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder' and a
   'founder approval queue reads are audit logged');
 select ok(exists(select 1 from public.agent_runs where trigger_type='founder_proposal' and status='queued'),'workflow roles receive durable queued runs');
 select ok(exists(select 1 from public.tasks where task_type='research' and status='blocked'),'execution work stays blocked before founder approval');
+select is(public.sutra_claim_task_agent_run('sutra-worker-12345678')::text,null::text,
+  'internal task artifact workers cannot claim tasks before founder project approval');
 select throws_ok($$select public.sutra_founder_decide_approval('12345678',(select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
   '42501',null,'founder approval cannot skip the required CFO decision');
 select throws_ok($$select public.sutra_claim_agent_run('bad-worker')$$,
@@ -129,6 +131,29 @@ begin
   reconciliation := public.sutra_reconcile_agent_run_spend_from_usage('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id,
     'openai',model_name,1,1,'{"source":"test_usage"}'::jsonb,true);
   return reservation || jsonb_build_object('reconciliation',reconciliation);
+end;
+$$;
+create function pg_temp.run_task_artifact(p_expected_role text,p_artifact jsonb) returns jsonb
+language plpgsql as $$
+declare claim jsonb; criteria jsonb; output jsonb; result jsonb;
+begin
+  claim:=public.sutra_claim_task_agent_run('sutra-worker-12345678');
+  if claim is null or claim->'agent'->>'slug'<>p_expected_role then
+    raise exception 'expected task artifact role %, received %',p_expected_role,claim->'agent'->>'slug';
+  end if;
+  perform pg_temp.prepare_agent_run_spend((claim->>'run_id')::uuid,(claim->>'lease_token')::uuid);
+  criteria:=claim->'task_artifact'->'acceptance_criteria';
+  select coalesce(jsonb_agg(jsonb_build_object('criterion',value,'evidence','Recorded in the persisted role artifact.')),'[]'::jsonb)
+    into output from jsonb_array_elements_text(criteria) expected(value);
+  output:=jsonb_build_object('summary','A durable role-specific artifact has been prepared.',
+    'recommendation','Proceed to the next assigned review stage.','evidence',
+      case when p_expected_role='cmo' then jsonb_build_array(jsonb_build_object(
+        'source','Primary source','url','https://example.com/product','claim','The source supports the campaign claim.'))
+      else '[]'::jsonb end,
+    'task_acceptance',output,'artifact',p_artifact);
+  result:=public.sutra_submit_task_agent_artifact('sutra-worker-12345678',(claim->>'run_id')::uuid,
+    (claim->>'lease_token')::uuid,output);
+  return result;
 end;
 $$;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
@@ -248,29 +273,58 @@ select ok(exists(select 1 from public.tasks where task_type='product' and owner_
   'new tasks populate both current and legacy assignee columns');
 select is((select status from public.tasks where task_type='research' order by created_at limit 1),'ready','research becomes executable after approval');
 select is((select count(*)::integer from public.tasks where task_type='engineering' and status='backlog'),7,'engineering through sales handoff tasks are queued');
-select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='product_manager'),
-  (select id from public.tasks where task_type='product' order by created_at desc limit 1),'in_progress','{}'::jsonb)$$,
-  'assigned PM can start the approved planning task');
-select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='product_manager'),
-  (select id from public.tasks where task_type='product' order by created_at desc limit 1),'done','{"requirements":"recorded"}'::jsonb)$$,
-  'PM completion requires and records evidence');
+create temporary table task_artifact_claim(payload jsonb) on commit drop;
+insert into task_artifact_claim select public.sutra_claim_task_agent_run('sutra-worker-12345678');
+select is((select payload->'agent'->>'slug' from task_artifact_claim),'product_manager',
+  'the approved project leases the product planning task to its assigned PM');
+select throws_ok($$select public.sutra_submit_task_agent_artifact('sutra-worker-12345678',
+  (select (payload->>'run_id')::uuid from task_artifact_claim),(select (payload->>'lease_token')::uuid from task_artifact_claim),
+  '{"summary":"A sufficiently long planning summary","recommendation":"Proceed","evidence":[],"task_acceptance":[],"artifact":{}}'::jsonb)$$,
+  '42501',null,'task artifact cannot persist before this run has reconciled provider spend');
+select lives_ok($$select pg_temp.prepare_agent_run_spend((select (payload->>'run_id')::uuid from task_artifact_claim),
+  (select (payload->>'lease_token')::uuid from task_artifact_claim))$$,
+  'PM task artifact provider spend is reconciled before deliverable persistence');
+select throws_ok($$select public.sutra_submit_task_agent_artifact('bad-worker',
+  (select (payload->>'run_id')::uuid from task_artifact_claim),(select (payload->>'lease_token')::uuid from task_artifact_claim),
+  '{"summary":"A sufficiently long planning summary","recommendation":"Proceed","evidence":[],"task_acceptance":[],"artifact":{}}'::jsonb)$$,
+  '22023',null,'malformed worker requests cannot persist a task artifact');
+select throws_ok($$select public.sutra_submit_task_agent_artifact('sutra-worker-12345678',
+  (select (payload->>'run_id')::uuid from task_artifact_claim),gen_random_uuid(),
+  '{"summary":"A sufficiently long planning summary","recommendation":"Proceed","evidence":[],"task_acceptance":[],"artifact":{}}'::jsonb)$$,
+  '42501',null,'task artifacts require the exact active database lease token');
+create temporary table artifact_submit(payload jsonb) on commit drop;
+insert into artifact_submit
+select public.sutra_submit_task_agent_artifact('sutra-worker-12345678',(c.payload->>'run_id')::uuid,
+  (c.payload->>'lease_token')::uuid,jsonb_build_object('summary','A durable product plan has been prepared.',
+    'recommendation','Proceed to technical design.','evidence','[]'::jsonb,
+    'task_acceptance',(select jsonb_agg(jsonb_build_object('criterion',value,'evidence','Recorded in the product plan artifact.'))
+      from jsonb_array_elements_text(c.payload->'task_artifact'->'acceptance_criteria') expected(value)),
+    'artifact',jsonb_build_object('scope','A bounded scope for the founder-approved product proposal.',
+      'milestones',jsonb_build_array('Discovery and validated requirements'),
+      'acceptance_criteria',jsonb_build_array('Document the buyer need and measurable success criteria'))))
+from task_artifact_claim c;
+select is((select payload->>'status' from artifact_submit),'succeeded','PM task output is persisted through its spend-gated artifact RPC');
+reset role;
+select is((select count(*)::integer from public.task_agent_artifacts where artifact_type='product_plan'),1,
+  'PM product plan artifact is durably stored');
+set local role service_role;
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='architect') order by created_at desc limit 1),
   'ready','PM completion releases architecture task');
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
   (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),'in_progress','{}'::jsonb)$$,
   '22023',null,'developer cannot start before architecture handoff');
-select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='architect'),
-  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='architect') order by created_at desc limit 1),'in_progress','{}'::jsonb)$$,
-  'assigned architect can start when its task is ready');
-select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='architect'),
-  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='architect') order by created_at desc limit 1),'done','{"design":"reviewed"}'::jsonb)$$,
-  'architecture completion records evidence');
+select is((pg_temp.run_task_artifact('architect',jsonb_build_object('design','A component design with bounded interfaces and data flow.',
+  'components',jsonb_build_array('Founder command service','Authoritative Supabase workflow'),
+  'security_risks',jsonb_build_array('Protect private integration credentials')))->>'status'),
+  'succeeded','Architect persists its spend-gated technical design and exact task evidence');
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
   'ready','architecture completion releases developer task');
 select throws_ok($$select public.sutra_claim_github_task('bad-worker')$$,
   '22023',null,'GitHub task dispatch requires a bounded worker identity');
 select throws_ok($$select * from public.github_task_dispatches$$,
   '42501',null,'service role cannot read GitHub issue state outside audited RPCs');
+select throws_ok($$select * from public.task_agent_artifacts$$,
+  '42501',null,'service role cannot bypass task artifact RPCs to read persisted deliverables');
 create temporary table github_dispatch_claim(payload jsonb) on commit drop;
 insert into github_dispatch_claim select public.sutra_claim_github_task('sutra-github-worker-12345678');
 select is((select payload->>'title' from github_dispatch_claim),'Implement approved product tasks',
@@ -396,6 +450,36 @@ select is((select status from public.tasks where owner_agent_id=(select id from 
   'done','passing persisted Security evidence completes Security task');
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='devops') order by created_at desc limit 1),
   'ready','Security completion releases DevOps handoff');
+select is((pg_temp.run_task_artifact('devops',jsonb_build_object(
+  'deployment_steps',jsonb_build_array('Deploy the reviewed release candidate'),
+  'health_checks',jsonb_build_array('Confirm service health and worker recovery'),
+  'rollback_steps',jsonb_build_array('Restore the last known healthy Railway image')))->>'status'),
+  'succeeded','DevOps persists a spend-gated release and rollback plan');
+select is((pg_temp.run_task_artifact('cmo',jsonb_build_object(
+  'audience','Engineering leaders evaluating software quality workflows.',
+  'positioning','Reduce repeated manual verification through a controlled workflow.',
+  'draft_copy','Internal campaign draft for founder review only.',
+  'claims',jsonb_build_array('Supports founder-approved workflow research'),
+  'success_metrics',jsonb_build_array('Qualified interest from target teams')))->>'status'),
+  'succeeded','CMO persists a cited internal campaign draft without sending or publishing');
+select is((pg_temp.run_task_artifact('sales',jsonb_build_object(
+  'ideal_customer_profile','Software teams with repeatable release and quality processes.',
+  'lead_criteria',jsonb_build_array('Relevant software team'),
+  'qualification_questions',jsonb_build_array('How do you verify release readiness?'),
+  'first_contact_draft','Internal first-contact draft; do not send without separate founder approval.'))->>'status'),
+  'succeeded','Sales persists an internal handoff without inventing or contacting leads');
+reset role;
+select is((select count(*)::integer from public.task_agent_artifacts),5,
+  'PM, Architect, DevOps, Marketing and Sales artifacts persist for the exercised workflow');
+set local role anon;
+select throws_ok($$select * from public.task_agent_artifacts$$,
+  '42501',null,'anon cannot read task artifacts');
+select throws_ok($$select public.sutra_claim_task_agent_run('sutra-worker-12345678')$$,
+  '42501',null,'anon cannot invoke task artifact worker RPCs');
+select throws_ok($$select public.sutra_submit_task_agent_artifact('sutra-worker-12345678',gen_random_uuid(),gen_random_uuid(),'{}'::jsonb)$$,
+  '42501',null,'anon cannot submit task artifact RPCs');
+reset role;
+set local role service_role;
 select is((select count(*)::integer from public.audit_log where action='task.review_submitted' and actor_id='security'),
   1,'Security review submission is audit logged');
 
@@ -410,13 +494,15 @@ reset role;
 select ok((select count(*) from public.audit_log where action='spending.authorization_requested') >= 7,'authorization decisions are audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.succeeded'),5,
   'each executed department review is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),5,
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),10,
   'each model usage reconciliation is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),5,
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),10,
   'each model spend reservation decision is audit logged');
+select is((select count(*)::integer from public.audit_log where action='task.artifact_submitted'),5,
+  'every persisted internal role artifact is audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.spend_approval_resumed'),1,
   'approval-driven model run resumption is audit logged');
-select is((select count(*)::integer from public.expenses where actual_amount=0.01),5,
+select is((select count(*)::integer from public.expenses where actual_amount=0.01),10,
   'actual model usage is reconciled into its authoritative expense');
 
 select * from finish();

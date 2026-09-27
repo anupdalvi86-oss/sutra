@@ -64,6 +64,8 @@ class SupabaseREST:
         if result is None:
             result = self.request("rpc/sutra_claim_task_review_agent_run", "POST", {"p_worker_id": worker_id})
         if result is None:
+            result = self.request("rpc/sutra_claim_task_agent_run", "POST", {"p_worker_id": worker_id})
+        if result is None:
             return None
         if not isinstance(result, dict):
             raise IntegrationError("Supabase returned an invalid worker claim")
@@ -92,6 +94,12 @@ class SupabaseREST:
             "p_task_id": task_review.get("task_id"),
             "p_actor_agent_id": agent.get("id"),
             "p_evidence": evidence,
+        })
+
+    def submit_task_agent_artifact(self, worker_id: str, run: dict[str, Any], artifact: dict[str, Any]) -> dict[str, Any]:
+        return self.rpc("sutra_submit_task_agent_artifact", {
+            "p_worker_id": worker_id, "p_run_id": run.get("run_id"),
+            "p_lease_token": run.get("lease_token"), "p_output": artifact,
         })
 
     def get_agent_model_spend_profile(self, provider: str, model: str) -> dict[str, Any]:
