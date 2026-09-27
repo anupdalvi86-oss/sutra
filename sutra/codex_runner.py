@@ -16,6 +16,7 @@ from typing import Any
 from .codex_dispatch import verify_codex_issue_event
 from .codex_metering import MeteredResponsesProxy
 from .github_dispatch import GitHubAPIError, GitHubIssues
+from .github_evidence_polling import GitHubEvidencePoller
 from .runtime import IntegrationError
 
 
@@ -46,10 +47,12 @@ class CodexTaskRunner:
         if not re.fullmatch(r"sutra-worker-[a-z0-9]{8,64}", self.worker_id):
             raise ValueError("Invalid Codex runner worker ID")
         self.run_timeout_seconds = run_timeout_seconds
+        self.evidence_poller = GitHubEvidencePoller(store, github)
         self._active_tasks: set[str] = set()
         self._lock = threading.Lock()
 
     def run_once(self) -> bool:
+        self.evidence_poller.poll_once()
         issues = self.github.open_task_issues()
         for issue in issues:
             try:
