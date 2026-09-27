@@ -62,16 +62,69 @@ reset role;
 set local role service_role;
 select throws_ok($$select public.sutra_authorize_spend('system','test',null,(select id from public.projects order by created_at desc limit 1),null,'ai_api',null,'premature spend',5,'EUR')$$,
   '42501',null,'spending against a proposed project is blocked');
+select lives_ok($$select public.sutra_set_company_setting('12345678',
+  'department_head:' || (select department_id::text from public.agents where slug='cpo'),
+  to_jsonb((select id::text from public.agents where slug='cpo')))$$,
+  'founder designates a department head for review-spend approval');
 create temporary table worker_claims(role text,run_id uuid,lease_token uuid,sequence_no integer) on commit drop;
+create temporary table worker_spend_decision(payload jsonb) on commit drop;
+create function pg_temp.prepare_agent_run_spend(p_run_id uuid,p_lease_token uuid) returns jsonb
+language plpgsql as $$
+declare reservation jsonb; reservation_id uuid; reconciliation jsonb;
+begin
+  reservation := public.sutra_reserve_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,
+    'openai','gpt-4o-mini',0.01);
+  if reservation->>'status' <> 'approved' then raise exception 'test reservation unexpectedly needs approval'; end if;
+  reservation_id := (reservation->>'reservation_id')::uuid;
+  perform public.sutra_begin_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id);
+  reconciliation := public.sutra_reconcile_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id,
+    'openai','gpt-4o-mini',0.01,1,1,'{"source":"test_usage"}'::jsonb,true);
+  return reservation || jsonb_build_object('reconciliation',reconciliation);
+end;
+$$;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'ceo','CEO receives the first leased review run');
 select is(public.sutra_claim_agent_run('sutra-worker-abcdefgh')::text,null::text,
   'later department work stays unclaimable until the prior review completes');
+insert into worker_spend_decision select public.sutra_reserve_agent_run_spend('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini',11);
+select is((select payload->>'status' from worker_spend_decision),'requested',
+  'model spend above €10 follows the configured approval tier');
+select is((select status from public.agent_runs where id=(select run_id from worker_claims)),'blocked',
+  'worker cannot proceed while model spend approval is pending');
+select is((select project_id::text from public.expenses where id=(select (payload->>'expense_id')::uuid from worker_spend_decision)),
+  (select project_id::text from public.agent_runs where id=(select run_id from worker_claims)),
+  'model spend approval is tied to its proposal project');
+select is((select count(*)::integer from public.approvals ap
+  join public.projects p on p.id=ap.project_id
+  join public.agents a on a.slug='cpo' and a.department_id=p.department_id and a.active
+  join public.company_settings s on s.key='department_head:' || p.department_id::text
+    and s.value #>> '{}'=a.id::text where ap.id=(select (payload->>'approval_id')::uuid from worker_spend_decision)),
+  1,'configured department head matches the proposal department and approval');
+select is((public.sutra_decide_role_approval(
+  (select (payload->>'approval_id')::uuid from worker_spend_decision),
+  (select id::text from public.agents where slug='cpo'),'department_head','approve','Bounded review spend')->>'status'),
+  'approved','designated department head can approve a model spend request');
+truncate worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+select is((select role from worker_claims),'ceo','approved spend resumes the CEO run');
+select is((select status from public.expenses where id=(select (payload->>'expense_id')::uuid from worker_spend_decision)),
+  'approved','approval authorizes the model expense');
 select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),'00000000-0000-4000-8000-000000000099'::uuid,'succeeded',
   '{"summary":"A sufficiently long CEO summary","recommendation":"Proceed","evidence":[]}'::jsonb)$$,
   '42501',null,'a different lease token cannot complete a review');
+select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long CEO summary","recommendation":"Proceed to evidence review","evidence":[]}'::jsonb)$$,
+  '42501',null,'a paid review cannot succeed before its spend is reconciled');
+select throws_ok($$select public.sutra_begin_agent_run_spend('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),gen_random_uuid())$$,
+  '42501',null,'provider call cannot start without an approved spend reservation');
+select is((pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims))->>'reused'),'true','approved provider spend is reused, started, and reconciled');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long CEO summary","recommendation":"Proceed to evidence review","evidence":[]}'::jsonb)$$,
@@ -80,6 +133,8 @@ truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'cpo','Product research runs after CEO review');
+select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims))$$,'product research provider spend is reconciled');
 select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long research summary","recommendation":"Proceed","evidence":[]}'::jsonb)$$,
@@ -96,6 +151,8 @@ truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'cto','CTO review runs after Product research');
+select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims))$$,'technical review provider spend is reconciled');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long technical summary","recommendation":"Proceed to finance review","evidence":[]}'::jsonb)$$,
@@ -104,6 +161,8 @@ truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'cfo','CFO review runs after CTO review');
+select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims))$$,'finance review provider spend is reconciled');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long CFO summary","recommendation":"Present the budget to the founder","evidence":[],"decision":"approve","decision_rationale":"The proposal is ready for a separate founder decision."}'::jsonb)$$,
@@ -117,6 +176,8 @@ truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'product_manager','PM review runs after CFO review');
+select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims))$$,'PM review provider spend is reconciled');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long PM summary","recommendation":"Founder review is ready","evidence":[],"milestones":["Discovery"]}'::jsonb)$$,
