@@ -182,6 +182,20 @@ class AgentArtifactTests(unittest.TestCase):
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cfo", value)
 
+    def test_cfo_prompt_keeps_founder_threshold_as_the_next_approval_gate(self):
+        response_body = {"choices": [{"message": {"content": json.dumps(artifact("cfo"))}}],
+                         "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(response_body).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response) as request:
+            HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-6-luna").review(
+                claimed_run("cfo"), max_output_tokens=500)
+        system_prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
+        self.assertIn("never reject solely because founder approval has not happened yet", system_prompt)
+        self.assertIn("no spending occurs until that gate is approved", system_prompt)
+
     def test_hermes_only_allows_https_or_private_railway_url(self):
         with self.assertRaises(ValueError):
             HermesAgentClient("http://public.example", "secret")
