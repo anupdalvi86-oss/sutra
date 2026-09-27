@@ -11,6 +11,8 @@ select lives_ok($$select public.sutra_set_agent_model_spend_profile('12345678','
   'founder configures the test model price and hard token ceiling');
 select throws_ok($$select public.sutra_set_agent_model_spend_profile('agent','openai','gpt-4o-mini',0,1,10000,2200,true)$$,
   '42501',null,'agents cannot configure model price or token authority');
+select throws_ok($$update public.agent_model_spend_profiles set output_eur_per_million_tokens=1 where provider='openai'$$,
+  '42501',null,'server role cannot change model price profiles directly');
 
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 10',10,'EUR')->>'status'),'approved','€10 is automatic');
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 10.01',10.01,'EUR')->'required_approvers')::text,'["department_head"]','above €10 requires department head');
