@@ -37,7 +37,7 @@ Configure Railway to wait for successful GitHub CI before automatically deployin
 
 Create/configure the founder bot using Telegram's normal BotFather flow, then place its token and the founder's numeric Telegram user ID only in Sutra API Railway variables. The founder numeric ID is already configured in Railway and registered in Supabase; the bot token and Supabase service-role key still need to be entered in Railway. Keep `SUTRA_ENABLE_TELEGRAM=false` until the API has restarted and its health response reports database and Telegram ready. The polling loop skips stale queued updates on startup, accepts only direct private founder messages, and records denied identity hashes without storing raw Telegram IDs.
 
-The bot currently supports status, budgeted proposal, and explicit approval/rejection commands. It does not send campaigns or sales messages.
+The bot currently supports status, budgeted proposal, a founder-only pending approval list (`CEO, show my approvals.`), and explicit approval/rejection commands. Listing pending requests is audit logged and does not change their state. It does not send campaigns or sales messages.
 
 ## Local API
 
