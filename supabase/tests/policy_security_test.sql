@@ -84,6 +84,10 @@ select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long research summary","recommendation":"Proceed","evidence":[]}'::jsonb)$$,
   '22023',null,'Product research cannot complete without evidence');
+select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long research summary","recommendation":"Proceed","evidence":[{"source":"A source","url":"http://example.com","claim":"A claim"}]}'::jsonb)$$,
+  '22023',null,'database rejects non-HTTPS research evidence');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long research summary","recommendation":"Proceed to technical review","evidence":[{"source":"Product documentation","url":"https://example.com/docs","claim":"Primary source describes a QA workflow."}]}'::jsonb)$$,

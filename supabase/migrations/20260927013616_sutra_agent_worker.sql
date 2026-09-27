@@ -174,6 +174,19 @@ begin
     if agent_row.slug='cpo' and jsonb_array_length(p_output->'evidence')=0 then
       raise exception 'product research must include at least one evidence item' using errcode = '22023';
     end if;
+    if exists (
+      select 1 from jsonb_array_elements(p_output->'evidence') item
+      where jsonb_typeof(item) is distinct from 'object'
+        or jsonb_typeof(item->'source') is distinct from 'string'
+        or length(trim(item->>'source')) not between 1 and 200
+        or jsonb_typeof(item->'claim') is distinct from 'string'
+        or length(trim(item->>'claim')) not between 1 and 1000
+        or jsonb_typeof(item->'url') is distinct from 'string'
+        or length(item->>'url') > 2048
+        or item->>'url' !~ '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?([/?#][^[:space:]]*)?$'
+    ) then
+      raise exception 'agent evidence entries must contain bounded source, claim, and direct HTTPS URL fields' using errcode = '22023';
+    end if;
     if agent_row.slug='cfo' and ((p_output->>'decision' is distinct from 'approve' and p_output->>'decision' is distinct from 'reject')
       or length(coalesce(p_output->>'decision_rationale','')) < 8) then
       raise exception 'CFO review must include an explicit decision and rationale' using errcode = '22023';
