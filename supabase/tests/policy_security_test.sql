@@ -259,12 +259,57 @@ truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'product_manager','PM review runs after CFO review');
-select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
-  (select lease_token from worker_claims))$$,'PM review provider spend is reconciled');
+create temporary table retry_attempt_reservation(payload jsonb) on commit drop;
+insert into retry_attempt_reservation
+select public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini-test-cheap');
+select is((select payload->>'status' from retry_attempt_reservation),'approved','first PM review attempt is within its database-approved budget');
+select lives_ok($$select public.sutra_begin_agent_run_spend('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),
+  (select (payload->>'reservation_id')::uuid from retry_attempt_reservation))$$,
+  'PM model request begins only after reservation');
+select is((public.sutra_reconcile_agent_run_spend_from_usage('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),
+  (select (payload->>'reservation_id')::uuid from retry_attempt_reservation),
+  'openai','gpt-4o-mini-test-cheap',null,null,'{"source":"simulated_unknown_usage"}'::jsonb,false)->>'status'),
+  'unknown','first PM attempt fails closed when provider usage cannot be verified');
+select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'failed',
+  '{"summary":"PM usage could not be verified","usage_state":"unverified"}'::jsonb,
+  'unknown_or_overrun_spend')$$,'unknown first PM attempt is terminal and audited');
+select throws_ok($$select public.sutra_founder_retry_pm_review('99999999',(select run_id from worker_claims))$$,
+  '42501',null,'nonfounder cannot retry a failed PM review');
+select throws_ok($$select public.sutra_founder_retry_pm_review('12345678',null)$$,
+  '22023',null,'malformed retry request is rejected');
+create temporary table retry_request_result(payload jsonb) on commit drop;
+insert into retry_request_result
+select public.sutra_founder_retry_pm_review('12345678',(select run_id from worker_claims));
+select is((select payload->>'status' from retry_request_result),
+  'queued','founder can queue a bounded PM retry while the project approval is pending');
+select is((select (payload->>'preserved_unknown_reservations')::integer from retry_request_result),1,
+  'founder retry preserves the earlier unknown spend reservation');
+select ok(exists(select 1 from public.audit_log where action='founder.pm_review_retry_requested'
+  and resource_id=(select run_id::text from worker_claims)),
+  'founder PM retry is audit logged');
+truncate worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+select is((select role from worker_claims),'product_manager','founder retry reclaims the same PM stage');
+select is((select attempt_count from public.agent_runs where id=(select run_id from worker_claims)),2,
+  'retry increments the bounded PM run attempt counter');
+create temporary table retry_attempt_two_reservation(payload jsonb) on commit drop;
+insert into retry_attempt_two_reservation
+select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims));
+select is((select payload->>'status' from retry_attempt_two_reservation),'approved',
+  'retry uses a new centrally reserved attempt');
+select ok((select payload->>'reservation_id' from retry_attempt_two_reservation)
+  <> (select payload->>'reservation_id' from retry_attempt_reservation),
+  'retry creates a distinct spend reservation without rewriting the prior attempt');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long PM summary","recommendation":"Founder review is ready","evidence":[],"milestones":["Discovery"]}'::jsonb)$$,
-  'PM work is stored before final founder approval');
+  'second PM attempt stores its artifact after spend reconciliation');
 select lives_ok($$select public.sutra_founder_decide_approval('12345678',
   (select id from public.approvals where approval_type='project_budget' limit 1),'approve','Proceed')$$,
   'founder can approve only after CEO, Product, CTO, CFO, and PM reviews');
@@ -564,7 +609,7 @@ select is((select count(*)::integer from public.audit_log where action='agent_ru
   'each executed department review is audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),11,
   'each Hermes and Codex model usage reconciliation is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),11,
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),12,
   'each Hermes and Codex model spend reservation decision is audit logged');
 select is((select count(*)::integer from public.audit_log where action='task.artifact_submitted'),5,
   'every persisted internal role artifact is audit logged');

@@ -50,6 +50,7 @@ See [deployment instructions](docs/DEPLOYMENT.md), [architecture](docs/ARCHITECT
 
 - `CEO, give me company status.`
 - `CEO, show my approvals.` — lists up to ten pending founder requests with the amount and outstanding department reviews; viewing the queue is audit logged and does not change approval state. Ready requests include private-chat Approve/Reject buttons backed by the same founder-only audited database RPC as the command form.
+- `retry PM review <run-id>` — a founder-only, audited retry for a failed PM stage after CEO, Product, CTO and CFO are complete and the project approval remains pending. It preserves every earlier spend reservation (including unknown usage), consumes one remaining bounded attempt, and subjects new model usage to the normal reservation and monthly hard stop. It never approves the project budget.
 - `Investigate an AI QA product. Initial budget maximum €500. Prepare a proposal.`
 - `approve <approval-id> [comment]` or `reject <approval-id> [comment]`
 
