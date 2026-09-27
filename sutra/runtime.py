@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 
 class IntegrationError(RuntimeError):
@@ -326,12 +326,13 @@ def telegram_call(token: str, method: str, payload: dict[str, Any], timeout: flo
             envelope = json.loads(response.read(1_000_001))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise IntegrationError("Telegram API request failed") from exc
-    if not envelope.get("ok"):
+    if not isinstance(envelope, dict) or envelope.get("ok") is not True:
         raise IntegrationError("Telegram API rejected the request")
     return envelope.get("result")
 
 
-def telegram_poll_loop(token: str, router: FounderCommandRouter, stop: threading.Event) -> None:
+def telegram_poll_loop(token: str, router: FounderCommandRouter, stop: threading.Event,
+                       status_callback: Callable[[str], None] | None = None) -> None:
     """Long-poll commands; skip old queued messages at startup to avoid replay."""
     offset: int | None = None
     try:
@@ -343,11 +344,23 @@ def telegram_poll_loop(token: str, router: FounderCommandRouter, stop: threading
     while not stop.is_set():
         try:
             updates = telegram_call(token, "getUpdates", {"timeout": 25, "limit": 25, **({"offset": offset} if offset is not None else {})}) or []
+            if not isinstance(updates, list):
+                raise IntegrationError("Telegram returned an invalid updates response")
+            if status_callback:
+                status_callback("running")
             for update in updates:
-                offset = int(update["update_id"]) + 1
+                if not isinstance(update, dict) or isinstance(update.get("update_id"), bool) or not isinstance(update.get("update_id"), int):
+                    continue
+                offset = update["update_id"] + 1
                 message = update.get("message") or update.get("edited_message") or {}
-                sender = str((message.get("from") or {}).get("id", ""))
-                chat = str((message.get("chat") or {}).get("id", ""))
+                if not isinstance(message, dict):
+                    continue
+                sender_id = (message.get("from") or {}).get("id") if isinstance(message.get("from") or {}, dict) else None
+                chat_id = (message.get("chat") or {}).get("id") if isinstance(message.get("chat") or {}, dict) else None
+                if (isinstance(sender_id, bool) or not isinstance(sender_id, int)
+                        or isinstance(chat_id, bool) or not isinstance(chat_id, int)):
+                    continue
+                sender, chat = str(sender_id), str(chat_id)
                 text = message.get("text")
                 if not isinstance(text, str):
                     continue
@@ -358,4 +371,6 @@ def telegram_poll_loop(token: str, router: FounderCommandRouter, stop: threading
                     # Keep the polling loop alive; do not log command content or secrets.
                     continue
         except IntegrationError:
+            if status_callback:
+                status_callback("unreachable")
             stop.wait(5)
