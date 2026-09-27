@@ -302,7 +302,7 @@ create function public.sutra_authorize_codex_task(
 declare task_row public.tasks%rowtype; project_row public.projects%rowtype; developer_id uuid;
   run_row public.agent_runs%rowtype; execution_row public.codex_task_executions%rowtype;
   reservation_row public.agent_run_spend_reservations%rowtype; reserve_result jsonb; run_id uuid; lease uuid;
-  approval_id uuid;
+  v_approval_id uuid;
 begin
   if p_worker_id is null or p_worker_id !~ '^sutra-worker-[a-z0-9]{8,64}$'
     or p_task_id is null or p_issue_number is null or p_issue_number<1
@@ -379,13 +379,13 @@ begin
   reservation_row.id:=(reserve_result->>'reservation_id')::uuid;
   reservation_row.max_input_tokens:=(reserve_result->>'max_input_tokens')::integer;
   reservation_row.max_output_tokens:=(reserve_result->>'max_output_tokens')::integer;
-  approval_id:=nullif(reserve_result->>'approval_id','')::uuid;
-  update public.codex_task_executions set reservation_id=reservation_row.id,approval_id=approval_id,
+  v_approval_id:=nullif(reserve_result->>'approval_id','')::uuid;
+  update public.codex_task_executions set reservation_id=reservation_row.id,approval_id=v_approval_id,
     status=case when reserve_result->>'status'='approved' then 'running' else 'awaiting_approval' end,
     updated_at=now() where id=execution_row.id;
   if reserve_result->>'status'<>'approved' then
     return jsonb_build_object('status','awaiting_approval','task_id',p_task_id,
-      'approval_id',approval_id,'reservation_id',reservation_row.id,
+      'approval_id',v_approval_id,'reservation_id',reservation_row.id,
       'required_approvers',reserve_result->'required_approvers');
   end if;
   perform public.sutra_begin_agent_run_spend(p_worker_id,run_id,lease,reservation_row.id);
