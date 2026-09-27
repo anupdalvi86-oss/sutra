@@ -39,8 +39,13 @@ ROLE_GUIDANCE = {
     "cfo": (
         "Review the requested project budget against the supplied active database policies "
         "and limits. Your decision is only the CFO role's approval or rejection; it never "
-        "authorizes spending and does not replace founder approval. Reject if required controls "
-        "cannot be verified. Include decision=approve or decision=reject and a reason."
+        "authorizes spending and does not replace founder approval. Founder approval is an "
+        "expected next approval step when policy requires it, not a missing control: never "
+        "reject solely because founder approval has not happened yet. If the budget and current "
+        "controls satisfy policy, approve the CFO review and leave the separate founder gate in "
+        "place; no spending occurs until that gate is approved. Reject only for a concrete policy "
+        "or budget violation, or a material control that cannot be verified. Include "
+        "decision=approve or decision=reject and a reason."
     ),
     "product_manager": (
         "Turn the reviewed proposal into a scoped product plan with milestones, dependencies, "
