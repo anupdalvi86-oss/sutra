@@ -10,8 +10,8 @@ RUN chmod 0755 /etc/cont-init.d/30-sutra-seed-soul
 RUN /opt/hermes/.venv/bin/python /opt/sutra/patch_api_server.py
 
 ENV HERMES_HOME=/opt/data
-ENV API_SERVER_ENABLED=false
-ENV API_SERVER_HOST=0.0.0.0
+ENV SUTRA_HERMES_API_ENABLED=false
+ENV API_SERVER_HOST=127.0.0.1
 ENV API_SERVER_PORT=8642
 
 CMD ["gateway", "run"]
