@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Compile check
+        run: python -m compileall -q sutra tests
+
+  database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v2
+        with:
+          version: 2.118.0
+      - name: Start local Postgres and apply migrations
+        run: supabase db start
+      - name: SQL policy tests
+        run: supabase test db
+      - name: Database lint
+        run: supabase db lint --local --level error
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Sutra API image
+        run: docker build -f Dockerfile.api -t sutra-api:ci .
+      - name: Build Hermes image
+        run: docker build -f Dockerfile -t sutra-hermes:ci .
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan repository for secrets
+        run: docker run --rm -v "$PWD:/src" ghcr.io/gitleaks/gitleaks:v8.30.1 detect --source=/src --no-git --redact --exit-code 1

@@ -1,0 +1,223 @@
+"""Founder command router and server-side Supabase access."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import re
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from typing import Any
+
+
+class IntegrationError(RuntimeError):
+    """An external integration returned an invalid or unsuccessful response."""
+
+
+class SupabaseREST:
+    """Small server-only PostgREST client; never log headers or response secrets."""
+
+    def __init__(self, url: str, key: str, timeout: float = 8.0):
+        self.url = url.rstrip("/")
+        self.key = key
+        self.timeout = timeout
+
+    def request(self, path: str, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
+        if not self.url.startswith("https://") or not self.key:
+            raise IntegrationError("Supabase is not configured")
+        body = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(
+            f"{self.url}/rest/v1/{path.lstrip('/')}",
+            data=body,
+            method=method,
+            headers={
+                "apikey": self.key,
+                "Authorization": f"Bearer {self.key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Prefer": "return=representation",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                raw = response.read(1_000_001)
+                if len(raw) > 1_000_000:
+                    raise IntegrationError("Supabase response exceeded the size limit")
+                return json.loads(raw) if raw else None
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise IntegrationError("Supabase request failed") from exc
+
+    def rpc(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        result = self.request(f"rpc/{name}", "POST", payload)
+        if not isinstance(result, dict):
+            raise IntegrationError("Supabase returned an invalid RPC response")
+        return result
+
+    def company_status(self) -> dict[str, int]:
+        projects = self.request("projects?select=id&status=in.(proposed,approved,active,paused)")
+        tasks = self.request("tasks?select=id&status=in.(backlog,ready,in_progress,blocked,review)")
+        approvals = self.request("approvals?select=id&status=eq.pending")
+        if not all(isinstance(rows, list) for rows in (projects, tasks, approvals)):
+            raise IntegrationError("Supabase returned an invalid company status response")
+        return {"projects": len(projects), "open_tasks": len(tasks), "pending_approvals": len(approvals)}
+
+    def record_denied_identity(self, actor_hash: str) -> None:
+        self.request("rpc/sutra_log_auth_denial", "POST", {"p_actor_hash": actor_hash})
+
+
+@dataclass(frozen=True)
+class FounderCommand:
+    kind: str
+    text: str
+    approval_id: str | None = None
+    decision: str | None = None
+    comment: str = ""
+    budget: float | None = None
+
+
+MONEY_PATTERNS = (
+    re.compile(r"(?:€|EUR\s*)\s*([0-9]+(?:[.,][0-9]{1,2})?)", re.IGNORECASE),
+    re.compile(r"([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:€|EUR)", re.IGNORECASE),
+)
+APPROVAL_RE = re.compile(r"^\s*(approve|reject)\s+([0-9a-f-]{36})(?:\s+(.*))?\s*$", re.IGNORECASE)
+
+
+def parse_founder_command(text: str) -> FounderCommand:
+    if not isinstance(text, str) or not text.strip() or len(text) > 3000:
+        raise ValueError("Command must contain 1 to 3000 characters")
+    match = APPROVAL_RE.fullmatch(text)
+    if match:
+        return FounderCommand("approval", text.strip(), match.group(2), match.group(1).lower(), match.group(3) or "")
+    lowered = text.lower()
+    if any(phrase in lowered for phrase in ("company status", "company update", "status report", "ceo, status")):
+        return FounderCommand("status", text.strip())
+    amount = None
+    for pattern in MONEY_PATTERNS:
+        found = pattern.search(text)
+        if found:
+            amount = float(found.group(1).replace(",", "."))
+            if not math.isfinite(amount) or amount <= 0 or amount > 999999999999.99:
+                raise ValueError("Budget must be positive and within the supported EUR range")
+            break
+    if amount is not None and any(phrase in lowered for phrase in ("investigate", "research", "proposal", "product", "prepare")):
+        return FounderCommand("proposal", text.strip(), budget=amount)
+    return FounderCommand("unsupported", text.strip())
+
+
+def proposal_name(text: str) -> str:
+    clean = re.split(r"\b(?:initial\s+)?budget\b", text, maxsplit=1, flags=re.IGNORECASE)[0]
+    clean = clean.split(".", 1)[0]
+    clean = re.sub(r"^(?:ceo[, :]\s*)?(?:please\s+)?(?:investigate|research|prepare\s+a\s+proposal\s+for|prepare)\s+", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"^(?:an?|the)\s+", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s+", " ", clean).strip(" .,:;\n")
+    if not clean:
+        clean = "Founder product proposal"
+    return (clean[:145] + " opportunity")[:160]
+
+
+class FounderCommandRouter:
+    def __init__(self, store: SupabaseREST, founder_telegram_user_id: str):
+        self.store = store
+        self.founder_telegram_user_id = founder_telegram_user_id
+
+    def handle(self, user_id: str, chat_id: str, text: str) -> str:
+        if not self.founder_telegram_user_id or user_id != self.founder_telegram_user_id or chat_id != user_id:
+            digest = hashlib.sha256(str(user_id).encode()).hexdigest()[:24]
+            try:
+                self.store.record_denied_identity(digest)
+            except IntegrationError:
+                pass
+            return "This founder interface is restricted to the configured founder in a private chat."
+        try:
+            command = parse_founder_command(text)
+        except ValueError as exc:
+            return str(exc)
+        if command.kind == "status":
+            status = self.store.company_status()
+            return (
+                "Sutra company status\n"
+                f"Projects: {status['projects']}\n"
+                f"Open tasks: {status['open_tasks']}\n"
+                f"Pending approvals: {status['pending_approvals']}"
+            )
+        if command.kind == "proposal":
+            result = self.store.rpc("sutra_submit_proposal", {
+                "p_founder_telegram_user_id": user_id,
+                "p_name": proposal_name(command.text),
+                "p_description": command.text,
+                "p_requested_budget": command.budget,
+                "p_currency": "EUR",
+            })
+            return (
+                "Proposal recorded for CEO → Product → CTO → CFO review, then founder approval.\n"
+                f"Project: {result.get('project_id')}\n"
+                f"Approval: {result.get('approval_id')}\n"
+                f"Requested maximum: €{command.budget:,.2f}. No spending is authorized until approval."
+            )
+        if command.kind == "approval":
+            result = self.store.rpc("sutra_founder_decide_approval", {
+                "p_founder_telegram_user_id": user_id,
+                "p_approval_id": command.approval_id,
+                "p_decision": command.decision,
+                "p_comment": command.comment,
+            })
+            return f"Approval {result.get('status')}: {result.get('approval_id')}"
+        return (
+            "I can report company status, prepare a budgeted proposal, or decide a pending founder approval.\n"
+            "Use: CEO, give me company status.\n"
+            "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
+            "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
+        )
+
+
+def telegram_call(token: str, method: str, payload: dict[str, Any], timeout: float = 35.0) -> Any:
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            envelope = json.loads(response.read(1_000_001))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise IntegrationError("Telegram API request failed") from exc
+    if not envelope.get("ok"):
+        raise IntegrationError("Telegram API rejected the request")
+    return envelope.get("result")
+
+
+def telegram_poll_loop(token: str, router: FounderCommandRouter, stop: threading.Event) -> None:
+    """Long-poll commands; skip old queued messages at startup to avoid replay."""
+    offset: int | None = None
+    try:
+        latest = telegram_call(token, "getUpdates", {"timeout": 0, "limit": 1, "offset": -1})
+        if latest:
+            offset = int(latest[-1]["update_id"]) + 1
+    except (IntegrationError, KeyError, TypeError, ValueError):
+        pass
+    while not stop.is_set():
+        try:
+            updates = telegram_call(token, "getUpdates", {"timeout": 25, "limit": 25, **({"offset": offset} if offset is not None else {})}) or []
+            for update in updates:
+                offset = int(update["update_id"]) + 1
+                message = update.get("message") or update.get("edited_message") or {}
+                sender = str((message.get("from") or {}).get("id", ""))
+                chat = str((message.get("chat") or {}).get("id", ""))
+                text = message.get("text")
+                if not isinstance(text, str):
+                    continue
+                try:
+                    reply = router.handle(sender, chat, text)
+                    telegram_call(token, "sendMessage", {"chat_id": chat, "text": reply[:3900]}, timeout=10)
+                except IntegrationError:
+                    # Keep the polling loop alive; do not log command content or secrets.
+                    continue
+        except IntegrationError:
+            stop.wait(5)
