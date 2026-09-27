@@ -416,7 +416,8 @@ select public.sutra_claim_codex_execution('sutra-worker-codex12345678',
 select is((select payload->>'claimed' from codex_runner_claim),'true',
   'a valid Codex execution lease can be claimed once');
 select is((public.sutra_claim_codex_execution('sutra-worker-codex87654321',
-  (c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid)->>'claimed'),'false',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim))->>'claimed'),'false',
   'a restarted or duplicate runner cannot claim the same Codex execution');
 select throws_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
   (select (payload->>'run_id')::uuid from codex_run_claim),
