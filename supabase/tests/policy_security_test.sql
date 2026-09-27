@@ -331,7 +331,8 @@ select throws_ok($$select public.sutra_submit_task_review(
 select throws_ok($$select public.sutra_submit_task_review(
   (select id from public.agents where slug='security'),
   (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
-  '{}'::jsonb)$$,'42501',null,'Security cannot submit evidence for QA work assigned to another role');
+  jsonb_build_object('result','pass','summary','review submitted for wrong role','tested_commit_sha',repeat('a',40),
+    'acceptance_criteria','[]'::jsonb))$$,'42501',null,'Security cannot submit evidence for QA work assigned to another role');
 select lives_ok($$select public.sutra_submit_task_review(
   (select id from public.agents where slug='qa'),
   (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
@@ -345,10 +346,12 @@ select is((select status from public.tasks where owner_agent_id=(select id from 
   'done','passing persisted QA evidence completes QA task');
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
   'ready','QA completion releases Security review');
+reset role;
 select is((select count(*)::integer from public.task_review_evidence where review_role='qa' and tested_commit_sha=repeat('a',40)),
   1,'QA evidence is durably stored with its exact Developer commit');
 select is((select count(*)::integer from public.audit_log where action='task.review_submitted' and actor_id='qa'),
   1,'QA review submission is audit logged');
+set local role service_role;
 select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='security'),
   (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
   'in_progress','{}'::jsonb)$$,'Security starts its assigned review task');
