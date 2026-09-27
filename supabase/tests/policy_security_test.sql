@@ -562,16 +562,16 @@ reset role;
 select ok((select count(*) from public.audit_log where action='spending.authorization_requested') >= 7,'authorization decisions are audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.succeeded'),5,
   'each executed department review is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),10,
-  'each model usage reconciliation is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),10,
-  'each model spend reservation decision is audit logged');
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),11,
+  'each Hermes and Codex model usage reconciliation is audit logged');
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),11,
+  'each Hermes and Codex model spend reservation decision is audit logged');
 select is((select count(*)::integer from public.audit_log where action='task.artifact_submitted'),5,
   'every persisted internal role artifact is audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.spend_approval_resumed'),1,
   'approval-driven model run resumption is audit logged');
-select is((select count(*)::integer from public.expenses where actual_amount=0.01),10,
-  'actual model usage is reconciled into its authoritative expense');
+select is((select count(*)::integer from public.expenses where actual_amount=0.01),11,
+  'actual Hermes and Codex model usage is reconciled into its authoritative expense');
 
 select * from finish();
 rollback;
