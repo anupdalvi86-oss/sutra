@@ -38,6 +38,24 @@ class FounderCommandTests(unittest.TestCase):
         self.assertEqual(self.store.rpc.call_args.args[0], "sutra_founder_decide_approval")
         self.assertEqual(self.store.rpc.call_args.args[1]["p_comment"], "go ahead")
 
+    def test_founder_can_list_pending_approvals_without_deciding_them(self):
+        self.store.founder_pending_approvals.return_value = [{
+            "approval_id": APPROVAL, "summary": "AI QA opportunity", "amount": 500,
+            "currency": "EUR", "pending_roles": ["cfo"], "ready": False,
+        }]
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show my approvals.")
+        self.assertIn("AI QA opportunity", reply)
+        self.assertIn("waiting for cfo", reply)
+        self.assertIn(APPROVAL, reply)
+        self.store.founder_pending_approvals.assert_called_once_with(FOUNDER)
+        self.store.rpc.assert_not_called()
+
+    def test_approval_queue_failure_fails_closed(self):
+        self.store.founder_pending_approvals.side_effect = IntegrationError("unavailable")
+        reply = self.router.handle(FOUNDER, FOUNDER, "show my approvals")
+        self.assertIn("No approval was changed", reply)
+        self.store.rpc.assert_not_called()
+
     def test_rejects_nonfounder_and_group_chats(self):
         self.store.record_denied_identity.return_value = None
         response = self.router.handle("987654321", "987654321", "CEO, give me company status")

@@ -158,6 +158,15 @@ class SupabaseREST:
             raise IntegrationError("Supabase returned an invalid company status response")
         return {"projects": len(projects), "open_tasks": len(tasks), "pending_approvals": len(approvals)}
 
+    def founder_pending_approvals(self, founder_telegram_user_id: str) -> list[dict[str, Any]]:
+        result = self.rpc("sutra_founder_pending_approvals", {
+            "p_founder_telegram_user_id": founder_telegram_user_id,
+        })
+        approvals = result.get("approvals") if isinstance(result, dict) else None
+        if not isinstance(approvals, list) or not all(isinstance(item, dict) for item in approvals):
+            raise IntegrationError("Supabase returned an invalid founder approval queue")
+        return approvals
+
     def record_denied_identity(self, actor_hash: str) -> None:
         self.request("rpc/sutra_log_auth_denial", "POST", {"p_actor_hash": actor_hash})
 
@@ -186,6 +195,8 @@ def parse_founder_command(text: str) -> FounderCommand:
     if match:
         return FounderCommand("approval", text.strip(), match.group(2), match.group(1).lower(), match.group(3) or "")
     lowered = text.lower()
+    if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
+        return FounderCommand("approvals", text.strip())
     if any(phrase in lowered for phrase in ("company status", "company update", "status report", "ceo, status")):
         return FounderCommand("status", text.strip())
     amount = None
@@ -237,6 +248,27 @@ class FounderCommandRouter:
                 f"Open tasks: {status['open_tasks']}\n"
                 f"Pending approvals: {status['pending_approvals']}"
             )
+        if command.kind == "approvals":
+            try:
+                approvals = self.store.founder_pending_approvals(user_id)
+            except IntegrationError:
+                return "I couldn't load the founder approval queue. No approval was changed; check the database connection and try again."
+            if not approvals:
+                return "No pending founder approval requests."
+            lines = [f"Founder approvals ({len(approvals)} shown):"]
+            for item in approvals:
+                approval_id = item.get("approval_id")
+                summary = re.sub(r"\s+", " ", str(item.get("summary") or "Approval request"))[:180]
+                amount = item.get("amount")
+                currency = re.sub(r"[^A-Z]", "", str(item.get("currency") or "EUR").upper())[:3]
+                valid_amount = isinstance(amount, int) or (isinstance(amount, float) and math.isfinite(amount))
+                value = f"{currency} {amount:,.2f}"[:48] if valid_amount else "amount not specified"
+                missing = item.get("pending_roles")
+                reviewer_list = ", ".join(str(role)[:32] for role in missing[:3]) if isinstance(missing, list) and missing else "department review"
+                readiness = "ready for your decision" if item.get("ready") is True else f"waiting for {reviewer_list}"
+                lines.extend((f"• {summary} — {value}; {readiness}", f"  ID: {approval_id}"))
+            lines.append("Approve or reject only when ready: approve <approval-id> [comment] / reject <approval-id> [comment].")
+            return "\n".join(lines)
         if command.kind == "proposal":
             try:
                 result = self.store.rpc("sutra_submit_proposal", {
@@ -266,8 +298,9 @@ class FounderCommandRouter:
                 return "Approval unchanged. Confirm the request is pending and all required department reviews, including CFO, are complete."
             return f"Approval {result.get('status')}: {result.get('approval_id')}"
         return (
-            "I can report company status, prepare a budgeted proposal, or decide a pending founder approval.\n"
+            "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
+            "Use: CEO, show my approvals.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
         )
