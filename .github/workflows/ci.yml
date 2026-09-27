@@ -48,6 +48,8 @@ jobs:
         run: docker build -f Dockerfile.api -t sutra-api:ci .
       - name: Build Sutra API package-root image
         run: docker build -t sutra-api-package:ci ./sutra
+      - name: Verify the pinned Codex runner runtime
+        run: docker run --rm --entrypoint /bin/sh sutra-api-package:ci -ec 'codex --version; git --version'
       - name: Build Hermes image
         run: docker build -f Dockerfile -t sutra-hermes:ci .
       - name: Verify Hermes startup bounds

@@ -1,7 +1,7 @@
 import io
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sutra.codex_dispatch import seal_codex_issue_body
 from sutra.github_dispatch import GitHubAPIError, GitHubIssues, GitHubTaskDispatcher
@@ -129,6 +129,30 @@ class GitHubIssueTests(unittest.TestCase):
         with patch("sutra.github_dispatch.urllib.request.urlopen", return_value=Response({"items": []})):
             with self.assertRaises(GitHubAPIError):
                 GitHubIssues("token", "acme/sutra", SIGNING_SECRET).create_or_find_issue({**TASK, "title": ""})
+
+    def test_codex_runner_lists_only_open_sutra_issues(self):
+        client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)
+        client._request = Mock(return_value=[
+            {"number": 1, "title": "Sutra: signed task"},
+            {"number": 2, "title": "Sutra: PR masquerading", "pull_request": {"url": "ignored"}},
+            {"number": 3, "title": "Unrelated"},
+            "malformed",
+        ])
+        self.assertEqual(client.open_task_issues(), [{"number": 1, "title": "Sutra: signed task"}])
+        client._request.assert_called_once_with(
+            "/repos/acme/sutra/issues?state=open&per_page=100&sort=created&direction=asc")
+
+    def test_pull_request_creation_is_bound_to_task_branch_and_main(self):
+        client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)
+        client._request = Mock(return_value={"number": 12, "html_url": "https://github.com/acme/sutra/pull/12"})
+        result = client.create_pull_request(
+            "Sutra: Implement task", "Sutra-Task-ID: 01942c8a-68b1-7c29-bf9b-63f02e97359e",
+            "sutra/task-01942c8a-68b1-7c29-bf9b-63f02e97359e",
+        )
+        self.assertEqual(result, {"number": 12, "url": "https://github.com/acme/sutra/pull/12"})
+        self.assertEqual(client._request.call_args.args[:2], ("/repos/acme/sutra/pulls", "POST"))
+        with self.assertRaises(GitHubAPIError):
+            client.create_pull_request("bad title", "body", "main")
 
 
 class FakeStore:

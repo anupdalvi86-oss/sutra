@@ -161,6 +161,41 @@ class SupabaseREST:
             "p_usage_known": known,
         })
 
+    def codex_start_request(self, worker_id: str, run_id: str, lease_token: str,
+                            model: str, output_tokens: int, request_bytes: int) -> dict[str, Any]:
+        return self.rpc("sutra_codex_start_request", {
+            "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease_token,
+            "p_model": model, "p_output_tokens": output_tokens, "p_request_bytes": request_bytes,
+        })
+
+    def authorize_codex_task(self, worker_id: str, task_id: str, issue_number: int,
+                             issue_url: str, provider: str, model: str) -> dict[str, Any]:
+        return self.rpc("sutra_authorize_codex_task", {
+            "p_worker_id": worker_id, "p_task_id": task_id,
+            "p_issue_number": issue_number, "p_issue_url": issue_url,
+            "p_provider": provider, "p_model": model,
+        })
+
+    def claim_codex_execution(self, worker_id: str, run_id: str,
+                              lease_token: str) -> dict[str, Any]:
+        return self.rpc("sutra_claim_codex_execution", {
+            "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease_token,
+        })
+
+    def codex_record_usage(self, worker_id: str, run_id: str, lease_token: str,
+                           input_tokens: int, output_tokens: int) -> dict[str, Any]:
+        return self.rpc("sutra_codex_record_usage", {
+            "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease_token,
+            "p_input_tokens": input_tokens, "p_output_tokens": output_tokens,
+        })
+
+    def codex_finish_run(self, worker_id: str, run_id: str, lease_token: str,
+                         success: bool) -> dict[str, Any]:
+        return self.rpc("sutra_codex_finish_run", {
+            "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease_token,
+            "p_success": success,
+        })
+
     def claim_github_task(self, worker_id: str) -> dict[str, Any] | None:
         result = self.request("rpc/sutra_claim_github_task", "POST", {"p_worker_id": worker_id})
         if result is None:
