@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from sutra.runtime import IntegrationError
-from sutra.worker import AgentOutputError, AgentWorker, HermesAgentClient, validate_agent_artifact
+from sutra.worker import AgentOutputError, AgentWorker, HermesAgentClient, _safe_failure_detail_code, validate_agent_artifact
 
 
 def artifact(role="ceo"):
@@ -189,6 +189,20 @@ class AgentArtifactTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(AgentOutputError):
                 validate_agent_artifact("product_manager", invalid)
 
+    def test_failure_diagnostics_name_product_plan_contract_field_without_model_text(self):
+        self.assertEqual(
+            _safe_failure_detail_code("Artifact milestones must be a bounded string list"),
+            "invalid_milestones",
+        )
+        self.assertEqual(
+            _safe_failure_detail_code("Artifact acceptance_criteria must be a bounded string list"),
+            "invalid_acceptance_criteria",
+        )
+        self.assertEqual(
+            _safe_failure_detail_code("Product plan requires milestones and acceptance criteria"),
+            "missing_product_plan_sections",
+        )
+
     def test_product_research_cannot_succeed_without_sources(self):
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cpo", artifact())
@@ -263,6 +277,7 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertEqual(request_body["model_options"]["response_format"], {"type": "json_object"})
         system_prompt = request_body["messages"][0]["content"]
         self.assertIn("exactly one JSON object", system_prompt)
+        self.assertIn("must be a string, never an object or nested array", system_prompt)
         self.assertIn("acceptance_criteria", result)
 
     def test_model_call_accepts_whitespace_around_a_fenced_json_object(self):
