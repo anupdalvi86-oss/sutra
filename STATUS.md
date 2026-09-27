@@ -4,7 +4,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 
 ## What is working
 
-- The production Railway `sutra-api` service is online. Deployment `5ff666ba-77cf-491e-a6ac-a2ac9f0a3665` for merged commit `a659f02` is active and marked successful. The API remains private; no public service URL is configured.
+- The production Railway `sutra-api` service is online; the Railway dashboard marks the current deployment successful. The API remains private, with no public application URL. [Open the Railway service](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce).
 - A fresh message from the configured founder account to `@sutra86bot` received a company status response. The response reported 3 projects, 3 open tasks and 2 pending approvals.
 - Supabase project `smqsrigsugjuvuombetq` is reachable. The Codex runner claim column and restricted RPC exist, and migration `20260927224724_claim_codex_runner_lease` is recorded as applied.
 - The founder proposal workflow has durable project/approval records. One €500 proposal is ready for the founder decision and another is still awaiting CFO review. Neither approval was changed; no €500 spend is authorized.
@@ -13,7 +13,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 ## Deployment
 
 - Railway project: `valiant-liberation`, production environment.
-- API service: `sutra-api`, private, online; active deployment ID above.
+- API service: `sutra-api`, private and online; deployment state is shown in the Railway link above.
 - Hermes service: `sutra` online with its persistent volume; its API remains private.
 - Telegram: founder-only bot responds to the configured founder account.
 - Supabase: migrations through the runner claim are applied.
