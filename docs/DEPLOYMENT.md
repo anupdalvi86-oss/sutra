@@ -20,7 +20,7 @@ The current Railway deployment is Hermes-only. Configure two services in the exi
 
 Set a random independent `SUTRA_INTERNAL_TOKEN` on the API service. The token protects the narrow private API endpoints; do not give it to the language model. The API must not share the Supabase service-role key with Hermes. Set `SUTRA_ENABLE_TELEGRAM=true` only after the database founder identity matches the intended founder.
 
-The Hermes image preserves the upstream s6/entrypoint behavior and starts `gateway run`. Its internal API binds to `127.0.0.1`. Attach the persistent volume to `/opt/data`; restart-on-failure is configured. The Sutra API exposes `/health`, which separately reports database, Telegram, and Hermes integration state.
+The Hermes image pins the inspected upstream digest, preserves the root s6 entrypoint so it can prepare the volume and drop privileges, and starts `gateway run`. Its optional API server stays disabled. Attach the persistent volume to `/opt/data`; restart-on-failure is configured. The Sutra API exposes `/health`, which separately reports database, Telegram, and Hermes integration state.
 
 For the API Railway service, configure `/health` as the deployment health check. The Hermes container uses the upstream runtime and may not expose a public health endpoint; do not route public traffic to its unauthenticated internal API. Check its Railway logs and upstream gateway status directly.
 

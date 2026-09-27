@@ -36,6 +36,15 @@ jobs:
       - name: Database lint
         run: supabase db lint --local --level error
 
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Sutra API image
+        run: docker build -f Dockerfile.api -t sutra-api:ci .
+      - name: Build Hermes image
+        run: docker build -f Dockerfile -t sutra-hermes:ci .
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:
