@@ -9,6 +9,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 - Supabase holds the company state, agent roles, approvals, audited spending policies and limits. The configurable EUR approval tiers and founder-only authority are in the database. Server-only tables have RLS enabled and direct API grants are withheld.
 - The founder command router, proposal/approval persistence, internal authorization endpoints, health endpoint, Railway manifests and Hermes container configuration are implemented. The Python service tests cover founder identity, malformed requests, spending request routing, worker fail-closed behavior and artifact validation.
 - The experimental review pipeline records sequential CEO → CPO → CTO → CFO → PM runs and gates founder project approval on their completion and CFO approval. It does not make model calls until database-backed model spend control is complete.
+- Hermes startup configuration now caps API-server turns at three, model API retries at one attempt, and automatic recovery cycles at zero. The pinned Hermes OpenAI-compatible endpoint ignores request `max_tokens`; the runtime startup test verifies these controls and the `web`-only toolset.
 - No credentials or tokens are committed.
 
 ## Tests and checks performed
@@ -19,6 +20,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 - Main CI run `36287532970` passed on the merged worker commit. CI includes Python tests, clean Supabase migrations and pgTAP policy tests, database lint, both container builds, and Gitleaks.
 - Supabase connectivity was verified with a live SQL query; hosted migration history was read without applying a new migration.
 - Supabase security advisor reports 15 informational `rls_enabled_no_policy` findings for tables that have no direct API grants. They are currently server-only. Review again if grants or exposed access change.
+- The pinned Hermes image identifies upstream source revision `749220ef0007f8d87bd1531f1c24b0fe93816385` (2026-09-24). Its API source was checked to verify runtime lock support, retry/turn controls, usage metadata and the ignored `max_tokens` field.
 - The public Railway Hermes health endpoint returned HTTP 200 with `gateway: stopped`.
 
 ## Deployment and integrations
