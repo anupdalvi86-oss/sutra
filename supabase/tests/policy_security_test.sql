@@ -304,8 +304,10 @@ select public.sutra_submit_task_agent_artifact('sutra-worker-12345678',(c.payloa
       'acceptance_criteria',jsonb_build_array('Document the buyer need and measurable success criteria'))))
 from task_artifact_claim c;
 select is((select payload->>'status' from artifact_submit),'succeeded','PM task output is persisted through its spend-gated artifact RPC');
+reset role;
 select is((select count(*)::integer from public.task_agent_artifacts where artifact_type='product_plan'),1,
   'PM product plan artifact is durably stored');
+set local role service_role;
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='architect') order by created_at desc limit 1),
   'ready','PM completion releases architecture task');
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
@@ -466,9 +468,9 @@ select is((pg_temp.run_task_artifact('sales',jsonb_build_object(
   'qualification_questions',jsonb_build_array('How do you verify release readiness?'),
   'first_contact_draft','Internal first-contact draft; do not send without separate founder approval.')))->>'status'),
   'succeeded','Sales persists an internal handoff without inventing or contacting leads');
+reset role;
 select is((select count(*)::integer from public.task_agent_artifacts),5,
   'PM, Architect, DevOps, Marketing and Sales artifacts persist for the exercised workflow');
-reset role;
 set local role anon;
 select throws_ok($$select * from public.task_agent_artifacts$$,
   '42501',null,'anon cannot read task artifacts');
