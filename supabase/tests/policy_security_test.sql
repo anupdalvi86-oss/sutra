@@ -307,6 +307,8 @@ select is((select payload->>'status' from artifact_submit),'succeeded','PM task 
 reset role;
 select is((select count(*)::integer from public.task_agent_artifacts where artifact_type='product_plan'),1,
   'PM product plan artifact is durably stored');
+select ok(to_regclass('public.task_agent_artifacts_agent_id_idx') is not null,
+  'task artifact agent foreign key has a covering index');
 set local role service_role;
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='architect') order by created_at desc limit 1),
   'ready','PM completion releases architecture task');
