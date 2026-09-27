@@ -115,6 +115,28 @@ class SupabaseREST:
             "p_usage_known": known,
         })
 
+    def claim_github_task(self, worker_id: str) -> dict[str, Any] | None:
+        result = self.request("rpc/sutra_claim_github_task", "POST", {"p_worker_id": worker_id})
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise IntegrationError("Supabase returned an invalid GitHub task claim")
+        return result
+
+    def complete_github_task(self, worker_id: str, task_id: str, lease_token: str,
+                             issue_number: int, issue_url: str) -> dict[str, Any]:
+        return self.rpc("sutra_complete_github_task_dispatch", {
+            "p_worker_id": worker_id, "p_task_id": task_id, "p_lease_token": lease_token,
+            "p_issue_number": issue_number, "p_issue_url": issue_url,
+        })
+
+    def fail_github_task(self, worker_id: str, task_id: str, lease_token: str,
+                         error_code: str) -> dict[str, Any]:
+        return self.rpc("sutra_fail_github_task_dispatch", {
+            "p_worker_id": worker_id, "p_task_id": task_id,
+            "p_lease_token": lease_token, "p_error_code": error_code,
+        })
+
     def company_status(self) -> dict[str, int]:
         projects = self.request("projects?select=id&status=in.(proposed,approved,active,paused)")
         tasks = self.request("tasks?select=id&status=in.(backlog,ready,in_progress,blocked,review)")

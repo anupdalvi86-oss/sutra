@@ -140,6 +140,37 @@ class InternalEndpointTests(unittest.TestCase):
         self.assertEqual(app.agent_worker_status, "blocked_model_profile")
         self.assertIsNone(app.agent_worker_thread)
 
+    def test_github_dispatcher_is_opt_in_and_fails_closed_without_repo_token(self):
+        with patch.dict("os.environ", {"SUTRA_ENABLE_GITHUB_DISPATCHER": "true", "GITHUB_TOKEN": "", "GITHUB_REPOSITORY": ""}, clear=False):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+        self.assertEqual(app.github_dispatcher_status, "blocked_runtime_configuration")
+        self.assertIsNone(app.github_dispatcher_thread)
+
+    def test_github_dispatcher_starts_only_with_explicit_configuration(self):
+        class IdleDispatcher:
+            def __init__(self, store, issues):
+                self.store = store
+                self.issues = issues
+
+            def run(self, stop):
+                stop.wait(0.01)
+
+        env = {
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "true",
+            "GITHUB_TOKEN": "unit-test-token",
+            "GITHUB_REPOSITORY": "acme/sutra",
+        }
+        with patch.dict("os.environ", env, clear=False), patch("sutra.server.GitHubTaskDispatcher", IdleDispatcher):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+            self.assertEqual(app.github_dispatcher_status, "running")
+            self.assertIsNotNone(app.github_dispatcher_thread)
+            self.assertEqual(app.health()["github_dispatcher"], "running")
+            app.close()
+
 
 if __name__ == "__main__":
     unittest.main()
