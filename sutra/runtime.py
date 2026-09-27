@@ -20,6 +20,30 @@ class IntegrationError(RuntimeError):
     """An external integration returned an invalid or unsuccessful response."""
 
 
+def validate_outbound_request(request: urllib.request.Request) -> None:
+    """Allow HTTPS integrations and only the private Railway HTTP network."""
+    try:
+        parsed = urllib.parse.urlsplit(request.full_url)
+        _ = parsed.port
+    except ValueError as exc:
+        raise urllib.error.URLError("Outbound request URL is invalid") from exc
+    private_railway_http = (
+        parsed.scheme == "http" and bool(parsed.hostname)
+        and parsed.hostname.endswith(".railway.internal")
+    )
+    if (
+        not parsed.hostname or parsed.username is not None or parsed.password is not None
+        or (parsed.scheme != "https" and not private_railway_http)
+    ):
+        raise urllib.error.URLError("Outbound request URL scheme or authority is not allowed")
+
+
+def open_outbound_request(request: urllib.request.Request, timeout: float) -> Any:
+    validate_outbound_request(request)
+    # The HTTPS/private-network allowlist above prevents file and custom URL handlers.
+    return urllib.request.urlopen(request, timeout=timeout)  # nosec B310
+
+
 class SupabaseREST:
     """Small server-only PostgREST client; never log headers or response secrets."""
 
@@ -45,7 +69,7 @@ class SupabaseREST:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+            with open_outbound_request(req, timeout=self.timeout) as response:
                 raw = response.read(1_000_001)
                 if len(raw) > 1_000_000:
                     raise IntegrationError("Supabase response exceeded the size limit")
@@ -325,7 +349,7 @@ def telegram_call(token: str, method: str, payload: dict[str, Any], timeout: flo
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with open_outbound_request(request, timeout=timeout) as response:
             envelope = json.loads(response.read(1_000_001))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise IntegrationError("Telegram API request failed") from exc

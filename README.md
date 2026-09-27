@@ -23,6 +23,8 @@ Python 3.12+ has no third-party dependencies:
 python3 -m unittest discover -s tests -v
 ```
 
+CI also runs Bandit 1.9.4 at medium severity or higher. Outbound HTTP requests are restricted to HTTPS or Railway's private `.railway.internal` network; the API binds to the container interface for Railway's health probe while public networking remains disabled.
+
 Install Docker and the Supabase CLI, then run:
 
 ```sh
