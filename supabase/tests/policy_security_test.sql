@@ -82,6 +82,10 @@ select throws_ok($$select public.sutra_claim_github_task('sutra-github-worker-12
   '42501',null,'anon role cannot dispatch GitHub issues');
 select throws_ok($$select * from public.github_task_dispatches$$,
   '42501',null,'anon role cannot read GitHub dispatch leases or issue metadata');
+select throws_ok($$select public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',gen_random_uuid(),
+  'acme/sutra','pull_request','{}'::jsonb)$$,'42501',null,'anon role cannot ingest GitHub evidence');
+select throws_ok($$select * from public.github_webhook_deliveries$$,
+  '42501',null,'anon role cannot read signed webhook deliveries');
 reset role;
 set local role service_role;
 select throws_ok($$select public.sutra_authorize_spend('system','test',null,(select id from public.projects order by created_at desc limit 1),null,'ai_api',null,'premature spend',5,'EUR')$$,
@@ -272,14 +276,39 @@ select is((select details->>'issue_url' from public.audit_log where action='gith
   'https://github.com/acme/sutra/issues/41','audit log retains the durable GitHub issue link');
 select is(public.sutra_claim_github_task('sutra-github-worker-abcdefgh')::text,null::text,
   'the same task is not dispatched twice');
-select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
-  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),'done','{}'::jsonb)$$,
-  '22023',null,'completion without evidence is rejected');
-select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
-  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),'done','{"pull_request":"drafted"}'::jsonb)$$,
-  'developer completion requires evidence');
+select throws_ok($$select public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
+  '00000000-0000-4000-8000-000000000097','evil/sutra','pull_request',jsonb_build_object(
+    'kind','pull_request','action','closed','task_id',(select payload->>'task_id' from github_dispatch_claim),
+    'issue_number',41,'pull_request_number',88,'pull_request_url','https://github.com/evil/sutra/pull/88',
+    'head_sha',repeat('a',40),'merged',true,'base_ref','main'))$$,
+  '22023',null,'signed repository must match the issue repository');
+select is((public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
+  '00000000-0000-4000-8000-000000000096','acme/sutra','pull_request',jsonb_build_object(
+    'kind','pull_request','action','closed','task_id',(select payload->>'task_id' from github_dispatch_claim),
+    'issue_number',41,'pull_request_number',88,'pull_request_url','https://github.com/acme/sutra/pull/88',
+    'head_sha',repeat('a',40),'merged',true,'base_ref','main'))->>'completed_tasks'),'0',
+  'a merged pull request alone does not complete the Developer task');
+select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
+  'in_progress','Developer work remains active while CI evidence is missing');
+select is((public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
+  '00000000-0000-4000-8000-000000000095','acme/sutra','workflow_run',jsonb_build_object(
+    'kind','workflow_run','workflow_name','CI','conclusion','failure','run_url','https://github.com/acme/sutra/actions/runs/200',
+    'run_id',200,'head_sha',repeat('a',40),'pull_requests',jsonb_build_array(jsonb_build_object('number',88,'head_sha',repeat('a',40)))))->>'completed_tasks'),'0',
+  'failed CI evidence never completes the Developer task');
+select is((public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
+  '00000000-0000-4000-8000-000000000095','acme/sutra','workflow_run',jsonb_build_object(
+    'kind','workflow_run','workflow_name','CI','conclusion','success','run_url','https://github.com/acme/sutra/actions/runs/200',
+    'run_id',200,'head_sha',repeat('a',40),'pull_requests',jsonb_build_array(jsonb_build_object('number',88,'head_sha',repeat('a',40)))))->>'duplicate'),'true',
+  'GitHub webhook delivery IDs are idempotent');
+select is((public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
+  '00000000-0000-4000-8000-000000000094','acme/sutra','workflow_run',jsonb_build_object(
+    'kind','workflow_run','workflow_name','CI','conclusion','success','run_url','https://github.com/acme/sutra/actions/runs/201',
+    'run_id',201,'head_sha',repeat('a',40),'pull_requests',jsonb_build_array(jsonb_build_object('number',88,'head_sha',repeat('a',40)))))->>'completed_tasks'),'1',
+  'merged PR plus successful CI completes Developer task through the database gate');
+select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
+  'done','verified PR and CI complete the Developer task');
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
-  'ready','developer completion releases QA task');
+  'ready','verified Developer work releases the QA task');
 
 select lives_ok($$select public.sutra_set_budget('12345678','company','*','transaction',5,80,true)$$,
   'founder can configure a transaction hard stop through the audited policy function');

@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import threading
 import unittest
@@ -52,10 +54,11 @@ class InternalEndpointTests(unittest.TestCase):
         return urlopen(request, timeout=2)
 
     def test_internal_spend_requires_server_token(self):
+        before = len(self.app.store.calls)
         with self.assertRaises(HTTPError) as caught:
             self.post({"actor_id": "developer", "category": "ai_api", "description": "test", "amount": 2})
         self.assertEqual(caught.exception.code, 401)
-        self.assertEqual(self.app.store.calls, [])
+        self.assertEqual(len(self.app.store.calls), before)
 
     def test_internal_spend_uses_central_policy_rpc(self):
         with self.post({"actor_id": "developer", "agent_id": AGENT_ID, "category": "ai_api", "description": "test", "amount": 2}, "unit-test-only-token") as response:
@@ -116,6 +119,50 @@ class InternalEndpointTests(unittest.TestCase):
         name, rpc_payload = self.app.store.calls[-1]
         self.assertEqual(name, "sutra_update_task")
         self.assertEqual(rpc_payload["p_actor_agent_id"], AGENT_ID)
+
+    def test_github_webhook_requires_signature_and_persists_normalized_event(self):
+        secret = "unit-test-webhook-secret"
+        old_secret, old_repo = self.app.github_webhook_secret, self.app.github_repository
+        self.app.github_webhook_secret = secret
+        self.app.github_repository = "acme/sutra"
+        self.addCleanup(setattr, self.app, "github_webhook_secret", old_secret)
+        self.addCleanup(setattr, self.app, "github_repository", old_repo)
+        task_id = "01942c8a-68b1-7c29-bf9b-63f02e97359e"
+        payload = {
+            "action": "closed",
+            "repository": {"full_name": "acme/sutra"},
+            "pull_request": {
+                "number": 88,
+                "html_url": "https://github.com/acme/sutra/pull/88",
+                "body": f"Sutra-Task-ID: {task_id}\nCloses #41",
+                "merged": True,
+                "head": {"sha": "a" * 40},
+                "base": {"ref": "main"},
+            },
+        }
+        body = json.dumps(payload).encode()
+        signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        before = len(self.app.store.calls)
+        request = Request(f"{self.base}/webhooks/github", data=body, headers={
+            "Content-Type": "application/json", "X-Hub-Signature-256": signature,
+            "X-GitHub-Delivery": "01942c8a-68b1-7c29-bf9b-63f02e973590", "X-GitHub-Event": "pull_request",
+        }, method="POST")
+        with urlopen(request, timeout=2) as response:
+            self.assertEqual(response.status, 202)
+        name, rpc_payload = self.app.store.calls[-1]
+        self.assertEqual(len(self.app.store.calls), before + 1)
+        self.assertEqual(name, "sutra_record_github_webhook_event")
+        self.assertEqual(rpc_payload["p_event"]["task_id"], task_id)
+        self.assertEqual(rpc_payload["p_event"]["issue_number"], 41)
+
+        bad_request = Request(f"{self.base}/webhooks/github", data=body, headers={
+            "Content-Type": "application/json", "X-Hub-Signature-256": "sha256=" + "0" * 64,
+            "X-GitHub-Delivery": "01942c8a-68b1-7c29-bf9b-63f02e973590", "X-GitHub-Event": "pull_request",
+        }, method="POST")
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(bad_request, timeout=2)
+        self.assertEqual(caught.exception.code, 401)
+        self.assertEqual(len(self.app.store.calls), before + 1)
 
     def test_agent_worker_cannot_start_without_database_route_or_credential(self):
         with patch.dict("os.environ", {"SUTRA_ENABLE_AGENT_WORKER": "true"}, clear=False):

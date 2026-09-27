@@ -97,7 +97,9 @@ class GitHubIssues:
             f"{checklist or '- No acceptance criteria provided'}\n\n"
             "### Governance\n\n"
             "This issue was dispatched from a founder-approved Sutra project. Record implementation, "
-            "tests and review evidence in the linked pull request. This issue does not authorize "
+            "tests and review evidence in the linked pull request. In the PR description include "
+            f"`Sutra-Task-ID: {task_id}` and `Closes #<this issue number>` so Sutra can attach signed merge/CI evidence. "
+            "This issue does not authorize "
             "spending, deployment, external outreach or a production release."
         )
 
