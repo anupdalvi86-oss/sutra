@@ -31,6 +31,27 @@ if not isinstance(toolsets, dict):
     raise SystemExit("Hermes platform_toolsets must be a YAML mapping")
 toolsets["api_server"] = ["web"]
 config["platform_toolsets"] = toolsets
+
+# Hermes versions with automatic API_SERVER_KEY generation can start the API
+# server even when API_SERVER_ENABLED=false. Keep the platform's explicit
+# config flag authoritative, with opt-in requiring a separate Sutra variable.
+platforms = config.get("platforms")
+if platforms is None:
+    platforms = {}
+if not isinstance(platforms, dict):
+    raise SystemExit("Hermes platforms config must be a YAML mapping")
+api_platform = platforms.get("api_server")
+if api_platform is None:
+    api_platform = {}
+if not isinstance(api_platform, dict):
+    raise SystemExit("Hermes API server platform config must be a YAML mapping")
+enabled = os.environ.get("SUTRA_HERMES_API_ENABLED", "false").strip().lower()
+if enabled not in {"true", "false"}:
+    raise SystemExit("SUTRA_HERMES_API_ENABLED must be true or false")
+api_platform["enabled"] = enabled == "true"
+platforms["api_server"] = api_platform
+config["platforms"] = platforms
+
 gateway = config.get("gateway")
 if gateway is None:
     gateway = {}
