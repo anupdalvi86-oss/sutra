@@ -466,7 +466,7 @@ select is((pg_temp.run_task_artifact('sales',jsonb_build_object(
   'ideal_customer_profile','Software teams with repeatable release and quality processes.',
   'lead_criteria',jsonb_build_array('Relevant software team'),
   'qualification_questions',jsonb_build_array('How do you verify release readiness?'),
-  'first_contact_draft','Internal first-contact draft; do not send without separate founder approval.')))->>'status'),
+  'first_contact_draft','Internal first-contact draft; do not send without separate founder approval.'))->>'status'),
   'succeeded','Sales persists an internal handoff without inventing or contacting leads');
 reset role;
 select is((select count(*)::integer from public.task_agent_artifacts),5,
