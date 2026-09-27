@@ -45,6 +45,21 @@ api_server["max_concurrent_runs"] = 1
 api_server["history_tool_output_max_chars"] = 4000
 gateway["api_server"] = api_server
 config["gateway"] = gateway
+
+# Cost safety for Sutra's API-triggered reviews. The OpenAI-compatible request
+# body does not enforce max_tokens, so bound the agent loop and provider retries
+# in Hermes' own runtime configuration. A confirmed session model lock is still
+# required before a future spend-authorized request is allowed to run.
+agent = config.get("agent")
+if agent is None:
+    agent = {}
+if not isinstance(agent, dict):
+    raise SystemExit("Hermes agent config must be a YAML mapping")
+agent["max_turns"] = 3
+agent["api_max_retries"] = 1
+agent["auto_recovery_cycles"] = 0
+config["agent"] = agent
+
 temporary = path + ".sutra.tmp"
 with open(temporary, "w", encoding="utf-8") as stream:
     yaml.safe_dump(config, stream, sort_keys=False)

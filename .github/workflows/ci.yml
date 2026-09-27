@@ -44,6 +44,31 @@ jobs:
         run: docker build -f Dockerfile.api -t sutra-api:ci .
       - name: Build Hermes image
         run: docker build -f Dockerfile -t sutra-hermes:ci .
+      - name: Verify Hermes startup bounds
+        run: |
+          docker run --rm --entrypoint /bin/sh sutra-hermes:ci -ec '
+            export HERMES_HOME=/tmp/sutra-startup-test
+            mkdir -p "$HERMES_HOME"
+            cat > "$HERMES_HOME/config.yaml" <<EOF
+          agent:
+            max_turns: unlimited
+            api_max_retries: 5
+            auto_recovery_cycles: 5
+          platform_toolsets:
+            api_server: [shell]
+          retained_setting: true
+          EOF
+            printf "existing identity\n" > "$HERMES_HOME/SOUL.md"
+            sh /etc/cont-init.d/30-sutra-seed-soul
+            python3 - "$HERMES_HOME/config.yaml" "$HERMES_HOME/SOUL.md" <<PY
+          import sys, yaml
+          config = yaml.safe_load(open(sys.argv[1]))
+          assert config["agent"] == {"max_turns": 3, "api_max_retries": 1, "auto_recovery_cycles": 0}
+          assert config["platform_toolsets"]["api_server"] == ["web"]
+          assert config["retained_setting"] is True
+          assert open(sys.argv[2]).read() == "existing identity\\n"
+          PY
+          '
 
   secret-scan:
     runs-on: ubuntu-latest
