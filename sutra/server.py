@@ -202,7 +202,7 @@ class SutraHandler(BaseHTTPRequestHandler):
         if path == "/webhooks/github":
             self._github_webhook()
             return
-        if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update"}:
+        if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update", "/internal/task-review"}:
             self._json(404, {"error": "not_found"})
             return
         token = self.app.internal_token
@@ -215,7 +215,21 @@ class SutraHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_json()
-            if path == "/internal/task-update":
+            if path == "/internal/task-review":
+                allowed = {"task_id", "actor_agent_id", "evidence"}
+                if set(payload) - allowed or not {"task_id", "actor_agent_id", "evidence"}.issubset(payload):
+                    raise ValueError("Malformed task review")
+                task_id = str(uuid.UUID(str(payload["task_id"])))
+                actor_agent_id = str(uuid.UUID(str(payload["actor_agent_id"])))
+                evidence = payload["evidence"]
+                if not isinstance(evidence, dict) or len(json.dumps(evidence, allow_nan=False).encode()) > 16_000:
+                    raise ValueError("Review evidence must be an object up to 16000 bytes")
+                result = self.app.store.rpc("sutra_submit_task_review", {
+                    "p_task_id": task_id,
+                    "p_actor_agent_id": actor_agent_id,
+                    "p_evidence": evidence,
+                })
+            elif path == "/internal/task-update":
                 allowed = {"task_id", "actor_agent_id", "status", "evidence"}
                 if set(payload) - allowed or not {"task_id", "actor_agent_id", "status"}.issubset(payload):
                     raise ValueError("Malformed task update")
