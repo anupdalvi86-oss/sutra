@@ -62,6 +62,8 @@ class SupabaseREST:
     def claim_agent_run(self, worker_id: str) -> dict[str, Any] | None:
         result = self.request("rpc/sutra_claim_agent_run", "POST", {"p_worker_id": worker_id})
         if result is None:
+            result = self.request("rpc/sutra_claim_task_review_agent_run", "POST", {"p_worker_id": worker_id})
+        if result is None:
             return None
         if not isinstance(result, dict):
             raise IntegrationError("Supabase returned an invalid worker claim")
@@ -79,6 +81,17 @@ class SupabaseREST:
             "p_outcome": outcome,
             "p_output": output,
             "p_error_code": error_code,
+        })
+
+    def submit_task_review(self, run: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+        task_review = run.get("task_review")
+        agent = run.get("agent")
+        if not isinstance(task_review, dict) or not isinstance(agent, dict):
+            raise IntegrationError("Task review run is missing its assigned task context")
+        return self.rpc("sutra_submit_task_review", {
+            "p_task_id": task_review.get("task_id"),
+            "p_actor_agent_id": agent.get("id"),
+            "p_evidence": evidence,
         })
 
     def get_agent_model_spend_profile(self, provider: str, model: str) -> dict[str, Any]:
