@@ -349,6 +349,72 @@ select is((select count(*)::integer from public.audit_log where action='github.i
 select is((select details->>'issue_url' from public.audit_log where action='github.issue_created'
   and resource_id=(select (payload->>'task_id')::uuid::text from github_dispatch_claim) limit 1),
   'https://github.com/acme/sutra/issues/41','audit log retains the durable GitHub issue link');
+select throws_ok($$select public.sutra_authorize_codex_task('bad-worker',
+  (select (payload->>'task_id')::uuid from github_dispatch_claim),41,'https://github.com/acme/sutra/issues/41',
+  'openai','gpt-4o-mini-test-cheap')$$,
+  '22023',null,'Codex authorization rejects malformed worker identities');
+select throws_ok($$select public.sutra_authorize_codex_task('sutra-worker-codex12345678',
+  (select (payload->>'task_id')::uuid from github_dispatch_claim),42,'https://github.com/acme/sutra/issues/42',
+  'openai','gpt-4o-mini-test-cheap')$$,
+  '42501',null,'Codex execution is bound to the exact founder-approved GitHub issue');
+create temporary table codex_run_claim(payload jsonb) on commit drop;
+insert into codex_run_claim
+select public.sutra_authorize_codex_task('sutra-worker-codex12345678',
+  (c.payload->>'task_id')::uuid,41,'https://github.com/acme/sutra/issues/41',
+  'openai','gpt-4o-mini-test-cheap') from github_dispatch_claim c;
+select is((select payload->>'status' from codex_run_claim),'authorized',
+  'Codex gets a lease only after policy reserves the founder-configured model spend');
+select throws_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),'openai/unapproved-model',100,100)$$,
+  '42501',null,'Codex cannot switch away from its approved provider model');
+select throws_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),'gpt-4o-mini-test-cheap',2201,100)$$,
+  '42501',null,'Codex cannot exceed the reserved per-request output token limit');
+select throws_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),'gpt-4o-mini-test-cheap',100,80001)$$,
+  '42501',null,'Codex cannot exceed the bounded input payload size');
+select lives_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),'gpt-4o-mini-test-cheap',2000,4096)$$,
+  'Codex request must match the approved model and bounded input/output caps');
+select lives_ok($$select public.sutra_codex_record_usage('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),1000,1000)$$,
+  'provider usage is recorded against the reserved run');
+select lives_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),'gpt-4o-mini-test-cheap',2000,4096)$$,
+  'a second bounded Codex request consumes one unit of the policy iteration limit');
+select lives_ok($$select public.sutra_codex_record_usage('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),1000,1000)$$,
+  'second provider usage is included in aggregate reconciliation');
+select lives_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),'gpt-4o-mini-test-cheap',2000,4096)$$,
+  'the final configured Codex request is authorized');
+select lives_ok($$select public.sutra_codex_record_usage('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),1000,1000)$$,
+  'third provider usage is included in aggregate reconciliation');
+select throws_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),'gpt-4o-mini-test-cheap',100,100)$$,
+  '42501',null,'Codex cannot exceed the database-configured request count');
+create temporary table codex_finish(payload jsonb) on commit drop;
+insert into codex_finish
+select public.sutra_codex_finish_run('sutra-worker-codex12345678',
+  (c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,true) from codex_run_claim c;
+select is((select payload->>'status' from codex_finish),'reconciled',
+  'Codex aggregate model usage reconciles to the database price profile and expense ledger');
+reset role;
+select ok((select count(*) from public.audit_log where action in
+  ('codex.responses_request_authorized','codex.responses_usage_recorded'))=6,
+  'Codex requests and provider usage are audit logged');
+set local role service_role;
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
   (select (payload->>'task_id')::uuid from github_dispatch_claim),'done','{"pull_request":"draft","ci":"passed"}'::jsonb)$$,
   '42501',null,'generic task updates cannot bypass the merged PR and matching CI completion gate');
@@ -496,16 +562,16 @@ reset role;
 select ok((select count(*) from public.audit_log where action='spending.authorization_requested') >= 7,'authorization decisions are audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.succeeded'),5,
   'each executed department review is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),10,
-  'each model usage reconciliation is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),10,
-  'each model spend reservation decision is audit logged');
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),11,
+  'each Hermes and Codex model usage reconciliation is audit logged');
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),11,
+  'each Hermes and Codex model spend reservation decision is audit logged');
 select is((select count(*)::integer from public.audit_log where action='task.artifact_submitted'),5,
   'every persisted internal role artifact is audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.spend_approval_resumed'),1,
   'approval-driven model run resumption is audit logged');
-select is((select count(*)::integer from public.expenses where actual_amount=0.01),10,
-  'actual model usage is reconciled into its authoritative expense');
+select is((select count(*)::integer from public.expenses where actual_amount=0.01),11,
+  'actual Hermes and Codex model usage is reconciled into its authoritative expense');
 
 select * from finish();
 rollback;
