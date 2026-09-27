@@ -19,6 +19,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 - The previous main-branch CI run `36285703290` passed Python, clean Supabase/pgtap/lint, container builds and Gitleaks for commit `67c9718`.
 - Attempted `supabase start` to validate the new worker migration locally. Docker ran out of disk while downloading Supabase images (`no space left on device`); it was stopped without pruning or deleting Docker data. New migration and pgtap changes are not yet validated by CI.
 - The hosted Supabase project was verified after the previous migration. The new worker migration is not applied; hosted schema remains at `20260927012437`.
+- Supabase advisors report 15 informational `rls_enabled_no_policy` notices (expected for server-only tables with no direct API grants), plus 17 missing foreign-key indexes. The new worker migration now adds those 17 indexes; hosted status will be rechecked after its CI validation and release. Eleven unused-index notices are informational on this nearly empty project.
 
 ## Deployment and integrations
 

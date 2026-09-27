@@ -4,6 +4,26 @@ alter table public.agent_runs add column if not exists lease_token uuid;
 alter table public.agent_runs add column if not exists lease_expires_at timestamptz;
 alter table public.agent_runs add column if not exists attempt_count integer not null default 0;
 
+-- Cover foreign-key lookups used by joins and delete/update checks. These are
+-- absent from the initial operational migration's query-oriented indexes.
+create index if not exists agent_runs_agent_id_idx on public.agent_runs(agent_id);
+create index if not exists agent_runs_task_id_idx on public.agent_runs(task_id) where task_id is not null;
+create index if not exists agents_department_id_idx on public.agents(department_id);
+create index if not exists approvals_expense_id_idx on public.approvals(expense_id) where expense_id is not null;
+create index if not exists approvals_project_id_idx on public.approvals(project_id) where project_id is not null;
+create index if not exists approvals_requested_by_agent_id_idx on public.approvals(requested_by_agent_id) where requested_by_agent_id is not null;
+create index if not exists campaigns_project_id_idx on public.campaigns(project_id) where project_id is not null;
+create index if not exists decisions_agent_id_idx on public.decisions(agent_id) where agent_id is not null;
+create index if not exists expenses_agent_id_idx on public.expenses(agent_id) where agent_id is not null;
+create index if not exists expenses_department_id_idx on public.expenses(department_id) where department_id is not null;
+create index if not exists objectives_owner_agent_id_idx on public.objectives(owner_agent_id) where owner_agent_id is not null;
+create index if not exists objectives_project_id_idx on public.objectives(project_id);
+create index if not exists projects_department_id_idx on public.projects(department_id) where department_id is not null;
+create index if not exists projects_owner_agent_id_idx on public.projects(owner_agent_id) where owner_agent_id is not null;
+create index if not exists tasks_assigned_agent_id_idx on public.tasks(assigned_agent_id) where assigned_agent_id is not null;
+create index if not exists tasks_objective_id_idx on public.tasks(objective_id) where objective_id is not null;
+create index if not exists tasks_parent_task_id_idx on public.tasks(parent_task_id) where parent_task_id is not null;
+
 with ranked as (
   select id, row_number() over (partition by project_id order by created_at, id)::integer as sequence_no
   from public.agent_runs
@@ -148,7 +168,7 @@ begin
     if jsonb_typeof(p_output->'summary') is distinct from 'string' or length(trim(p_output->>'summary')) not between 8 and 5000
       or jsonb_typeof(p_output->'recommendation') is distinct from 'string' or length(trim(p_output->>'recommendation')) not between 2 and 5000
       or jsonb_typeof(p_output->'evidence') is distinct from 'array'
-      or case when jsonb_typeof(p_output->'evidence') = 'array' then jsonb_array_length(p_output->'evidence') > 10 else false end then
+      or (case when jsonb_typeof(p_output->'evidence') = 'array' then jsonb_array_length(p_output->'evidence') > 10 else false end) then
       raise exception 'agent output is missing required bounded artifact fields' using errcode = '22023';
     end if;
     if agent_row.slug='cpo' and jsonb_array_length(p_output->'evidence')=0 then
