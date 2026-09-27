@@ -20,6 +20,13 @@ class AgentOutputError(ValueError):
     def __init__(self, message: str, usage: dict[str, Any] | None = None):
         super().__init__(message)
         self.usage = usage
+        # Persist only a small code-owned category on run failures. Never store
+        # model response text or a raw exception string in Supabase diagnostics.
+        self.failure_category = (
+            "invalid_hermes_response"
+            if message.startswith(("Hermes returned", "Hermes response"))
+            else "invalid_agent_artifact"
+        )
 
 
 ROLE_GUIDANCE = {
@@ -521,9 +528,17 @@ class AgentWorker:
                 return "spend_reconciliation_pending"
             if spend_status != "reconciled":
                 self.store.complete_agent_run(self.worker_id, run, "failed",
-                    {"summary": "Hermes artifact was invalid and usage could not be verified"}, "unknown_or_overrun_spend")
+                    {
+                        "summary": "Hermes artifact failed validation and usage could not be verified",
+                        "failure_category": exc.failure_category,
+                        "usage_state": "unverified",
+                    }, "unknown_or_overrun_spend")
                 return "failed_unknown_spend"
-            self.store.complete_agent_run(self.worker_id, run, "retry", {"summary": "Agent output failed schema or evidence validation"}, "invalid_agent_output")
+            self.store.complete_agent_run(self.worker_id, run, "retry", {
+                "summary": "Agent output failed schema or evidence validation",
+                "failure_category": exc.failure_category,
+                "usage_state": "reconciled",
+            }, "invalid_agent_output")
             return "retry"
         except IntegrationError:
             try:

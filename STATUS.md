@@ -1,6 +1,6 @@
 # Sutra Status
 
-Updated: 2026-09-27 23:02 Europe/Stockholm
+Updated: 2026-09-27 23:08 Europe/Stockholm
 
 ## Overall
 
@@ -13,14 +13,14 @@ The production foundation is live: Supabase is authoritative, Telegram is founde
 - **Database governance:** Defaults are <= €10 automatic, > €10 to €50 department head, > €50 to < €200 CFO + CEO, and >= €200 founder. The monthly `ai_inference` budget is €8 with an 80% warning and hard stop. Three AI QA opportunity proposals have €500 ceilings; none has founder approval for spend. A project ceiling is not spending authorization.
 - **Latest live proposal:** Project `93b43006-58f9-4096-9e72-df9aeaf350ff`; approval `539a8225-1230-4896-87d2-b48e7c28ae82`. CEO, CPO, CTO and CFO completed successfully on GPT-6 Luna. PM attempt one had valid usage reconciled (€0.01 actual) but its artifact failed validation. PM attempt two's response/usage could not be verified; the run failed closed and its €0.03 reserve remains `unknown`. The founder approval is pending, CFO has approved review only, and Telegram lists it as ready for the founder's decision. No project spend is approved. Do not approve unless you intend to authorize this project budget.
 - **Kimi:** `KIMI_API_KEY` is present on the private Railway Hermes service, and the database has an active Kimi K2.6 pricing profile. Production role routes are `{}`; all roles use the OpenAI GPT-6 Luna default. A previous Kimi CPO request failed closed with unknown usage and a €0.28 reserve still held. Kimi must remain off live routes until its usage response can be reconciled.
-- **Railway:** Private services `sutra` (Hermes) and `sutra-api` are Online; Hermes has a persistent volume mounted at `/opt/data`. The latest API deployment associated with main commit `c9b1c33` succeeded; its logs recorded `GET /health` with HTTP 200 after restart. A previous `/ready` response was ready; `/ready` was not rechecked after the latest documentation deployment. Neither service is publicly exposed.
+- **Railway:** Private services `sutra` (Hermes) and `sutra-api` are Online; Hermes has a persistent volume mounted at `/opt/data`. Railway's last checked API deployment succeeded and logged `GET /health` with HTTP 200 after restart. A previous `/ready` response was ready; `/ready` was not rechecked after the latest documentation/security deployment. Neither service is publicly exposed.
 - **Telegram:** `@sutra86bot` is running and accepts private messages only from the configured founder. In the logged-in Chrome session, proposal intake and the founder approval queue were exercised. The latest queue response showed the current €500 request ready for founder decision and an older Kimi-blocked request waiting for CFO.
-- **Audit and spend:** The latest workflow's proposal, run claims, budget reservations, model-call starts, reconciled usage, CFO approval and PM failure are recorded in the Supabase audit log. No approval was performed. Unknown usage keeps its full reserve and blocks successful run handoff.
+- **Audit and spend:** The latest workflow's proposal, run claims, budget reservations, model-call starts, reconciled usage, CFO approval and PM failure are recorded in the Supabase audit log. No approval was performed. Unknown usage keeps its full reserve and blocks successful run handoff. New diagnostics record only a code-owned failure category and whether usage reconciled; they do not persist the provider response or exception text.
 - **Worker safety:** Provider routes are locked to the requested database-approved profile. Each call must pass preflight, reservation and begin checks, then settle observed usage before artifacts are persisted. Task artifacts additionally require an approved project, active task lease and exact acceptance criteria. External marketing/sales messages and deployment remain disabled. Hermes logs a generic warning because its base runtime has a local unsandboxed terminal backend; the Sutra API server is configured to only the `web` toolset, so shell/process toolsets are not exposed to this endpoint. CI now asserts the resolved Hermes tool catalog, not only its YAML config.
 
 ## Tests and security checks
 
-- Python suite: **77 passed** (`python3 -m unittest discover -s tests -v`).
+- Python suite: **78 passed** (`python3 -m unittest discover -s tests -v`).
 - Bandit: **no medium/high issues** (`python3 -m bandit -r sutra -ll`). The expected Railway bind warning remains.
 - `compileall` and `git diff --check`: passed after the latest source/documentation edits.
 - GitHub CI on PRs #54 and #55: Python, database migration/pgTAP/lint, container and secret-scan checks passed.
