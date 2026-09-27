@@ -16,6 +16,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
+from .github_webhook import normalize_github_event, verify_github_signature
 from .runtime import FounderCommandRouter, IntegrationError, SupabaseREST, telegram_poll_loop
 from .worker import AgentWorker, HermesAgentClient
 
@@ -57,6 +58,8 @@ class SutraApplication:
         self.agent_worker_status = "disabled"
         self.github_dispatcher_thread: threading.Thread | None = None
         self.github_dispatcher_status = "disabled"
+        self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+        self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
 
     def start(self) -> None:
         if self.store and self.founder_id:
@@ -135,6 +138,7 @@ class SutraApplication:
             "hermes_gateway": gateway,
             "agent_worker": self.agent_worker_status,
             "github_dispatcher": self.github_dispatcher_status,
+            "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
         }
 
     def close(self) -> None:
@@ -174,21 +178,30 @@ class SutraHandler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not_found"})
 
     def _read_json(self) -> dict[str, Any]:
-        length = self.headers.get("Content-Length", "")
-        if not length.isdigit() or int(length) <= 0 or int(length) > 64_000:
-            raise ValueError("Request body size is invalid")
-        if self.headers.get_content_type() != "application/json":
-            raise ValueError("Content-Type must be application/json")
         try:
-            payload = json.loads(self.rfile.read(int(length)))
+            payload = json.loads(self._read_raw_json())
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ValueError("Request body must be valid JSON") from exc
         if not isinstance(payload, dict):
             raise ValueError("Request body must be a JSON object")
         return payload
 
+    def _read_raw_json(self) -> bytes:
+        length = self.headers.get("Content-Length", "")
+        if not length.isdigit() or int(length) <= 0 or int(length) > 64_000:
+            raise ValueError("Request body size is invalid")
+        if self.headers.get_content_type() != "application/json":
+            raise ValueError("Content-Type must be application/json")
+        raw = self.rfile.read(int(length))
+        if len(raw) != int(length):
+            raise ValueError("Request body was truncated")
+        return raw
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlsplit(self.path).path
+        if path == "/webhooks/github":
+            self._github_webhook()
+            return
         if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update"}:
             self._json(404, {"error": "not_found"})
             return
@@ -281,6 +294,41 @@ class SutraHandler(BaseHTTPRequestHandler):
             self._json(503, {"error": "policy_service_unavailable"})
             return
         self._json(200, result)
+
+    def _github_webhook(self) -> None:
+        if self.app.store is None or not self.app.github_webhook_secret or not self.app.github_repository:
+            self._json(503, {"error": "github_webhook_unconfigured"})
+            return
+        try:
+            raw = self._read_raw_json()
+            signature = self.headers.get("X-Hub-Signature-256", "")
+            if not verify_github_signature(self.app.github_webhook_secret, raw, signature):
+                self._json(401, {"error": "invalid_signature"})
+                return
+            delivery_id = str(uuid.UUID(self.headers.get("X-GitHub-Delivery", "")))
+            event_name = self.headers.get("X-GitHub-Event", "")
+            if event_name not in {"pull_request", "workflow_run"}:
+                self._json(202, {"accepted": True, "ignored": "event_type"})
+                return
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("GitHub event body must be an object")
+            normalized = normalize_github_event(event_name, self.app.github_repository, payload)
+            if normalized is None:
+                self._json(202, {"accepted": True, "ignored": "unmatched_or_unrelated_event"})
+                return
+            result = self.app.store.rpc("sutra_record_github_webhook_event", {
+                "p_worker_id": "sutra-github-webhook-" + uuid.uuid4().hex,
+                "p_delivery_id": delivery_id,
+                "p_repository": self.app.github_repository,
+                "p_event_name": event_name,
+                "p_event": normalized,
+            })
+            self._json(202, result)
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "invalid_github_event"})
+        except IntegrationError:
+            self._json(503, {"error": "github_event_persistence_unavailable"})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Exclude request bodies, credentials, and founder commands from logs.
