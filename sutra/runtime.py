@@ -59,6 +59,28 @@ class SupabaseREST:
             raise IntegrationError("Supabase returned an invalid RPC response")
         return result
 
+    def claim_agent_run(self, worker_id: str) -> dict[str, Any] | None:
+        result = self.request("rpc/sutra_claim_agent_run", "POST", {"p_worker_id": worker_id})
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise IntegrationError("Supabase returned an invalid worker claim")
+        return result
+
+    def complete_agent_run(self, worker_id: str, run: dict[str, Any], outcome: str,
+                           output: dict[str, Any], error_code: str | None = None) -> dict[str, Any]:
+        run_id, lease_token = run.get("run_id"), run.get("lease_token")
+        if not isinstance(run_id, str) or not isinstance(lease_token, str):
+            raise IntegrationError("Claimed worker run is missing its lease")
+        return self.rpc("sutra_complete_agent_run", {
+            "p_worker_id": worker_id,
+            "p_run_id": run_id,
+            "p_lease_token": lease_token,
+            "p_outcome": outcome,
+            "p_output": output,
+            "p_error_code": error_code,
+        })
+
     def company_status(self) -> dict[str, int]:
         projects = self.request("projects?select=id&status=in.(proposed,approved,active,paused)")
         tasks = self.request("tasks?select=id&status=in.(backlog,ready,in_progress,blocked,review)")
@@ -147,13 +169,16 @@ class FounderCommandRouter:
                 f"Pending approvals: {status['pending_approvals']}"
             )
         if command.kind == "proposal":
-            result = self.store.rpc("sutra_submit_proposal", {
-                "p_founder_telegram_user_id": user_id,
-                "p_name": proposal_name(command.text),
-                "p_description": command.text,
-                "p_requested_budget": command.budget,
-                "p_currency": "EUR",
-            })
+            try:
+                result = self.store.rpc("sutra_submit_proposal", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_name": proposal_name(command.text),
+                    "p_description": command.text,
+                    "p_requested_budget": command.budget,
+                    "p_currency": "EUR",
+                })
+            except IntegrationError:
+                return "I couldn't record that proposal. No project or spending authorization was created; check the database connection and try again."
             return (
                 "Proposal recorded for CEO → Product → CTO → CFO review, then founder approval.\n"
                 f"Project: {result.get('project_id')}\n"
@@ -161,12 +186,15 @@ class FounderCommandRouter:
                 f"Requested maximum: €{command.budget:,.2f}. No spending is authorized until approval."
             )
         if command.kind == "approval":
-            result = self.store.rpc("sutra_founder_decide_approval", {
-                "p_founder_telegram_user_id": user_id,
-                "p_approval_id": command.approval_id,
-                "p_decision": command.decision,
-                "p_comment": command.comment,
-            })
+            try:
+                result = self.store.rpc("sutra_founder_decide_approval", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_approval_id": command.approval_id,
+                    "p_decision": command.decision,
+                    "p_comment": command.comment,
+                })
+            except IntegrationError:
+                return "Approval unchanged. Confirm the request is pending and all required department reviews, including CFO, are complete."
             return f"Approval {result.get('status')}: {result.get('approval_id')}"
         return (
             "I can report company status, prepare a budgeted proposal, or decide a pending founder approval.\n"

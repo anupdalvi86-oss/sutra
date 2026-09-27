@@ -1,5 +1,5 @@
 begin;
-select plan(47);
+select no_plan();
 
 insert into public.company_settings(key,value,governance_sensitive,updated_by)
 values('founder_telegram_user_id','"12345678"'::jsonb,true,'test')
@@ -35,6 +35,8 @@ select ok(exists(select 1 from public.agent_runs where trigger_type='founder_pro
 select ok(exists(select 1 from public.tasks where task_type='research' and status='blocked'),'execution work stays blocked before founder approval');
 select throws_ok($$select public.sutra_founder_decide_approval('12345678',(select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
   '42501',null,'founder approval cannot skip the required CFO decision');
+select throws_ok($$select public.sutra_claim_agent_run('bad-worker')$$,
+  '22023',null,'worker claims require a bounded worker identity');
 
 select throws_ok($$update public.spending_policies set required_approvers='{}' where name='founder_200_and_over'$$,
   '42501',null,'service_role cannot mutate spending authority directly');
@@ -60,12 +62,64 @@ reset role;
 set local role service_role;
 select throws_ok($$select public.sutra_authorize_spend('system','test',null,(select id from public.projects order by created_at desc limit 1),null,'ai_api',null,'premature spend',5,'EUR')$$,
   '42501',null,'spending against a proposed project is blocked');
-select lives_ok($$select public.sutra_decide_role_approval((select id from public.approvals where approval_type='project_budget' limit 1),
-  (select id::text from public.agents where slug='cfo'),'cfo','approve','Budget reviewed')$$,
-  'CFO can record the required budget review');
+create temporary table worker_claims(role text,run_id uuid,lease_token uuid,sequence_no integer) on commit drop;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+select is((select role from worker_claims),'ceo','CEO receives the first leased review run');
+select is(public.sutra_claim_agent_run('sutra-worker-abcdefgh')::text,null::text,
+  'later department work stays unclaimable until the prior review completes');
+select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long CEO summary","recommendation":"Proceed","evidence":[]}'::jsonb)$$,
+  '42501',null,'a different lease token cannot complete a review');
+select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long CEO summary","recommendation":"Proceed to evidence review","evidence":[]}'::jsonb)$$,
+  'CEO review is stored through the leased completion RPC');
+truncate worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+select is((select role from worker_claims),'cpo','Product research runs after CEO review');
+select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long research summary","recommendation":"Proceed","evidence":[]}'::jsonb)$$,
+  '22023',null,'Product research cannot complete without evidence');
+select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long research summary","recommendation":"Proceed to technical review","evidence":[{"source":"Product documentation","url":"https://example.com/docs","claim":"Primary source describes a QA workflow."}]}'::jsonb)$$,
+  'Product research records cited HTTPS evidence');
+truncate worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+select is((select role from worker_claims),'cto','CTO review runs after Product research');
+select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long technical summary","recommendation":"Proceed to finance review","evidence":[]}'::jsonb)$$,
+  'CTO review is stored before finance review');
+truncate worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+select is((select role from worker_claims),'cfo','CFO review runs after CTO review');
+select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long CFO summary","recommendation":"Present the budget to the founder","evidence":[],"decision":"approve","decision_rationale":"The proposal is ready for a separate founder decision."}'::jsonb)$$,
+  'CFO artifact records role approval without resolving founder approval');
+select is((select status from public.approvals where approval_type='project_budget' limit 1),'pending',
+  'CFO approval leaves founder approval pending');
+select throws_ok($$select public.sutra_founder_decide_approval('12345678',
+  (select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
+  '42501',null,'founder approval also waits for the PM review');
+truncate worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+select is((select role from worker_claims),'product_manager','PM review runs after CFO review');
+select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  '{"summary":"A sufficiently long PM summary","recommendation":"Founder review is ready","evidence":[],"milestones":["Discovery"]}'::jsonb)$$,
+  'PM work is stored before final founder approval');
 select lives_ok($$select public.sutra_founder_decide_approval('12345678',
   (select id from public.approvals where approval_type='project_budget' limit 1),'approve','Proceed')$$,
-  'founder can approve only after CFO review');
+  'founder can approve only after CEO, Product, CTO, CFO, and PM reviews');
 select is((select status from public.projects order by created_at desc limit 1),'approved','founder approval activates the proposal');
 select ok(exists(select 1 from public.tasks where task_type='product' and owner_agent_id=assigned_agent_id),
   'new tasks populate both current and legacy assignee columns');
@@ -111,6 +165,8 @@ select throws_ok($$select public.sutra_set_budget('99999999','company','*','tran
 
 reset role;
 select ok((select count(*) from public.audit_log where action='spending.authorization_requested') >= 7,'authorization decisions are audit logged');
+select is((select count(*)::integer from public.audit_log where action='agent_run.succeeded'),5,
+  'each executed department review is audit logged');
 
 select * from finish();
 rollback;

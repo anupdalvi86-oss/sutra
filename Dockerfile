@@ -8,5 +8,8 @@ COPY hermes/seed-soul.sh /etc/cont-init.d/30-sutra-seed-soul
 RUN chmod 0755 /etc/cont-init.d/30-sutra-seed-soul
 
 ENV HERMES_HOME=/opt/data
+ENV API_SERVER_ENABLED=false
+ENV API_SERVER_HOST=0.0.0.0
+ENV API_SERVER_PORT=8642
 
 CMD ["gateway", "run"]
