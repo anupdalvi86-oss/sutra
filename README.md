@@ -42,7 +42,7 @@ The production Railway project uses two private services connected to this repos
 1. **Hermes** (`sutra`) builds from the repository root `Dockerfile` and starts the pinned, patched Hermes gateway. A Railway volume is mounted at `/opt/data` for persistent runtime state. Keep its model-provider credentials here, separate from Supabase credentials.
 2. **Sutra API** (`sutra-api`) builds from root directory `/sutra` and `sutra/Dockerfile`, runs `python -m sutra.server` and listens on port 8080. It has `/health` configured as its Railway health check and is not publicly exposed. Add the Supabase service-role key, Telegram bot token, a random internal token, and other integration secrets in this service's Railway Variables page. The founder ID is already configured. Keep Telegram and agent worker flags disabled until each integration is verified.
 
-The API's Railway health probe returning HTTP 200 verifies process startup only. It does not imply Supabase, Telegram or model-provider readiness. See [STATUS.md](STATUS.md) for the current live checks and blockers.
+The API's Railway `/health` probe returning HTTP 200 verifies process liveness only. `GET /ready` reports database readiness and checks each enabled integration, returning HTTP 503 with named blockers until they are usable. See [STATUS.md](STATUS.md) for current live checks and blockers.
 
 See [deployment instructions](docs/DEPLOYMENT.md), [architecture](docs/ARCHITECTURE.md), [governance](docs/GOVERNANCE.md) and the live verification record in [STATUS.md](STATUS.md).
 

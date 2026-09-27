@@ -167,6 +167,40 @@ class SutraApplication:
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
         }
 
+    def readiness(self) -> dict[str, Any]:
+        """Report whether database-backed features enabled for this deployment can run."""
+        health = self.health()
+        checks = {
+            "database": health["database"],
+            "telegram": health["telegram"],
+            "agent_worker": health["agent_worker"],
+            "github_dispatcher": health["github_dispatcher"],
+            "github_webhook": health["github_webhook"],
+        }
+        blockers = []
+        if health["database"] != "reachable":
+            blockers.append("database")
+        telegram_enabled = os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true"
+        worker_enabled = os.environ.get("SUTRA_ENABLE_AGENT_WORKER", "false").lower() == "true"
+        dispatcher_enabled = os.environ.get("SUTRA_ENABLE_GITHUB_DISPATCHER", "false").lower() == "true"
+        if telegram_enabled and health["telegram"] != "running":
+            blockers.append("telegram")
+        if worker_enabled and health["agent_worker"] != "running":
+            blockers.append("agent_worker")
+        if dispatcher_enabled:
+            if health["github_dispatcher"] != "running":
+                blockers.append("github_dispatcher")
+            if health["github_webhook"] != "configured":
+                blockers.append("github_webhook")
+        ready = not blockers
+        return {
+            "status": "ready" if ready else "not_ready",
+            "service": "sutra",
+            "ready": ready,
+            "blockers": blockers,
+            "checks": checks,
+        }
+
     def close(self) -> None:
         self.telegram_stop.set()
         if self.agent_worker_thread:
@@ -197,6 +231,10 @@ class SutraHandler(BaseHTTPRequestHandler):
         if path == "/health":
             status = self.app.health()
             self._json(200, status)
+            return
+        if path == "/ready":
+            status = self.app.readiness()
+            self._json(200 if status["ready"] else 503, status)
             return
         if path == "/":
             self._json(200, {"service": "sutra", "health": "/health"})
