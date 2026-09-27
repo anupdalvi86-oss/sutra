@@ -12,12 +12,16 @@ Every public company table has RLS enabled. `anon` and `authenticated` have no t
 
 ## Railway services
 
-The current Railway deployment is Hermes-only and remains connected to `praveen-ks-2001/hermes-agent-template`, not this repository. Railway must be granted access to the private Sutra repository in its GitHub integration before it can deploy Sutra. The latest observed usage is `$1.56` current and `$4.76` estimated against `$5` included usage; do not create another service until no-cost headroom is confirmed:
+Production Railway project `valiant-liberation` contains two private services connected to `anupdalvi86-oss/sutra` on `main`. Both were observed Online on 2026-09-27. The API deployment's `/health` check returned HTTP 200. That endpoint confirms process availability only; it does not verify external integrations. No service has public networking enabled and no public API URL exists.
 
 | Service | Config | Volume | Allowed secrets |
 | --- | --- | --- | --- |
-| Hermes Agent | Root `railway.json`, `Dockerfile` | `/opt/data` | Model provider credentials; `API_SERVER_KEY` only if its optional API is enabled |
-| Sutra API | `railway.api.json`, `Dockerfile.api` | None | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_FOUNDER_USER_ID`, `SUTRA_INTERNAL_TOKEN`, `HERMES_HEALTH_URL`, `HERMES_AGENT_API_URL`, `HERMES_AGENT_API_KEY`, `SUTRA_HERMES_PROVIDER`, `SUTRA_HERMES_MODEL`, optional `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_REPOSITORY` |
+| Hermes (`sutra`) | Repository-root `Dockerfile`, `railway.json` | `sutra-volume` mounted at `/opt/data` (default 0.5 GB) | Model provider credentials; API server key only when the private API is intentionally enabled |
+| Sutra API (`sutra-api`) | Railway root directory `/sutra`, `Dockerfile` | None | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_FOUNDER_USER_ID`, `SUTRA_INTERNAL_TOKEN`, `HERMES_HEALTH_URL`, `HERMES_AGENT_API_URL`, `HERMES_AGENT_API_KEY`, `SUTRA_HERMES_PROVIDER`, `SUTRA_HERMES_MODEL`, optional `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_REPOSITORY` |
+
+Railway currently lists volume storage at `$0.15/GB-month`; 0.5 GB would cost at most about `$0.08/month` if the full allocation is used. The attached volume is required because Hermes state is stored under `/opt/data`. The API image is built by `sutra/Dockerfile`; do not select the old/nonexistent `Dockerfile.api` path.
+
+The API's health probe is `/health`, and the API service listens on port 8080. Keep it private until the authenticated interface and deployment controls are fully verified. Railway's Hermes logs reported that its optional API server is network-accessible and uses the local terminal backend. Hermes itself is private; do not expose this endpoint publicly. The Sutra worker stays disabled until its private API key, exact route and founder-approved model price profile are configured. Review this warning before enabling agent calls.
 
 Set a random independent `SUTRA_INTERNAL_TOKEN` on the API service. The token protects the narrow private API endpoints; do not give it to the language model. The API must not share the Supabase service-role key with Hermes. Set `SUTRA_ENABLE_TELEGRAM=true` only after the database founder identity matches the intended founder.
 
@@ -27,13 +31,11 @@ The GitHub task dispatcher is independently opt-in (`SUTRA_ENABLE_GITHUB_DISPATC
 
 The signed webhook endpoint is `POST /webhooks/github`. Add a repository webhook for `pull_request` and `workflow_run` events, set its random webhook secret as `GITHUB_WEBHOOK_SECRET` on Sutra API, and use JSON content type. The service checks GitHub's SHA-256 signature and repository, stores deduplicated normalized events, and records PR/CI evidence in Supabase. A Developer task completes only after a PR closes as merged and the matching `CI` workflow succeeds on the same head SHA; the database also blocks generic task updates from bypassing this gate. QA and Security completion require persisted role-specific evidence through `/internal/task-review`, tied to that exact merged Developer SHA. Configure repository branch protection to require the `CI` checks for safe merges. GitHub currently denies branch-protection access for this private repository with HTTP 403 and requires GitHub Pro or public visibility; no repository webhook is registered yet.
 
-For the API Railway service, configure `/health` as the deployment health check. The Hermes container uses the upstream runtime and may not expose a public health endpoint; do not route public traffic to its unauthenticated internal API. Check its Railway logs and upstream gateway status directly.
-
-No Railway service or secret is created automatically by this repository. Creating a second service can consume paid resources, so verify the existing plan/usage before deploying.
+Configure Railway to wait for successful GitHub CI before automatically deploying `main`. Verify the active deployment and its `/health` request in Railway logs after each release. Never make Hermes or the internal API publicly reachable.
 
 ## Telegram setup
 
-Create/configure the founder bot using Telegram's normal BotFather flow, then place its token and the founder's numeric Telegram user ID only in Sutra API Railway variables. Keep `SUTRA_ENABLE_TELEGRAM=false` until the migration has been applied and founder identity registration is verified. The polling loop skips stale queued updates on startup, accepts only direct private founder messages, and records denied identity hashes without storing raw Telegram IDs.
+Create/configure the founder bot using Telegram's normal BotFather flow, then place its token and the founder's numeric Telegram user ID only in Sutra API Railway variables. The founder numeric ID is already configured in Railway and registered in Supabase; the bot token and Supabase service-role key still need to be entered in Railway by the founder. Keep `SUTRA_ENABLE_TELEGRAM=false` until the API has restarted and its health response reports database and Telegram ready. The polling loop skips stale queued updates on startup, accepts only direct private founder messages, and records denied identity hashes without storing raw Telegram IDs.
 
 The bot currently supports status, budgeted proposal, and explicit approval/rejection commands. It does not send campaigns or sales messages.
 
