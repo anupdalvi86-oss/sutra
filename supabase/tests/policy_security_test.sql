@@ -7,6 +7,11 @@ on conflict(key) do update set value=excluded.value;
 
 set local role service_role;
 
+select lives_ok($$select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-4o-mini',0,5000,10000,2200,true)$$,
+  'founder configures the test model price and hard token ceiling');
+select throws_ok($$select public.sutra_set_agent_model_spend_profile('agent','openai','gpt-4o-mini',0,1,10000,2200,true)$$,
+  '42501',null,'agents cannot configure model price or token authority');
+
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 10',10,'EUR')->>'status'),'approved','€10 is automatic');
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 10.01',10.01,'EUR')->'required_approvers')::text,'["department_head"]','above €10 requires department head');
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 50',50,'EUR')->'required_approvers')::text,'["department_head"]','€50 remains in department approval tier');
@@ -73,7 +78,7 @@ language plpgsql as $$
 declare reservation jsonb; reservation_id uuid; reconciliation jsonb;
 begin
   reservation := public.sutra_reserve_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,
-    'openai','gpt-4o-mini',0.01);
+    'openai','gpt-4o-mini',11);
   if reservation->>'status' <> 'approved' then raise exception 'test reservation unexpectedly needs approval'; end if;
   reservation_id := (reservation->>'reservation_id')::uuid;
   perform public.sutra_begin_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id);
@@ -93,6 +98,10 @@ select is((select payload->>'status' from worker_spend_decision),'requested',
   'model spend above €10 follows the configured approval tier');
 select is((select status from public.agent_runs where id=(select run_id from worker_claims)),'blocked',
   'worker cannot proceed while model spend approval is pending');
+select is((select max_output_tokens from public.agent_run_spend_reservations where agent_run_id=(select run_id from worker_claims)),2200,
+  'reservation snapshots the founder-configured output token ceiling');
+select is((select output_eur_per_million_tokens from public.agent_run_spend_reservations where agent_run_id=(select run_id from worker_claims)),5000::numeric,
+  'reservation snapshots database pricing instead of trusting the worker quote');
 select is((select project_id::text from public.expenses where id=(select (payload->>'expense_id')::uuid from worker_spend_decision)),
   (select project_id::text from public.agent_runs where id=(select run_id from worker_claims)),
   'model spend approval is tied to its proposal project');
