@@ -1,6 +1,6 @@
 # Sutra Status
 
-Updated: 2026-09-27 22:54 Europe/Stockholm
+Updated: 2026-09-27 23:02 Europe/Stockholm
 
 ## Overall
 
@@ -13,16 +13,16 @@ The production foundation is live: Supabase is authoritative, Telegram is founde
 - **Database governance:** Defaults are <= €10 automatic, > €10 to €50 department head, > €50 to < €200 CFO + CEO, and >= €200 founder. The monthly `ai_inference` budget is €8 with an 80% warning and hard stop. Three AI QA opportunity proposals have €500 ceilings; none has founder approval for spend. A project ceiling is not spending authorization.
 - **Latest live proposal:** Project `93b43006-58f9-4096-9e72-df9aeaf350ff`; approval `539a8225-1230-4896-87d2-b48e7c28ae82`. CEO, CPO, CTO and CFO completed successfully on GPT-6 Luna. PM attempt one had valid usage reconciled (€0.01 actual) but its artifact failed validation. PM attempt two's response/usage could not be verified; the run failed closed and its €0.03 reserve remains `unknown`. The founder approval is pending, CFO has approved review only, and Telegram lists it as ready for the founder's decision. No project spend is approved. Do not approve unless you intend to authorize this project budget.
 - **Kimi:** `KIMI_API_KEY` is present on the private Railway Hermes service, and the database has an active Kimi K2.6 pricing profile. Production role routes are `{}`; all roles use the OpenAI GPT-6 Luna default. A previous Kimi CPO request failed closed with unknown usage and a €0.28 reserve still held. Kimi must remain off live routes until its usage response can be reconciled.
-- **Railway:** Private services `sutra` (Hermes) and `sutra-api` are Online; Hermes has a persistent volume mounted at `/opt/data`. On the latest API deployment, Railway logs recorded `GET /health` with HTTP 200. A previous `/ready` response was ready; `/ready` was not rechecked after the most recent documentation deployment. Neither service is publicly exposed. The latest successful API deployment is associated with main commit `40da1c8`.
+- **Railway:** Private services `sutra` (Hermes) and `sutra-api` are Online; Hermes has a persistent volume mounted at `/opt/data`. The latest API deployment associated with main commit `c9b1c33` succeeded; its logs recorded `GET /health` with HTTP 200 after restart. A previous `/ready` response was ready; `/ready` was not rechecked after the latest documentation deployment. Neither service is publicly exposed.
 - **Telegram:** `@sutra86bot` is running and accepts private messages only from the configured founder. In the logged-in Chrome session, proposal intake and the founder approval queue were exercised. The latest queue response showed the current €500 request ready for founder decision and an older Kimi-blocked request waiting for CFO.
 - **Audit and spend:** The latest workflow's proposal, run claims, budget reservations, model-call starts, reconciled usage, CFO approval and PM failure are recorded in the Supabase audit log. No approval was performed. Unknown usage keeps its full reserve and blocks successful run handoff.
-- **Worker safety:** Provider routes are locked to the requested database-approved profile. Each call must pass preflight, reservation and begin checks, then settle observed usage before artifacts are persisted. Task artifacts additionally require an approved project, active task lease and exact acceptance criteria. External marketing/sales messages and deployment remain disabled.
+- **Worker safety:** Provider routes are locked to the requested database-approved profile. Each call must pass preflight, reservation and begin checks, then settle observed usage before artifacts are persisted. Task artifacts additionally require an approved project, active task lease and exact acceptance criteria. External marketing/sales messages and deployment remain disabled. Hermes logs a generic warning because its base runtime has a local unsandboxed terminal backend; the Sutra API server is configured to only the `web` toolset, so shell/process toolsets are not exposed to this endpoint. CI now asserts the resolved Hermes tool catalog, not only its YAML config.
 
 ## Tests and security checks
 
-- Python suite: last completed **77 passed**; rerun after this documentation update before merging.
-- Bandit: last run reported no medium/high issues; rerun before merging.
-- `compileall` and `git diff --check`: passed before this documentation update; rerun before merging.
+- Python suite: **77 passed** (`python3 -m unittest discover -s tests -v`).
+- Bandit: **no medium/high issues** (`python3 -m bandit -r sutra -ll`). The expected Railway bind warning remains.
+- `compileall` and `git diff --check`: passed after the latest source/documentation edits.
 - GitHub CI on PRs #54 and #55: Python, database migration/pgTAP/lint, container and secret-scan checks passed.
 - Live checks: Supabase status, migrations, RLS, budget limits, model reservations and audit events queried; latest Railway deployment showed API `/health` HTTP 200; Telegram proposal intake and approval queue responded.
 - Docker on the local host was previously constrained by disk space; hosted container CI is green. No production data cleanup was performed.
@@ -48,7 +48,7 @@ The production foundation is live: Supabase is authoritative, Telegram is founde
 3. **Founder decision:** Telegram shows a pending €500 project-budget approval ready for the founder. This is not approved. No spending occurred against the proposal. Founder approval is a human decision; no agent should take it.
 4. **Engineering delivery:** No production Codex runner consumes approved tasks and opens PRs. GitHub issue dispatch and signed webhook are disabled/unconfigured, and the API has no public ingress for GitHub webhook delivery.
 5. **Operating authority:** No department-head approver or general company/department budgets are configured. The €10–50 tier correctly remains fail-closed without a real department head.
-6. **Release operations:** Railway wait-for-CI and branch protection are not enabled. Confirm recoverable Supabase backup coverage. Avoid untrusted Hermes shell execution; the Sutra API toolset remains restricted.
+6. **Release operations:** Railway wait-for-CI and branch protection are not enabled. Confirm recoverable Supabase backup coverage. Keep the Hermes API toolset restricted to `web`; if Sutra ever needs shell tools, first isolate the terminal backend and prove the sandbox in CI.
 7. **Credential hygiene:** User-supplied Telegram, OpenAI and Kimi credentials are held only as private Railway variables and were not added to Git. Rotate/revoke them after verification; do not send replacements in chat or the repository.
 
 ## Recommended next steps
