@@ -1,7 +1,7 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from sutra.runtime import FounderCommandRouter, IntegrationError, SupabaseREST, parse_founder_command, proposal_name
+from sutra.runtime import FounderCommandRouter, IntegrationError, SupabaseREST, parse_founder_command, proposal_name, telegram_poll_loop
 
 
 FOUNDER = "123456789"
@@ -128,6 +128,26 @@ class TaskReviewStoreTests(unittest.TestCase):
             "p_worker_id": "sutra-worker-12345678", "p_run_id": "run-id",
             "p_lease_token": "lease-id", "p_output": artifact,
         })
+
+
+class TelegramPollingTests(unittest.TestCase):
+    def test_health_status_tracks_poll_recovery_without_logging_or_stopping(self):
+        class StopAfterTwoPolls:
+            def __init__(self):
+                self.checks = 0
+
+            def is_set(self):
+                self.checks += 1
+                return self.checks > 2
+
+            def wait(self, _seconds):
+                return None
+
+        statuses = []
+        replies = [[], IntegrationError("temporary outage"), []]
+        with patch("sutra.runtime.telegram_call", side_effect=replies):
+            telegram_poll_loop("unit-test-token", Mock(), StopAfterTwoPolls(), statuses.append)
+        self.assertEqual(statuses, ["unreachable", "running"])
 
 
 if __name__ == "__main__":

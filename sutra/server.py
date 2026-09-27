@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .github_webhook import normalize_github_event, verify_github_signature
-from .runtime import FounderCommandRouter, IntegrationError, SupabaseREST, telegram_poll_loop
+from .runtime import FounderCommandRouter, IntegrationError, SupabaseREST, telegram_call, telegram_poll_loop
 from .worker import AgentWorker, HermesAgentClient
 
 
@@ -54,6 +54,7 @@ class SutraApplication:
         self.founder_verified = False
         self.telegram_stop = threading.Event()
         self.telegram_thread: threading.Thread | None = None
+        self.telegram_status = "disabled"
         self.agent_worker_thread: threading.Thread | None = None
         self.agent_worker_status = "disabled"
         self.github_dispatcher_thread: threading.Thread | None = None
@@ -111,14 +112,33 @@ class SutraApplication:
                     self.github_dispatcher_status = "running"
                 except ValueError:
                     self.github_dispatcher_status = "blocked_runtime_configuration"
-        if self.store and self.router and self.telegram_token and self.founder_verified and os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
-            self.telegram_thread = threading.Thread(
-                target=telegram_poll_loop,
-                args=(self.telegram_token, self.router, self.telegram_stop),
-                daemon=True,
-                name="telegram-founder-interface",
-            )
-            self.telegram_thread.start()
+        if os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
+            if not self.store or not self.router or not self.telegram_token:
+                self.telegram_status = "unconfigured"
+            elif not self.founder_verified:
+                self.telegram_status = "founder_unverified"
+            else:
+                try:
+                    bot = telegram_call(self.telegram_token, "getMe", {}, timeout=8)
+                except IntegrationError:
+                    self.telegram_status = "unreachable"
+                else:
+                    if (not isinstance(bot, dict) or bot.get("is_bot") is not True
+                            or isinstance(bot.get("id"), bool) or not isinstance(bot.get("id"), int)):
+                        self.telegram_status = "invalid_response"
+                    else:
+                        self.telegram_status = "starting"
+                        self.telegram_thread = threading.Thread(
+                            target=telegram_poll_loop,
+                            args=(self.telegram_token, self.router, self.telegram_stop, self._set_telegram_status),
+                            daemon=True,
+                            name="telegram-founder-interface",
+                        )
+                        self.telegram_thread.start()
+
+    def _set_telegram_status(self, status: str) -> None:
+        if status in {"running", "unreachable"}:
+            self.telegram_status = status
 
     def health(self) -> dict[str, Any]:
         database = "unconfigured"
@@ -128,13 +148,12 @@ class SutraApplication:
                 database = "reachable"
             except IntegrationError:
                 database = "unreachable"
-        telegram = "enabled" if self.store and self.router and self.telegram_token and self.founder_verified and os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true" else "unconfigured"
         gateway = GatewayProbe.state()
         return {
             "status": "ok" if self.store and database == "reachable" else "degraded",
             "service": "sutra",
             "database": database,
-            "telegram": telegram,
+            "telegram": self.telegram_status,
             "hermes_gateway": gateway,
             "agent_worker": self.agent_worker_status,
             "github_dispatcher": self.github_dispatcher_status,

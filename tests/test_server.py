@@ -210,6 +210,83 @@ class InternalEndpointTests(unittest.TestCase):
         self.assertEqual(app.agent_worker_status, "blocked_model_profile")
         self.assertIsNone(app.agent_worker_thread)
 
+    def test_telegram_health_checks_the_bot_token_before_starting_polling(self):
+        class IdleThread:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        threads = []
+
+        def make_thread(**kwargs):
+            thread = IdleThread(**kwargs)
+            threads.append(thread)
+            return thread
+
+        env = {
+            "SUTRA_ENABLE_TELEGRAM": "true",
+            "SUTRA_ENABLE_AGENT_WORKER": "false",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+            "TELEGRAM_BOT_TOKEN": "unit-test-token",
+            "TELEGRAM_FOUNDER_USER_ID": "123456789",
+        }
+        with patch.dict("os.environ", env, clear=False), \
+                patch("sutra.server.telegram_call", return_value={"id": 123, "is_bot": True}), \
+                patch("sutra.server.threading.Thread", side_effect=make_thread):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+            self.assertEqual(app.telegram_status, "starting")
+            self.assertEqual(app.health()["telegram"], "starting")
+            self.assertTrue(threads[0].started)
+            app._set_telegram_status("running")
+            self.assertEqual(app.health()["telegram"], "running")
+            app.close()
+
+    def test_telegram_health_fails_closed_for_invalid_token_or_api_response(self):
+        env = {
+            "SUTRA_ENABLE_TELEGRAM": "true",
+            "SUTRA_ENABLE_AGENT_WORKER": "false",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+            "TELEGRAM_BOT_TOKEN": "unit-test-token",
+            "TELEGRAM_FOUNDER_USER_ID": "123456789",
+        }
+        with patch.dict("os.environ", env, clear=False), \
+                patch("sutra.server.telegram_call", side_effect=IntegrationError("unauthorized")), \
+                patch("sutra.server.threading.Thread") as thread_type:
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+            self.assertEqual(app.health()["telegram"], "unreachable")
+            thread_type.assert_not_called()
+
+        with patch.dict("os.environ", env, clear=False), \
+                patch("sutra.server.telegram_call", return_value={"ok": True}), \
+                patch("sutra.server.threading.Thread") as thread_type:
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+            self.assertEqual(app.telegram_status, "invalid_response")
+            thread_type.assert_not_called()
+
+    def test_telegram_enabled_without_required_secrets_reports_unconfigured(self):
+        env = {
+            "SUTRA_ENABLE_TELEGRAM": "true",
+            "SUTRA_ENABLE_AGENT_WORKER": "false",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+            "TELEGRAM_BOT_TOKEN": "",
+            "TELEGRAM_FOUNDER_USER_ID": "123456789",
+        }
+        with patch.dict("os.environ", env, clear=False), patch("sutra.server.telegram_call") as telegram_call:
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+        self.assertEqual(app.health()["telegram"], "unconfigured")
+        telegram_call.assert_not_called()
+
     def test_github_dispatcher_is_opt_in_and_fails_closed_without_repo_token(self):
         with patch.dict("os.environ", {"SUTRA_ENABLE_GITHUB_DISPATCHER": "true", "GITHUB_TOKEN": "", "GITHUB_REPOSITORY": ""}, clear=False):
             app = SutraApplication()
