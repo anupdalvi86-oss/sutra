@@ -64,9 +64,9 @@ class SutraApplication:
                 self.founder_verified = False
         worker_enabled = os.environ.get("SUTRA_ENABLE_AGENT_WORKER", "false").lower() == "true"
         if worker_enabled:
-            # Prevent accidental paid provider calls. This prototype currently has
-            # no atomic database-backed reservation and reconciliation for model
-            # usage, so the worker remains inert even if the feature flag is set.
+            # The database ledger exists, but the worker must not make a provider
+            # call until it uses the reserve/start/reconcile RPCs with a trusted,
+            # bounded provider/model price and exact route.
             self.agent_worker_status = "blocked_spend_preflight"
         if self.store and self.router and self.telegram_token and self.founder_verified and os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
             self.telegram_thread = threading.Thread(

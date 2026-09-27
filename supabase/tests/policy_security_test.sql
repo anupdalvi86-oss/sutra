@@ -232,6 +232,14 @@ reset role;
 select ok((select count(*) from public.audit_log where action='spending.authorization_requested') >= 7,'authorization decisions are audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.succeeded'),5,
   'each executed department review is audit logged');
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),5,
+  'each model usage reconciliation is audit logged');
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),5,
+  'each model spend reservation decision is audit logged');
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_approval_resumed'),1,
+  'approval-driven model run resumption is audit logged');
+select is((select count(*)::integer from public.expenses where actual_amount=0.01),5,
+  'actual model usage is reconciled into its authoritative expense');
 
 select * from finish();
 rollback;

@@ -4,8 +4,8 @@
 
 1. Install the Supabase CLI and Docker.
 2. For local development, run `supabase start`, `supabase db reset`, `supabase test db`, and `supabase db lint --local --level error`.
-3. The additive operational migration has been applied to the existing `sutra` project (`smqsrigsugjuvuombetq`) and is recorded as `20260927012437`. Verify hosted migration history before using `supabase db push` so the CLI does not attempt to reapply it. The project service credential must stay in server-side Railway variables.
-4. The Supabase organization is on the free plan and had no backup/recovery point visible during rollout. Establish and test a recovery path before future production schema changes.
+3. Hosted migration history includes the operational foundation (`20260927012437`), agent worker (`20260927025955`) and spend ledger (`20260927025959`). These latest two migrations were applied through the authenticated Supabase connector after clean local CI. The Supabase CLI is not linked on this workstation; authenticate and compare versions before using `supabase db push` to avoid reapplying them. The project service credential must stay in server-side Railway variables.
+4. The Supabase organization is on the free plan and the dashboard displays a grace-period warning; no backup/recovery point was visible during rollout. Establish and test a recovery path before future production schema changes.
 5. Confirm the founder Telegram ID, review default policies, and only then enable Telegram founder commands.
 
 Every public company table has RLS enabled. `anon` and `authenticated` have no table access. The service role has no direct write access to budgets, spending policies, company settings, expenses, approvals or audit records; use the explicit audited RPC functions.
