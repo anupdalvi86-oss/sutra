@@ -99,13 +99,14 @@ class FounderCommandTests(unittest.TestCase):
 
 
 class TaskReviewStoreTests(unittest.TestCase):
-    def test_worker_claim_falls_back_to_role_review_queue_only_when_proposal_queue_is_idle(self):
+    def test_worker_claim_falls_back_to_task_queues_only_when_prior_queues_are_idle(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        review_run = {"run_id": "review-run", "agent": {"slug": "qa"}}
-        store.request = Mock(side_effect=[None, review_run])
-        self.assertEqual(store.claim_agent_run("sutra-worker-12345678"), review_run)
+        artifact_run = {"run_id": "artifact-run", "agent": {"slug": "product_manager"}}
+        store.request = Mock(side_effect=[None, None, artifact_run])
+        self.assertEqual(store.claim_agent_run("sutra-worker-12345678"), artifact_run)
         self.assertEqual(store.request.call_args_list[0].args[0], "rpc/sutra_claim_agent_run")
         self.assertEqual(store.request.call_args_list[1].args[0], "rpc/sutra_claim_task_review_agent_run")
+        self.assertEqual(store.request.call_args_list[2].args[0], "rpc/sutra_claim_task_agent_run")
 
     def test_task_review_submission_uses_database_claimed_owner_and_task(self):
         store = SupabaseREST("https://sutra.example", "server-key")
@@ -115,6 +116,17 @@ class TaskReviewStoreTests(unittest.TestCase):
         self.assertEqual(store.submit_task_review(run, evidence), {"status": "done"})
         store.rpc.assert_called_once_with("sutra_submit_task_review", {
             "p_task_id": "task-id", "p_actor_agent_id": "agent-id", "p_evidence": evidence,
+        })
+
+    def test_task_artifact_submission_passes_worker_lease_to_authoritative_rpc(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        store.rpc = Mock(return_value={"status": "succeeded"})
+        run = {"run_id": "run-id", "lease_token": "lease-id"}
+        artifact = {"summary": "Stored", "artifact": {"scope": "bounded"}}
+        self.assertEqual(store.submit_task_agent_artifact("sutra-worker-12345678", run, artifact), {"status": "succeeded"})
+        store.rpc.assert_called_once_with("sutra_submit_task_agent_artifact", {
+            "p_worker_id": "sutra-worker-12345678", "p_run_id": "run-id",
+            "p_lease_token": "lease-id", "p_output": artifact,
         })
 
 

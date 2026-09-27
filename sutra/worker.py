@@ -46,8 +46,48 @@ ROLE_GUIDANCE = {
         "Turn the reviewed proposal into a scoped product plan with milestones, dependencies, "
         "acceptance criteria, and engineering-ready tasks. Do not claim code or tests exist."
     ),
+    "architect": (
+        "Produce an implementation-ready technical design for the approved task. State the "
+        "system boundary, components, interfaces, data flow, security risks and delivery order. "
+        "Mark unknowns; do not claim implementation or tests exist."
+    ),
+    "coo": (
+        "Produce an internal operational readiness plan, dependencies, service ownership and "
+        "incident response. Do not make external commitments or change company policy."
+    ),
+    "devops": (
+        "Produce a deployment and rollback plan with health checks and operational blockers. "
+        "Do not deploy or change production; those actions require their own authorization."
+    ),
+    "cmo": (
+        "Draft internal campaign strategy and copy for founder review. Substantiate factual "
+        "claims with direct HTTPS sources. Never send messages, publish content, or spend money."
+    ),
+    "sales": (
+        "Draft an internal ideal-customer profile, lead qualification criteria, questions and "
+        "first-contact copy. Do not invent actual leads, contact anyone, or send messages."
+    ),
+    "governance_audit": (
+        "Independently assess the assigned controls, record evidence and findings, and state "
+        "recommendations. You cannot change policy, approve spending, or alter your own authority."
+    ),
     "qa": "Verify the assigned task against each acceptance criterion. Record reproducible named test results, including failures. Never claim a pass without direct GitHub test evidence.",
     "security": "Review only the assigned task and verified Developer commit. Record bounded checks, findings with severity, owner and remediation, and explicit release blockers. Never mark a high or critical open finding safe to release.",
+}
+
+TASK_ARTIFACT_CONTRACTS = {
+    "product_manager": {"product_plan": ("scope", "milestones", "acceptance_criteria")},
+    "architect": {"technical_design": ("design", "components", "security_risks")},
+    "coo": {"operations_plan": ("operational_dependencies", "readiness_checklist", "incident_plan")},
+    "devops": {"release_plan": ("deployment_steps", "health_checks", "rollback_steps")},
+    "cmo": {"campaign_draft": ("audience", "positioning", "draft_copy", "claims", "success_metrics")},
+    "sales": {"sales_handoff": ("ideal_customer_profile", "lead_criteria", "qualification_questions", "first_contact_draft")},
+    "governance_audit": {"governance_review": ("controls_checked", "findings", "recommendation")},
+}
+TASK_ARTIFACT_ARRAY_FIELDS = {
+    "milestones", "acceptance_criteria", "components", "security_risks", "operational_dependencies",
+    "readiness_checklist", "deployment_steps", "health_checks", "rollback_steps", "claims",
+    "success_metrics", "lead_criteria", "qualification_questions", "controls_checked", "findings",
 }
 
 
@@ -71,6 +111,7 @@ def _safe_claim_text(run: dict[str, Any]) -> str:
         "active_spending_policies": run.get("spending_policies", []),
         "applicable_budgets": run.get("applicable_budgets", []),
         "task_review": run.get("task_review", {}),
+        "task_artifact": run.get("task_artifact", {}),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))[:20_000]
 
@@ -102,7 +143,20 @@ class HermesAgentClient:
         if not provider or not model:
             raise IntegrationError("Hermes exact model route is not configured")
         role = run["agent"]["slug"]
-        if role == "qa":
+        if isinstance(run.get("task_artifact"), dict):
+            context = run["task_artifact"]
+            contract = TASK_ARTIFACT_CONTRACTS.get(role, {}).get(context.get("artifact_type"))
+            if not contract:
+                raise AgentOutputError("Claimed task has no supported role artifact contract")
+            role_output = (
+                "Return JSON fields summary, recommendation, evidence (an array of source/url/claim objects), "
+                "task_acceptance (one object per assigned acceptance criterion with exact criterion and bounded "
+                f"evidence text), and artifact (an object with required fields {', '.join(contract)}). "
+                "All array fields contain 1-20 concise strings; all other contract fields are bounded strings. "
+                "Use direct HTTPS sources for evidence. Persist a proposal or draft only. Never send, publish, "
+                "deploy, spend, invent leads, or claim an unverified result."
+            )
+        elif role == "qa":
             role_output = (
                 "Return JSON fields summary, recommendation, result (pass or fail), tested_commit_sha, "
                 "acceptance_criteria (one object per supplied criterion with criterion/result/evidence_url), "
@@ -195,6 +249,8 @@ def validate_agent_artifact(role: str, value: Any, run: dict[str, Any] | None = 
         raise AgentOutputError("Agent artifact must be a JSON object for a supported role")
     if role in {"qa", "security"}:
         return validate_task_review_artifact(role, value, run)
+    if isinstance(run, dict) and isinstance(run.get("task_artifact"), dict):
+        return validate_task_agent_artifact(role, value, run["task_artifact"])
     summary = value.get("summary")
     recommendation = value.get("recommendation")
     evidence = value.get("evidence")
@@ -230,6 +286,71 @@ def validate_agent_artifact(role: str, value: Any, run: dict[str, Any] | None = 
             raise AgentOutputError("CFO artifact requires a decision and rationale")
         bounded.update(decision=decision, decision_rationale=rationale.strip()[:2000])
     return bounded
+
+
+def validate_task_agent_artifact(role: str, value: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Validate the internal, role-specific deliverable for a claimed database task."""
+    contract = TASK_ARTIFACT_CONTRACTS.get(role, {}).get(context.get("artifact_type"))
+    if not contract or context.get("role") != role:
+        raise AgentOutputError("Task artifact role does not match its database contract")
+    summary, recommendation, evidence, artifact = (
+        value.get("summary"), value.get("recommendation"), value.get("evidence"), value.get("artifact"))
+    if not isinstance(summary, str) or not 8 <= len(summary.strip()) <= 5000:
+        raise AgentOutputError("Task artifact summary must contain 8 to 5000 characters")
+    if not isinstance(recommendation, str) or not 2 <= len(recommendation.strip()) <= 5000:
+        raise AgentOutputError("Task artifact recommendation must contain 2 to 5000 characters")
+    if not isinstance(evidence, list) or len(evidence) > 10:
+        raise AgentOutputError("Task artifact evidence must be a bounded list")
+    bounded_evidence = []
+    for item in evidence:
+        if not isinstance(item, dict):
+            raise AgentOutputError("Task artifact evidence entries must be objects")
+        source, url, claim = item.get("source"), item.get("url"), item.get("claim")
+        parsed = urllib.parse.urlsplit(url) if isinstance(url, str) else None
+        if (not isinstance(source, str) or not 1 <= len(source.strip()) <= 200
+                or parsed is None or parsed.scheme != "https" or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None or len(url) > 2048
+                or not isinstance(claim, str) or not 1 <= len(claim.strip()) <= 1000):
+            raise AgentOutputError("Task artifact evidence requires a bounded source, HTTPS URL and claim")
+        bounded_evidence.append({"source": source.strip(), "url": url, "claim": claim.strip()})
+    if role == "cmo" and not bounded_evidence:
+        raise AgentOutputError("Campaign factual claims require at least one cited HTTPS source")
+    expected_criteria = context.get("acceptance_criteria")
+    reported_criteria = value.get("task_acceptance")
+    if (not isinstance(expected_criteria, list) or not 1 <= len(expected_criteria) <= 30
+            or any(not isinstance(item, str) or not item.strip() for item in expected_criteria)
+            or not isinstance(reported_criteria, list) or len(reported_criteria) != len(expected_criteria)):
+        raise AgentOutputError("Task artifact must address each assigned acceptance criterion")
+    criteria_by_name = {}
+    for item in reported_criteria:
+        if not isinstance(item, dict):
+            raise AgentOutputError("Task acceptance evidence entries must be objects")
+        criterion, proof = item.get("criterion"), item.get("evidence")
+        if (criterion not in expected_criteria or criterion in criteria_by_name
+                or not isinstance(proof, str) or not 8 <= len(proof.strip()) <= 1000):
+            raise AgentOutputError("Task acceptance evidence must match the assigned criterion exactly")
+        criteria_by_name[criterion] = proof.strip()
+    if set(criteria_by_name) != set(expected_criteria):
+        raise AgentOutputError("Task artifact omitted assigned acceptance criteria")
+    if not isinstance(artifact, dict) or len(json.dumps(artifact, ensure_ascii=False).encode()) > 12_000:
+        raise AgentOutputError("Role artifact must be a bounded JSON object")
+    bounded_artifact: dict[str, Any] = {}
+    for field in contract:
+        item = artifact.get(field)
+        if field in TASK_ARTIFACT_ARRAY_FIELDS:
+            if (not isinstance(item, list) or not 1 <= len(item) <= 20
+                    or any(not isinstance(entry, str) or not 1 <= len(entry.strip()) <= 1000 for entry in item)):
+                raise AgentOutputError(f"Task artifact {field} must contain 1 to 20 bounded strings")
+            bounded_artifact[field] = [entry.strip() for entry in item]
+        elif not isinstance(item, str) or not 8 <= len(item.strip()) <= 4000:
+            raise AgentOutputError(f"Task artifact {field} must contain 8 to 4000 characters")
+        else:
+            bounded_artifact[field] = item.strip()
+    return {"summary": summary.strip(), "recommendation": recommendation.strip(),
+            "evidence": bounded_evidence,
+            "task_acceptance": [{"criterion": criterion, "evidence": criteria_by_name[criterion]}
+                                for criterion in expected_criteria],
+            "artifact": bounded_artifact}
 
 
 def validate_task_review_artifact(role: str, value: dict[str, Any], run: dict[str, Any] | None) -> dict[str, Any]:
@@ -329,7 +450,7 @@ def _github_evidence_url(url: Any) -> bool:
 
 
 class AgentWorker:
-    """Executes a single fenced proposal review at a time, with retryable leases."""
+    """Executes one leased, database-spend-gated review or task artifact at a time."""
 
     def __init__(self, store: Any, hermes: HermesAgentClient, provider: str, model: str,
                  worker_id: str | None = None):
@@ -414,6 +535,12 @@ class AgentWorker:
             self.store.complete_agent_run(self.worker_id, run, "failed",
                 {"summary": "Hermes usage exceeded or could not settle within its reserved profile"}, "unknown_or_overrun_spend")
             return "failed_unknown_spend"
+        if isinstance(run.get("task_artifact"), dict):
+            try:
+                self.store.submit_task_agent_artifact(self.worker_id, run, result)
+            except IntegrationError:
+                return "task_artifact_pending"
+            return "task_artifact_succeeded"
         if run.get("agent", {}).get("slug") in {"qa", "security"}:
             try:
                 self.store.submit_task_review(run, result)
@@ -432,7 +559,7 @@ class AgentWorker:
         while not stop.is_set():
             try:
                 outcome = self.run_once()
-                delay = retry_seconds if outcome in {"retry", "completion_pending", "task_review_pending"} else idle_seconds if outcome == "idle" else 0.1
+                delay = retry_seconds if outcome in {"retry", "completion_pending", "task_review_pending", "task_artifact_pending"} else idle_seconds if outcome == "idle" else 0.1
                 if wait:
                     wait(delay)
                 else:
