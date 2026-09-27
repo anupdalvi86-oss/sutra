@@ -4,7 +4,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 
 ## What is working
 
-- GitHub repository access is authenticated as `anupdalvi86-oss`; PRs #1, #2 and #3 are merged. `main` is `67c97185ffb776eb5431c019c69124e840a09b4b`.
+- GitHub repository access is authenticated as `anupdalvi86-oss`; PRs #1, #2 and #3 laid the foundation on `main`. PR #4 adds the experimental review-worker code and tests.
 - The Supabase project `sutra` (`smqsrigsugjuvuombetq`, `eu-central-1`) is `ACTIVE_HEALTHY` on Postgres 17. Migration `20260927012437` is applied. RLS and server-only table grants were verified. The four EUR spending tiers and audited authorization functions are present.
 - Founder status/proposal/approval commands persist company state. The database defines 14 agent roles, workflow gates, project/department/agent/category/vendor budgets, approval records and audit logging. Proposals create durable CEO → CPO → CTO → CFO → PM handoffs; approval requires all five reviews and CFO approval.
 - The Python API, private Telegram identity checks, proposal/approval routing, health endpoint, Hermes container configuration and Railway manifests are in the repository. Telegram and the optional Hermes worker default to disabled.
