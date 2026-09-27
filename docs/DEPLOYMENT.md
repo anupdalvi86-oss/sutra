@@ -4,7 +4,7 @@
 
 1. Install the Supabase CLI and Docker.
 2. For local development, run `supabase start`, `supabase db reset`, `supabase test db`, and `supabase db lint --local --level error`.
-3. Hosted migration history also includes the metered Codex authorization migration (`20260927182221`). Its execution table is RLS-protected; direct service-role table access is revoked and the authorization/usage RPCs are service-role-only. Main CI applies the full migration set, passes 170 pgTAP assertions and database lint. The local Supabase CLI is not linked on this workstation; compare hosted versions before any `supabase db push`.
+3. Hosted migration history includes the metered Codex authorization migration (`20260927182221`) and the Codex approval-FK index (`20260927191656`). Its execution table is RLS-protected; direct service-role table access is revoked and the authorization/usage RPCs are service-role-only. The live Performance Advisor now reports no unindexed foreign keys; it reports 34 unused indexes on this low-traffic project. Main CI applies the full migration set, passes 170 pgTAP assertions and database lint. The Supabase CLI is installed but not linked to the hosted project on this workstation; compare hosted versions before any `supabase db push`.
 4. Supabase was `ACTIVE_HEALTHY` on PostgreSQL 17.6 at the latest check. The project previously displayed a quota/grace-period warning; confirm current quota and a recovery point before future production schema changes.
 5. Founder identity `8776723105` is registered and matches the Railway API configuration. Database spending policies are active, but there are no active general budget rows or department-head approver. Set those through the founder-only audited policy flow before routine spend.
 

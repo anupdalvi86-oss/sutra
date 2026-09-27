@@ -4,32 +4,32 @@ Updated: 2026-09-27 (Europe/Stockholm)
 
 ## Overall
 
-The governed company-state foundation is merged (PR #46; feature commit `a279193`). Follow-up live-state documentation and migration-history alignment were merged in PRs #47 and #48. Supabase and the private Railway API are connected, and the founder-only Telegram status command has replied successfully. Sutra is **operational for health/status checks and database-enforced governance workflows**, but it is **not yet an autonomous operating company**: no model route is active, the agent worker and engineering dispatcher are disabled, and no live proposal-to-release run has been completed.
+The governed company-state foundation is merged (PR #46; feature commit `a279193`). Follow-up live-state documentation and migration-history alignment were merged in PRs #47–50; PR #51 adds the missing Codex approval foreign-key index. Supabase and the private Railway API are connected, and the founder-only Telegram status command has replied successfully. Sutra is **operational for health/status checks and database-enforced governance workflows**, but it is **not yet an autonomous operating company**: no model route is active, the agent worker and engineering dispatcher are disabled, and no live proposal-to-release run has been completed.
 
 ## Working and verified
 
-- **GitHub:** The feature foundation (PR #46) and live-state documentation/migration-history updates (PRs #47–48) are merged. PR #48 post-merge CI run `36342506492` passed all four jobs: Python/compile/Bandit, database migrations + 170 pgTAP assertions + database lint, container checks, and secret scanning. No credentials are committed.
-- **Supabase:** Project `sutra` (`smqsrigsugjuvuombetq`, `eu-central-1`) is `ACTIVE_HEALTHY` on PostgreSQL 17.6. The API connected successfully. A live audit-log read returned the founder approval-queue access and founder-identity bootstrap entries. Company state, 14 roles, approval flows, audit records, and configurable spending rules live in Supabase. The metered Codex execution migration is applied live as `20260927182221_metered_codex_execution`; its protected table has RLS and the service role cannot directly read/write execution rows.
+- **GitHub:** The feature foundation (PR #46) and live-state documentation/migration-history updates (PRs #47–48) are merged. PR #51 CI passed all four jobs: Python/compile/Bandit, database migrations + 170 pgTAP assertions + database lint, container checks, and secret scanning. No credentials are committed.
+- **Supabase:** Project `sutra` (`smqsrigsugjuvuombetq`, `eu-central-1`) is `ACTIVE_HEALTHY` on PostgreSQL 17.6. The API connected successfully. A live audit-log read returned the founder approval-queue access and founder-identity bootstrap entries. Company state, 14 roles, approval flows, audit records, and configurable spending rules live in Supabase. The metered Codex execution migration (`20260927182221`) and approval FK index migration (`20260927191656`) are live. The protected table has RLS and the service role cannot directly read/write execution rows. A fresh Performance Advisor check found zero unindexed foreign keys; 34 unused indexes remain informational on this low-traffic project.
 - **Financial governance:** Threshold policies are database-backed and configurable: `<= €10` automatic, `> €10 to €50` department head, `> €50 to < €200` CFO + CEO, and `>= €200` founder. Limits support transaction, period, company, project, department, agent, category and vendor scopes, warnings and hard stops. Founder-only audited functions prevent agent self-escalation. The live database currently has **no active general budget rows**; proposal projects start with a hard-stopped lifetime budget. Company/department/agent/category/vendor/period amounts and a real department-head approver still need founder configuration before routine spend.
 - **Workflow foundation:** Automated database tests simulate Founder → CEO/Product/CTO/CFO/PM review → founder approval → PM/Architect/Developer/QA/Security/DevOps/Marketing/Sales task chain. GitHub PR/CI evidence gates Developer completion; QA and Security evidence gates later handoffs. This is a CI/database simulation, not a live Telegram proposal or production release.
-- **Railway:** Production project has two private services, `sutra-api` and Hermes `sutra`, with persistent Hermes volume. Latest API deployment is Active; both services are Online. There is no public API deployment URL because the API remains private. The pinned Hermes service starts, but no provider request has been exercised.
+- **Railway:** Production project has two private services, `sutra-api` and Hermes `sutra`, with persistent Hermes volume. Latest API deployment is Active; both services are Online. There is no public API deployment URL because the API remains private. The latest Hermes deployment log confirms the gateway starts under s6 supervision with its volume mounted. Logs report no messaging platform/provider credentials, and no model request has been exercised.
 - **Telegram:** `@sutra86bot` is validated through Telegram Bot API `getMe`. Founder identity is configured as `8776723105` in the application and Supabase. The private API reports `telegram: running`; `/ready` returned `ready` with no blockers for currently enabled integrations. The founder sent “CEO, give me company status.” in Chrome and received a reply showing 0 projects, 0 open tasks and 0 pending approvals. This verifies founder routing and status lookup, not model-driven delegation. Secrets remain in Railway variables and are not recorded here.
 - **HTTP checks:** Railway API `/health` reports `status: ok`, database reachable and Telegram running. `/ready` reported `ready: true`; Hermes gateway integration is not configured, and the model worker, GitHub dispatcher and webhook are disabled/unconfigured.
 
 ## Tests and security
 
-- PR #48 post-merge CI run `36342506492` passed all four jobs, including 170 pgTAP assertions, all Python tests (68), Bandit 1.9.4, API/Hermes container checks, DB lint, and Gitleaks.
+- PR #51 CI passed all four jobs, including 170 pgTAP assertions, all Python tests (68), Bandit 1.9.4, API/Hermes container checks, DB lint, and Gitleaks.
 - The CI policy tests cover threshold boundaries, exhausted budgets, founder-only governance actions, agent self-escalation denial, approvals, reservations/reconciliation, RLS/grants and audit logging.
 - The same workflow CI includes application routing/authentication, malformed request, Codex task signing/dispatch, and API readiness tests.
-- A direct live authorization check confirmed the Codex execution table is protected and its service-role RPC grants are constrained. No Codex executions or Codex audit rows were created during verification.
+- Live checks confirm all 22 public tables have RLS, `anon` cannot read Codex execution rows or call its authorization RPC, and `service_role` can call the RPC but has no direct table SELECT/INSERT. The new approval FK index is visible and the Performance Advisor now reports no unindexed foreign keys. No Codex executions were created during verification.
 - Local Supabase Docker startup has previously failed because the host ran out of Docker disk; hosted Supabase connectivity and GitHub-hosted migration/policy CI are healthy. No Docker cleanup was attempted.
 
 ## Deployment and integration state
 
 | Component | State | Notes |
 | --- | --- | --- |
-| GitHub main | PR #46 feature foundation; follow-up docs PRs #47–48 | CI green |
-| Supabase | Healthy / reachable | Latest migration `20260927182221`; no active model profile or general budget rows |
+| GitHub main | Feature foundation and follow-up docs/index PRs #46–51 | CI green |
+| Supabase | Healthy / reachable | Latest migration `20260927191656`; no active model profile or general budget rows; no unindexed FKs |
 | Railway `sutra-api` | Online / private | `/health` OK, `/ready` ready; DB and Telegram verified |
 | Railway Hermes `sutra` | Online | Persistent volume; no provider/API route configured |
 | Telegram `@sutra86bot` | Running | Founder-only status request/reply verified |
