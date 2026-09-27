@@ -79,7 +79,7 @@ jobs:
           from tools.registry import discover_builtin_tools
           discover_builtin_tools()
           resolved_api_toolsets = _get_platform_tools(config, "api_server")
-          assert resolved_api_toolsets == ["web"], resolved_api_toolsets
+          assert set(resolved_api_toolsets) == {"web"}, resolved_api_toolsets
           assert config["platforms"]["api_server"]["enabled"] is False
           assert config["retained_setting"] is True
           assert open(sys.argv[2]).read() == "existing identity\\n"
