@@ -409,6 +409,16 @@ select public.sutra_authorize_codex_task('sutra-worker-codex12345678',
   'openai','gpt-4o-mini-test-cheap') from github_dispatch_claim c;
 select is((select payload->>'status' from codex_run_claim),'authorized',
   'Codex gets a lease only after policy reserves the founder-configured model spend');
+create temporary table codex_runner_claim(payload jsonb) on commit drop;
+insert into codex_runner_claim
+select public.sutra_claim_codex_execution('sutra-worker-codex12345678',
+  (c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid) from codex_run_claim c;
+select is((select payload->>'claimed' from codex_runner_claim),'true',
+  'a valid Codex execution lease can be claimed once');
+select is((public.sutra_claim_codex_execution('sutra-worker-codex87654321',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim))->>'claimed'),'false',
+  'a restarted or duplicate runner cannot claim the same Codex execution');
 select throws_ok($$select public.sutra_codex_start_request('sutra-worker-codex12345678',
   (select (payload->>'run_id')::uuid from codex_run_claim),
   (select (payload->>'lease_token')::uuid from codex_run_claim),'openai/unapproved-model',100,100)$$,
@@ -457,8 +467,9 @@ select is((select payload->>'status' from codex_finish),'reconciled',
   'Codex aggregate model usage reconciles to the database price profile and expense ledger');
 reset role;
 select ok((select count(*) from public.audit_log where action in
-  ('codex.responses_request_authorized','codex.responses_usage_recorded'))=6,
-  'Codex requests and provider usage are audit logged');
+  ('codex.responses_request_authorized','codex.responses_usage_recorded'))=6
+  and (select count(*) from public.audit_log where action='codex.runner_claimed')=1,
+  'Codex runner claim, requests and provider usage are audit logged');
 set local role service_role;
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
   (select (payload->>'task_id')::uuid from github_dispatch_claim),'done','{"pull_request":"draft","ci":"passed"}'::jsonb)$$,

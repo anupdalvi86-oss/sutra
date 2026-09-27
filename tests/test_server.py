@@ -423,6 +423,36 @@ class InternalEndpointTests(unittest.TestCase):
             self.assertEqual(app.health()["github_dispatcher"], "running")
             app.close()
 
+    def test_codex_runner_is_opt_in_and_blocks_without_secrets(self):
+        with patch.dict("os.environ", {
+            "SUTRA_ENABLE_CODEX_RUNNER": "true",
+            "GITHUB_TOKEN": "",
+            "OPENAI_API_KEY": "",
+            "GITHUB_REPOSITORY": "acme/sutra",
+            "GITHUB_WEBHOOK_SECRET": "test-only-github-webhook-secret-long-enough",
+        }, clear=False):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+        self.assertEqual(app.codex_runner_status, "blocked_runtime_configuration")
+        self.assertIsNone(app.codex_runner_thread)
+        self.assertIn("codex_runner", app.readiness()["checks"])
+
+    def test_codex_runner_requires_active_database_model_price_profile(self):
+        env = {
+            "SUTRA_ENABLE_CODEX_RUNNER": "true",
+            "GITHUB_TOKEN": "unit-test-token",
+            "OPENAI_API_KEY": "unit-test-key",
+            "GITHUB_REPOSITORY": "acme/sutra",
+            "GITHUB_WEBHOOK_SECRET": "test-only-github-webhook-secret-long-enough",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+        self.assertEqual(app.codex_runner_status, "blocked_model_profile")
+        self.assertIsNone(app.codex_runner_thread)
+
 
 if __name__ == "__main__":
     unittest.main()

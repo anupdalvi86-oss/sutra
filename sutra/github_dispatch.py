@@ -68,6 +68,34 @@ class GitHubIssues:
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise GitHubAPIError("github_network_error") from exc
 
+    def open_task_issues(self) -> list[dict[str, Any]]:
+        """Read open Sutra task issues for the private polling Codex dispatcher."""
+        path = f"/repos/{self.repository}/issues?state=open&per_page=100&sort=created&direction=asc"
+        result = self._request(path)
+        if not isinstance(result, list):
+            raise GitHubAPIError("malformed_github_response")
+        return [issue for issue in result if isinstance(issue, dict)
+                and not issue.get("pull_request")
+                and isinstance(issue.get("title"), str)
+                and issue["title"].startswith("Sutra: ")]
+
+    def create_pull_request(self, title: str, body: str, head: str,
+                            base: str = "main") -> dict[str, Any]:
+        if (not isinstance(title, str) or not title.startswith("Sutra: ") or len(title) > 300
+                or not isinstance(body, str) or len(body) > 10_000
+                or not re.fullmatch(r"sutra/task-[0-9a-f-]{36}", head)
+                or base != "main"):
+            raise GitHubAPIError("malformed_pull_request_request")
+        result = self._request(f"/repos/{self.repository}/pulls", "POST", {
+            "title": title, "body": body, "head": head, "base": base,
+        })
+        if (not isinstance(result, dict) or isinstance(result.get("number"), bool)
+                or not isinstance(result.get("number"), int) or result["number"] < 1
+                or not isinstance(result.get("html_url"), str)
+                or not result["html_url"].startswith(f"https://github.com/{self.repository}/pull/")):
+            raise GitHubAPIError("malformed_github_response")
+        return {"number": result["number"], "url": result["html_url"]}
+
     @staticmethod
     def _safe_markdown(value: str) -> str:
         # Do not let imported project content notify arbitrary GitHub users.

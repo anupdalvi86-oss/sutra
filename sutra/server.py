@@ -16,6 +16,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
+from .codex_runner import CodexTaskRunner
 from .github_webhook import normalize_github_event, verify_github_signature
 from .runtime import (
     FounderCommandRouter,
@@ -87,6 +88,8 @@ class SutraApplication:
         self.agent_worker_status = "disabled"
         self.github_dispatcher_thread: threading.Thread | None = None
         self.github_dispatcher_status = "disabled"
+        self.codex_runner_thread: threading.Thread | None = None
+        self.codex_runner_status = "disabled"
         self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
 
@@ -146,6 +149,34 @@ class SutraApplication:
                     self.github_dispatcher_status = "running"
                 except ValueError:
                     self.github_dispatcher_status = "blocked_runtime_configuration"
+        if os.environ.get("SUTRA_ENABLE_CODEX_RUNNER", "false").lower() == "true":
+            github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+            openai_api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+            provider = os.environ.get("SUTRA_CODEX_PROVIDER", "openai").strip()
+            model = os.environ.get("SUTRA_CODEX_MODEL", "gpt-6-luna").strip()
+            codex_binary = os.environ.get("SUTRA_CODEX_BINARY", "codex").strip()
+            if (not self.store or not github_token or not openai_api_key or not github_repository
+                    or len(self.github_webhook_secret) < 32):
+                self.codex_runner_status = "blocked_runtime_configuration"
+            else:
+                try:
+                    profile = self.store.get_agent_model_spend_profile(provider, model)
+                    if (profile.get("configured") is not True or profile.get("provider") != provider
+                            or profile.get("model") != model):
+                        self.codex_runner_status = "blocked_model_profile"
+                    else:
+                        issues = GitHubIssues(github_token, github_repository,
+                                              self.github_webhook_secret)
+                        runner = CodexTaskRunner(self.store, issues, openai_api_key,
+                                                 provider, model, codex_binary)
+                        self.codex_runner_thread = threading.Thread(
+                            target=runner.run, args=(self.telegram_stop,), daemon=True,
+                            name="sutra-codex-task-runner")
+                        self.codex_runner_thread.start()
+                        self.codex_runner_status = "running"
+                except (IntegrationError, ValueError, OSError):
+                    self.codex_runner_status = "blocked_runtime_configuration"
         if os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
             if not self.store or not self.router or not self.telegram_token:
                 self.telegram_status = "unconfigured"
@@ -200,6 +231,7 @@ class SutraApplication:
             "hermes_gateway": gateway,
             "agent_worker": self.agent_worker_status,
             "github_dispatcher": self.github_dispatcher_status,
+            "codex_runner": self.codex_runner_status,
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
         }
 
@@ -211,6 +243,7 @@ class SutraApplication:
             "telegram": health["telegram"],
             "agent_worker": health["agent_worker"],
             "github_dispatcher": health["github_dispatcher"],
+            "codex_runner": health["codex_runner"],
             "github_webhook": health["github_webhook"],
         }
         blockers = []
@@ -219,6 +252,7 @@ class SutraApplication:
         telegram_enabled = os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true"
         worker_enabled = os.environ.get("SUTRA_ENABLE_AGENT_WORKER", "false").lower() == "true"
         dispatcher_enabled = os.environ.get("SUTRA_ENABLE_GITHUB_DISPATCHER", "false").lower() == "true"
+        codex_enabled = os.environ.get("SUTRA_ENABLE_CODEX_RUNNER", "false").lower() == "true"
         if telegram_enabled and health["telegram"] != "running":
             blockers.append("telegram")
         if worker_enabled and health["agent_worker"] != "running":
@@ -228,6 +262,8 @@ class SutraApplication:
                 blockers.append("github_dispatcher")
             if health["github_webhook"] != "configured":
                 blockers.append("github_webhook")
+        if codex_enabled and health["codex_runner"] != "running":
+            blockers.append("codex_runner")
         ready = not blockers
         return {
             "status": "ready" if ready else "not_ready",
@@ -243,6 +279,8 @@ class SutraApplication:
             self.agent_worker_thread.join(timeout=2)
         if self.github_dispatcher_thread:
             self.github_dispatcher_thread.join(timeout=2)
+        if self.codex_runner_thread:
+            self.codex_runner_thread.join(timeout=2)
 
 
 class SutraHandler(BaseHTTPRequestHandler):

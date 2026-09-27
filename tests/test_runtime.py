@@ -230,6 +230,31 @@ class TaskReviewStoreTests(unittest.TestCase):
             "p_lease_token": "lease-id", "p_output": artifact,
         })
 
+    def test_codex_proxy_calls_use_database_leases_and_exact_token_usage(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        store.rpc = Mock(side_effect=[{"authorized": True}, {"recorded": True},
+                                     {"status": "reconciled"}, {"claimed": True}])
+        worker_id, run_id, lease = "sutra-worker-12345678", "run-id", "lease-id"
+        store.codex_start_request(worker_id, run_id, lease, "gpt-6-luna", 500, 128)
+        store.codex_record_usage(worker_id, run_id, lease, 120, 40)
+        store.codex_finish_run(worker_id, run_id, lease, True)
+        store.claim_codex_execution(worker_id, run_id, lease)
+        self.assertEqual(store.rpc.call_args_list[0].args, ("sutra_codex_start_request", {
+            "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,
+            "p_model": "gpt-6-luna", "p_output_tokens": 500, "p_request_bytes": 128,
+        }))
+        self.assertEqual(store.rpc.call_args_list[1].args, ("sutra_codex_record_usage", {
+            "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,
+            "p_input_tokens": 120, "p_output_tokens": 40,
+        }))
+        self.assertEqual(store.rpc.call_args_list[2].args, ("sutra_codex_finish_run", {
+            "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,
+            "p_success": True,
+        }))
+        self.assertEqual(store.rpc.call_args_list[3].args, ("sutra_claim_codex_execution", {
+            "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,
+        }))
+
 
 class TelegramPollingTests(unittest.TestCase):
     def test_polling_routes_founder_approval_buttons_and_clears_them(self):
