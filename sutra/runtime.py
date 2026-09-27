@@ -81,6 +81,40 @@ class SupabaseREST:
             "p_error_code": error_code,
         })
 
+    def get_agent_model_spend_profile(self, provider: str, model: str) -> dict[str, Any]:
+        return self.rpc("sutra_get_agent_model_spend_profile", {
+            "p_provider": provider, "p_model": model,
+        })
+
+    def reserve_agent_run_spend(self, worker_id: str, run: dict[str, Any], provider: str, model: str) -> dict[str, Any]:
+        return self.rpc("sutra_reserve_agent_run_spend_from_profile", {
+            "p_worker_id": worker_id, "p_run_id": run.get("run_id"),
+            "p_lease_token": run.get("lease_token"), "p_provider": provider, "p_model": model,
+        })
+
+    def begin_agent_run_spend(self, worker_id: str, run: dict[str, Any], reservation_id: str) -> dict[str, Any]:
+        return self.rpc("sutra_begin_agent_run_spend", {
+            "p_worker_id": worker_id, "p_run_id": run.get("run_id"),
+            "p_lease_token": run.get("lease_token"), "p_reservation_id": reservation_id,
+        })
+
+    def reconcile_agent_run_spend(self, worker_id: str, run: dict[str, Any], reservation_id: str,
+                                  provider: str, model: str, usage: dict[str, Any] | None) -> dict[str, Any]:
+        known = isinstance(usage, dict)
+        input_tokens = usage.get("prompt_tokens") if known else None
+        output_tokens = usage.get("completion_tokens") if known else None
+        if (known and (isinstance(input_tokens, bool) or not isinstance(input_tokens, int)
+                       or isinstance(output_tokens, bool) or not isinstance(output_tokens, int))):
+            known = False
+            input_tokens = output_tokens = None
+        return self.rpc("sutra_reconcile_agent_run_spend_from_usage", {
+            "p_worker_id": worker_id, "p_run_id": run.get("run_id"),
+            "p_lease_token": run.get("lease_token"), "p_reservation_id": reservation_id,
+            "p_provider": provider, "p_model": model, "p_input_tokens": input_tokens,
+            "p_output_tokens": output_tokens, "p_usage": usage if isinstance(usage, dict) else {},
+            "p_usage_known": known,
+        })
+
     def company_status(self) -> dict[str, int]:
         projects = self.request("projects?select=id&status=in.(proposed,approved,active,paused)")
         tasks = self.request("tasks?select=id&status=in.(backlog,ready,in_progress,blocked,review)")
