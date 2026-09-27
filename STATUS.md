@@ -17,7 +17,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 - `python3 -m unittest discover -s tests -v`: 13 tests passed.
 - `python3 -m compileall -q sutra tests`: passed.
 - PostgreSQL 16: migration applied to a clean database and to a simulated copy of the original hosted schema including its 4 legacy spending policies. The local end-to-end SQL smoke passed threshold checks, the CFO/founder approval sequence, sequential PM/architecture/developer/QA task release, evidence requirements, hard-stop rejection, audit entries and anonymous-role denial.
-- `.github/workflows/ci.yml` contains Python tests, Supabase local DB/pgtap/lint, API/Hermes container builds and Gitleaks scanning. At commit `76c6515`, hosted Python, database and secret-scan checks passed; the expanded run that adds container builds is pending.
+- `.github/workflows/ci.yml` contains Python tests, Supabase local DB/pgtap/lint, API/Hermes container builds and Gitleaks scanning. At commit `7e64475`, all four hosted jobs passed; a later docs-only commit is running the same checks.
 - Gitleaks 8.30.1 scan: no leaks found. `git diff --check`: passed.
 - `Dockerfile.api` built successfully. A local container returned the expected degraded health response when Supabase and other integrations were intentionally unconfigured.
 - Hermes image verification did not finish locally: the Docker VM ran out of disk space while copying the upstream image. The workflow now builds both images on GitHub Actions. No Docker pruning was performed because that could remove unrelated user data.
@@ -38,7 +38,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 2. **Railway runtime/API:** the Hermes service is still connected to a different GitHub repository. Connecting this private Sutra repo requires a Railway GitHub authorization in the browser. The Sutra API is not deployed, and the project is close to its current $5 included-usage allowance. No new service was created.
 3. **Telegram:** a bot token and founder numeric user ID must be placed in Railway variables. The database founder identity is not registered yet.
 4. **Autonomous execution:** queued agent handoffs and gated tasks are persisted, but there is no worker that dispatches tasks to Hermes/Codex, creates GitHub issues/PRs, or records real research, QA and security evidence. This system stores workflow state but is not yet a self-operating company.
-5. **Hermes image:** GitHub Actions is now building the pinned image. Verify a running gateway with the configured provider before any Railway rollout; the existing service currently reports `gateway: stopped`.
+5. **Hermes image:** GitHub Actions successfully built the pinned image. Verify a running gateway with the configured provider after the Railway source is connected; the existing service currently reports `gateway: stopped`.
 
 ## Recommended next steps
 

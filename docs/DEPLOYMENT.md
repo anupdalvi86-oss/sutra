@@ -11,7 +11,7 @@ Every public company table has RLS enabled. `anon` and `authenticated` have no t
 
 ## Railway services
 
-The current Railway deployment is Hermes-only. Configure two services in the existing Railway project after checking current usage and free allowance:
+The current Railway deployment is Hermes-only and remains connected to `praveen-ks-2001/hermes-agent-template`, not this repository. Connect Sutra's GitHub repository to the existing Hermes service only after confirming the intended branch and reviewing the provider's repository-access grant. Configure two services in the existing Railway project after checking current usage and free allowance:
 
 | Service | Config | Volume | Allowed secrets |
 | --- | --- | --- | --- |
