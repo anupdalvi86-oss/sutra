@@ -106,11 +106,12 @@ class SutraApplication:
         if os.environ.get("SUTRA_ENABLE_GITHUB_DISPATCHER", "false").lower() == "true":
             github_token = os.environ.get("GITHUB_TOKEN", "").strip()
             github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
-            if not self.store or not github_token or not github_repository:
+            if (not self.store or not github_token or not github_repository
+                    or len(self.github_webhook_secret) < 32):
                 self.github_dispatcher_status = "blocked_runtime_configuration"
             else:
                 try:
-                    issues = GitHubIssues(github_token, github_repository)
+                    issues = GitHubIssues(github_token, github_repository, self.github_webhook_secret)
                     dispatcher = GitHubTaskDispatcher(self.store, issues)
                     self.github_dispatcher_thread = threading.Thread(
                         target=dispatcher.run, args=(self.telegram_stop,), daemon=True,

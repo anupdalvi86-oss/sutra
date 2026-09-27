@@ -12,6 +12,7 @@ import urllib.request
 import uuid
 from typing import Any
 
+from .codex_dispatch import seal_codex_issue_body
 from .runtime import IntegrationError, open_outbound_request
 
 
@@ -24,13 +25,16 @@ class GitHubAPIError(IntegrationError):
 class GitHubIssues:
     """Uses a narrowly scoped server token; task text and secrets never mix."""
 
-    def __init__(self, token: str, repository: str, timeout: float = 12.0):
+    def __init__(self, token: str, repository: str, task_signing_secret: str, timeout: float = 12.0):
         if not token or not isinstance(repository, str) or not re.fullmatch(
             r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", repository
         ) or any(segment in {".", ".."} for segment in repository.split("/")):
             raise ValueError("GitHub token and owner/repository are required")
+        if not isinstance(task_signing_secret, str) or len(task_signing_secret) < 32:
+            raise ValueError("GitHub task signing secret must contain at least 32 characters")
         self.token = token
         self.repository = repository
+        self.task_signing_secret = task_signing_secret
         self.timeout = timeout
 
     def _request(self, path: str, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
@@ -116,11 +120,13 @@ class GitHubIssues:
             body = item.get("body")
             number = item.get("number")
             url = item.get("html_url")
+            title = item.get("title")
             if (isinstance(body, str) and f"<!-- sutra-task-id:{task_id} -->" in body
+                    and isinstance(title, str)
                     and isinstance(number, int) and not isinstance(number, bool)
                     and isinstance(url, str)
                     and re.fullmatch(rf"https://github\.com/{re.escape(self.repository)}/issues/{number}", url, re.IGNORECASE)):
-                return {"number": number, "url": url}
+                return {"number": number, "url": url, "title": title, "body": body}
         return None
 
     def create_or_find_issue(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -130,24 +136,48 @@ class GitHubIssues:
             raise GitHubAPIError("malformed_github_response") from exc
         # Search by a stable full UUID marker before create. If a worker lost its
         # DB lease after GitHub accepted a request, the next claim reuses the issue.
-        existing = self._existing_issue(task_id)
-        if existing:
-            return existing
         title = task.get("title")
         if not isinstance(title, str) or not title.strip() or len(title) > 300:
             raise GitHubAPIError("malformed_github_response")
         safe_title = self._safe_markdown(title.strip())
-        result = self._request(
-            f"/repos/{self.repository}/issues",
-            "POST",
-            {"title": f"Sutra: {safe_title}", "body": self._issue_body(task, task_id)},
-        )
+        issue_title = f"Sutra: {safe_title}"
+        unsigned_body = self._issue_body(task, task_id)
+        existing = self._existing_issue(task_id)
+        if existing:
+            existing_signed_body = seal_codex_issue_body(
+                self.repository, task_id, existing["number"], issue_title,
+                unsigned_body, self.task_signing_secret,
+            )
+            if (existing["title"] != issue_title
+                    or existing["body"] not in {unsigned_body, existing_signed_body}):
+                # Do not sign or reuse content changed after its database-approved dispatch.
+                raise GitHubAPIError("malformed_github_response")
+            result = existing
+        else:
+            result = self._request(
+                f"/repos/{self.repository}/issues",
+                "POST",
+                {"title": issue_title, "body": unsigned_body},
+            )
         if not isinstance(result, dict):
             raise GitHubAPIError("malformed_github_response")
-        number, url = result.get("number"), result.get("html_url")
+        number = result.get("number")
+        url = result.get("url") if existing else result.get("html_url")
         if (not isinstance(number, int) or isinstance(number, bool) or number < 1
                 or not isinstance(url, str)
                 or not re.fullmatch(rf"https://github\.com/{re.escape(self.repository)}/issues/{number}", url, re.IGNORECASE)):
+            raise GitHubAPIError("malformed_github_response")
+        signed_body = seal_codex_issue_body(
+            self.repository, task_id, number, issue_title, unsigned_body, self.task_signing_secret
+        )
+        if existing and existing["body"] == signed_body:
+            return {"number": number, "url": url}
+        updated = self._request(
+            f"/repos/{self.repository}/issues/{number}", "PATCH", {"body": signed_body}
+        )
+        if (not isinstance(updated, dict) or updated.get("number") != number
+                or updated.get("title") != issue_title or updated.get("body") != signed_body
+                or updated.get("html_url") != url):
             raise GitHubAPIError("malformed_github_response")
         return {"number": number, "url": url}
 
