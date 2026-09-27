@@ -40,7 +40,7 @@ select throws_ok($$update public.spending_policies set required_approvers='{}' w
   '42501',null,'service_role cannot mutate spending authority directly');
 select is((public.sutra_authorize_spend('agent','developer',(select id from public.agents where slug='developer'),null,null,
   'ai_api',null,'department approval test',11,'EUR')->>'status'),'requested','spend above €10 creates an approval request');
-select throws_ok($$select public.sutra_decide_role_approval((select id from public.approvals where approval_type='spend' order by created_at desc limit 1),
+select throws_ok($$select public.sutra_decide_role_approval((select id from public.approvals where summary='department approval test' limit 1),
   (select id::text from public.agents where slug='developer'),'department_head','approve','')$$,
   '42501',null,'department approval requires a founder-designated head');
 select lives_ok($$select public.sutra_set_company_setting('12345678',
@@ -50,7 +50,7 @@ select lives_ok($$select public.sutra_set_company_setting('12345678',
 select ok(exists(select 1 from public.company_settings s join public.agents a on a.id::text=s.value #>> '{}'
   where s.key='department_head:' || (select department_id::text from public.agents where slug='developer')
     and a.slug='developer'),'founder-designated head is visible to the policy lookup');
-select is((public.sutra_decide_role_approval((select id from public.approvals where approval_type='spend' order by created_at desc limit 1),
+select is((public.sutra_decide_role_approval((select id from public.approvals where summary='department approval test' limit 1),
   (select id::text from public.agents where slug='developer'),'department_head','approve','Designated head review')->>'status'),
   'approved','only the designated department head can approve');
 reset role;
