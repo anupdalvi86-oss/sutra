@@ -64,7 +64,7 @@ select throws_ok($$select public.sutra_authorize_spend('system','test',null,(sel
   '42501',null,'spending against a proposed project is blocked');
 create temporary table worker_claims(role text,run_id uuid,lease_token uuid,sequence_no integer) on commit drop;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
-insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'ceo','CEO receives the first leased review run');
 select is(public.sutra_claim_agent_run('sutra-worker-abcdefgh')::text,null::text,
   'later department work stays unclaimable until the prior review completes');
@@ -78,7 +78,7 @@ select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678'
   'CEO review is stored through the leased completion RPC');
 truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
-insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'cpo','Product research runs after CEO review');
 select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
@@ -94,7 +94,7 @@ select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678'
   'Product research records cited HTTPS evidence');
 truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
-insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'cto','CTO review runs after Product research');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
@@ -102,7 +102,7 @@ select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678'
   'CTO review is stored before finance review');
 truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
-insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'cfo','CFO review runs after CTO review');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
@@ -115,7 +115,7 @@ select throws_ok($$select public.sutra_founder_decide_approval('12345678',
   '42501',null,'founder approval also waits for the PM review');
 truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
-insert into worker_claims values(c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer) from c;
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
 select is((select role from worker_claims),'product_manager','PM review runs after CFO review');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
