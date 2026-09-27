@@ -315,9 +315,12 @@ select is((select status from public.tasks where owner_agent_id=(select id from 
 
 select throws_ok($$select * from public.task_review_evidence$$,'42501',null,
   'service role cannot bypass the review RPC to read immutable review evidence');
-select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='qa'),
-  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
-  'in_progress','{}'::jsonb)$$,'QA starts its assigned review task');
+create temporary table claimed_task_review(payload jsonb) on commit drop;
+insert into claimed_task_review select public.sutra_claim_task_review_agent_run('sutra-worker-qa12345678');
+select is((select payload->'agent'->>'slug' from claimed_task_review),'qa',
+  'leased review worker claims only the released QA task');
+select is((select payload->'task_review'->>'tested_commit_sha' from claimed_task_review),repeat('a',40),
+  'worker context includes the exact merged and tested Developer commit');
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='qa'),
   (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
   'done','{"summary":"looks good"}'::jsonb)$$,'42501',null,
@@ -352,9 +355,10 @@ select is((select count(*)::integer from public.task_review_evidence where revie
 select is((select count(*)::integer from public.audit_log where action='task.review_submitted' and actor_id='qa'),
   1,'QA review submission is audit logged');
 set local role service_role;
-select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='security'),
-  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
-  'in_progress','{}'::jsonb)$$,'Security starts its assigned review task');
+truncate claimed_task_review;
+insert into claimed_task_review select public.sutra_claim_task_review_agent_run('sutra-worker-security123');
+select is((select payload->'agent'->>'slug' from claimed_task_review),'security',
+  'passing QA evidence releases a leased Security review task');
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='security'),
   (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
   'done','{"summary":"no findings"}'::jsonb)$$,'42501',null,

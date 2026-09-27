@@ -37,7 +37,59 @@ def claimed_run(role="ceo"):
     }
 
 
+def task_review_run(role="qa"):
+    run = claimed_run(role)
+    run["task_review"] = {
+        "task_id": "00000000-0000-4000-8000-000000000010",
+        "title": "Verify acceptance criteria",
+        "acceptance_criteria": ["Acceptance criteria have evidence", "Failures are recorded"],
+        "tested_commit_sha": "a" * 40,
+        "pull_request_url": "https://github.com/acme/sutra/pull/88",
+        "ci_run_url": "https://github.com/acme/sutra/actions/runs/201",
+    }
+    return run
+
+
+def task_review_artifact(role="qa"):
+    result = {
+        "summary": "The implementation passes the assigned acceptance checks.",
+        "recommendation": "Release to the Security review stage.",
+        "result": "pass",
+        "tested_commit_sha": "a" * 40,
+        "acceptance_criteria": [
+            {"criterion": criterion, "result": "pass", "evidence_url": "https://github.com/acme/sutra/actions/runs/201"}
+            for criterion in task_review_run(role)["task_review"]["acceptance_criteria"]
+        ],
+    }
+    if role == "qa":
+        result["tests"] = [{"name": "automated regression suite", "result": "pass", "evidence_url": "https://github.com/acme/sutra/actions/runs/201"}]
+    else:
+        result.update(checks=[{"name": "dependency scan", "result": "pass", "evidence_url": "https://github.com/acme/sutra/actions/runs/201"}],
+                      findings=[], release_blockers=[])
+    return result
+
+
 class AgentArtifactTests(unittest.TestCase):
+    def test_qa_and_security_artifacts_are_bound_to_database_claim_and_have_complete_evidence(self):
+        for role in ("qa", "security"):
+            result = validate_agent_artifact(role, task_review_artifact(role), task_review_run(role))
+            self.assertEqual(result["tested_commit_sha"], "a" * 40)
+            self.assertEqual(len(result["acceptance_criteria"]), 2)
+        invalid = task_review_artifact("qa")
+        invalid["tested_commit_sha"] = "b" * 40
+        with self.assertRaises(AgentOutputError):
+            validate_agent_artifact("qa", invalid, task_review_run("qa"))
+
+    def test_qa_cannot_pass_failed_test_and_security_cannot_pass_open_high_finding(self):
+        qa = task_review_artifact("qa")
+        qa["tests"][0]["result"] = "fail"
+        with self.assertRaises(AgentOutputError):
+            validate_agent_artifact("qa", qa, task_review_run("qa"))
+        security = task_review_artifact("security")
+        security["findings"] = [{"severity": "high", "status": "open", "summary": "Exposed secret", "owner": "Security", "remediation": "Rotate credential"}]
+        with self.assertRaises(AgentOutputError):
+            validate_agent_artifact("security", security, task_review_run("security"))
+
     def test_product_research_requires_https_evidence(self):
         self.assertEqual(len(validate_agent_artifact("cpo", artifact("cpo"))["evidence"]), 1)
         invalid = artifact("cpo")
@@ -153,6 +205,22 @@ class AgentArtifactTests(unittest.TestCase):
         worker = AgentWorker(store, hermes, "openai", "gpt-4o-mini", worker_id="sutra-worker-12345678")
         self.assertEqual(worker.run_once(), "succeeded")
         self.assertEqual(events, ["reserve", "begin", "hermes", "reconcile", "complete"])
+
+    def test_qa_worker_submits_persisted_review_only_after_usage_reconciliation(self):
+        events = []
+        store = self.approved_store("qa")
+        store.claim_agent_run.return_value = task_review_run("qa")
+        store.reconcile_agent_run_spend.side_effect = lambda *_args: (events.append("reconcile") or {"status": "reconciled"})
+        store.submit_task_review.side_effect = lambda *_args: events.append("submit_review")
+        store.complete_agent_run.side_effect = lambda *_args: events.append("complete_run")
+        hermes = Mock()
+        hermes.review.side_effect = lambda *_args: (events.append("hermes") or (task_review_artifact("qa"), {"prompt_tokens": 20, "completion_tokens": 30}))
+        worker = AgentWorker(store, hermes, "openai", "gpt-4o-mini", worker_id="sutra-worker-12345678")
+        self.assertEqual(worker.run_once(), "succeeded")
+        self.assertEqual(events, ["hermes", "reconcile", "submit_review", "complete_run"])
+        evidence = store.submit_task_review.call_args.args[1]
+        self.assertEqual(evidence["tested_commit_sha"], "a" * 40)
+        self.assertEqual(store.complete_agent_run.call_args.args[2], "succeeded")
 
 
 if __name__ == "__main__":

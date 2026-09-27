@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from sutra.runtime import FounderCommandRouter, IntegrationError, parse_founder_command, proposal_name
+from sutra.runtime import FounderCommandRouter, IntegrationError, SupabaseREST, parse_founder_command, proposal_name
 
 
 FOUNDER = "123456789"
@@ -78,6 +78,26 @@ class FounderCommandTests(unittest.TestCase):
         response = self.router.handle("1", "1", "CEO status")
         self.assertIn("restricted", response)
         self.store.company_status.assert_not_called()
+
+
+class TaskReviewStoreTests(unittest.TestCase):
+    def test_worker_claim_falls_back_to_role_review_queue_only_when_proposal_queue_is_idle(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        review_run = {"run_id": "review-run", "agent": {"slug": "qa"}}
+        store.request = Mock(side_effect=[None, review_run])
+        self.assertEqual(store.claim_agent_run("sutra-worker-12345678"), review_run)
+        self.assertEqual(store.request.call_args_list[0].args[0], "rpc/sutra_claim_agent_run")
+        self.assertEqual(store.request.call_args_list[1].args[0], "rpc/sutra_claim_task_review_agent_run")
+
+    def test_task_review_submission_uses_database_claimed_owner_and_task(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        store.rpc = Mock(return_value={"status": "done"})
+        run = {"agent": {"id": "agent-id"}, "task_review": {"task_id": "task-id"}}
+        evidence = {"result": "pass"}
+        self.assertEqual(store.submit_task_review(run, evidence), {"status": "done"})
+        store.rpc.assert_called_once_with("sutra_submit_task_review", {
+            "p_task_id": "task-id", "p_actor_agent_id": "agent-id", "p_evidence": evidence,
+        })
 
 
 if __name__ == "__main__":
