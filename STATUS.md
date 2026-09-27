@@ -8,7 +8,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 - The Supabase project `sutra` (`smqsrigsugjuvuombetq`, `eu-central-1`) is `ACTIVE_HEALTHY` on Postgres 17. Migration `20260927012437` is applied. RLS and server-only table grants were verified. The four EUR spending tiers and audited authorization functions are present.
 - Founder status/proposal/approval commands persist company state. The database defines 14 agent roles, workflow gates, project/department/agent/category/vendor budgets, approval records and audit logging. Proposals create durable CEO → CPO → CTO → CFO → PM handoffs; approval requires all five reviews and CFO approval.
 - The Python API, private Telegram identity checks, proposal/approval routing, health endpoint, Hermes container configuration and Railway manifests are in the repository. Telegram and the optional Hermes worker default to disabled.
-- An experimental leased Hermes review worker and its additive database migration are under development on `codex/agent-worker`. They are not deployed or merged. Keep the worker disabled until each model call is reserved and reconciled through database spending policy.
+- An experimental leased Hermes review worker and its additive database migration are in [PR #4](https://github.com/anupdalvi86-oss/sutra/pull/4). Keep the worker disabled until each model call is reserved and reconciled through database spending policy.
 - No secrets are committed. Architecture, deployment and governance docs describe the current boundaries.
 
 ## Tests and checks performed
@@ -17,7 +17,8 @@ Updated: 2026-09-27 (Europe/Stockholm)
 - `python3 -m compileall -q sutra tests` — passed.
 - `git diff --check` — passed.
 - The previous main-branch CI run `36285703290` passed Python, clean Supabase/pgtap/lint, container builds and Gitleaks for commit `67c9718`.
-- Attempted `supabase start` to validate the new worker migration locally. Docker ran out of disk while downloading Supabase images (`no space left on device`); it was stopped without pruning or deleting Docker data. New migration and pgtap changes are not yet validated by CI.
+- GitHub Actions run `36287167705` passed Python tests, a clean Supabase migration + pgtap + database lint run, both container builds and Gitleaks for PR #4. The policy suite covers the worker queue, lease checks, CFO/founder gates, HTTPS evidence and spending controls.
+- Attempted `supabase start` locally; Docker ran out of disk while downloading Supabase images (`no space left on device`). The process was stopped without pruning or deleting Docker data. The CI Supabase run is the migration validation.
 - The hosted Supabase project was verified after the previous migration. The new worker migration is not applied; hosted schema remains at `20260927012437`.
 - Supabase advisors report 15 informational `rls_enabled_no_policy` notices (expected for server-only tables with no direct API grants), plus 17 missing foreign-key indexes. The new worker migration now adds those 17 indexes; hosted status will be rechecked after its CI validation and release. Eleven unused-index notices are informational on this nearly empty project.
 
