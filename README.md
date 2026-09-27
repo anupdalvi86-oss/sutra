@@ -4,16 +4,16 @@ Sutra is a governed company operations runtime. Supabase holds authoritative com
 
 ## Current implementation
 
-- The Supabase migration creates all 14 organizational roles and the operational schema, enables RLS, withholds direct access from `anon` and `authenticated`, and limits service-role writes to audited database functions for financial and governance tables.
+- The Supabase migrations define all 14 organizational roles and the operational schema, enable RLS, withhold direct access from `anon` and `authenticated`, and limit service-role writes to audited database functions for financial and governance tables.
 - Spending policies and budget limits live in Supabase. Defaults are `<= €10` automatic, `> €10 to €50` department head, `> €50 to < €200` CFO and CEO, and `>= €200` founder. All boundaries are configurable through founder-verified functions. Company, project, department, agent, category, vendor, transaction, daily, monthly and lifetime budgets support warnings and hard stops.
 - Department-head approvals are disabled until the founder assigns an active agent to a department through the audited `sutra_set_company_setting` RPC (`department_head:<department UUID>` → agent UUID). This keeps the €10–50 tier fail-closed until a real approver is designated.
 - A founder proposal persists a project, objective, approval, audit event, CEO/Product/CTO/CFO/PM handoffs and a blocked research task. CFO review is required before founder approval. Approval creates a durable, sequential PM → Architect → Developer → QA → Security → DevOps → Marketing → Sales task chain.
 - The private Python service exposes health and token-protected internal spend, role-approval and task-update endpoints. Telegram polling is restricted to the configured founder in a private chat. Hermes runs in its own Railway service; its model and Telegram secrets are kept separate from the database service credential.
-- Unit tests cover command routing, founder identity checks, malformed requests and the central authorization endpoint. PostgreSQL policy tests cover spending boundaries, project approvals, budget stops, RLS, role approvals and audit writes.
+- Unit tests cover command routing, founder identity checks, malformed requests and the central authorization endpoint. PostgreSQL policy tests cover spending boundaries, project approvals, budget stops, RLS, role approvals, per-run model spend reservations and audit writes.
 
 The SQL workflow stores real work items and approval evidence. It does not fabricate research results or independently execute tasks. A worker must consume ready tasks, produce GitHub issues/PRs and record QA/security evidence before release.
 
-The merged PR #4 adds an experimental sequential Hermes proposal-review worker and database leases. Hermes startup now caps agent turns and automatic retries, but the worker remains disabled because provider calls are not yet locked to a priced model or reserved and reconciled through Supabase spending policy; see [issue #5](https://github.com/anupdalvi86-oss/sutra/issues/5). The Hermes OpenAI-compatible endpoint ignores request `max_tokens`. Do not enable `SUTRA_ENABLE_AGENT_WORKER` until the database control is complete. The additive worker migration is not yet applied to the hosted project.
+Merged PRs #4, #7 and #8 add sequential proposal-review leases, bounded Hermes retries, and a database-backed per-run model spend ledger. Provider calls must be reserved and approved before start; usage must reconcile before a review can succeed, and unknown usage retains its full reserve. The worker still remains disabled because it is not yet wired to these RPCs and no trusted bounded model price/route is configured. The Hermes OpenAI-compatible endpoint ignores request `max_tokens`. The worker migrations are not yet applied to the hosted project; see [STATUS.md](STATUS.md) for current service and access blockers.
 
 ## Local verification
 
