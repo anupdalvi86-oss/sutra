@@ -47,6 +47,7 @@ See [deployment instructions](docs/DEPLOYMENT.md), [architecture](docs/ARCHITECT
 ## Founder commands
 
 - `CEO, give me company status.`
+- `CEO, show my approvals.` — lists up to ten pending founder requests with the amount and outstanding department reviews; viewing the queue is audit logged and does not change approval state.
 - `Investigate an AI QA product. Initial budget maximum €500. Prepare a proposal.`
 - `approve <approval-id> [comment]` or `reject <approval-id> [comment]`
 

@@ -46,6 +46,17 @@ select throws_ok($$select public.sutra_authorize_spend(null,'test',null,null,nul
   '22023',null,'missing actor type is rejected');
 select is((public.sutra_submit_proposal('12345678','AI QA opportunity','Investigate an AI QA product for software teams',500,'EUR')->>'status'),
   'pending_founder_approval','valid founder proposal is persisted with approvals');
+select throws_ok($$select public.sutra_founder_pending_approvals('99999999')$$,
+  '42501',null,'nonfounder cannot inspect the founder approval queue');
+select ok(exists(select 1 from jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') item
+  where item->>'approval_id'=(select id::text from public.approvals where approval_type='project_budget' order by created_at desc limit 1)
+    and item->>'summary'='CFO review followed by founder approval: proposed maximum budget for AI QA opportunity'
+    and item->>'amount'='500' and item->>'currency'='EUR' and item->'pending_roles'='["cfo"]'::jsonb
+    and item->>'ready'='false'),
+  'founder approval queue reports the request and its outstanding CFO review');
+select ok(exists(select 1 from public.audit_log where actor_type='founder' and actor_id='12345678'
+  and action='founder.approvals_listed' and resource_type='approval_queue'),
+  'founder approval queue reads are audit logged');
 select ok(exists(select 1 from public.agent_runs where trigger_type='founder_proposal' and status='queued'),'workflow roles receive durable queued runs');
 select ok(exists(select 1 from public.tasks where task_type='research' and status='blocked'),'execution work stays blocked before founder approval');
 select throws_ok($$select public.sutra_founder_decide_approval('12345678',(select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
