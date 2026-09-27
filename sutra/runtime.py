@@ -249,7 +249,10 @@ class FounderCommandRouter:
         except ValueError as exc:
             return str(exc)
         if command.kind == "status":
-            status = self.store.company_status()
+            try:
+                status = self.store.company_status()
+            except IntegrationError:
+                return "I couldn't load company status. No company state was changed; check the database connection and try again."
             return (
                 "Sutra company status\n"
                 f"Projects: {status['projects']}\n"

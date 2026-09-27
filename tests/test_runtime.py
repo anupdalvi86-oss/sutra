@@ -20,6 +20,12 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Pending approvals: 1", reply)
         self.store.company_status.assert_called_once_with()
 
+    def test_status_database_failure_returns_a_clear_fail_closed_reply(self):
+        self.store.company_status.side_effect = IntegrationError("unavailable")
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.")
+        self.assertIn("couldn't load company status", reply)
+        self.assertIn("No company state was changed", reply)
+
     def test_proposal_creates_persisted_approval_request(self):
         self.store.rpc.return_value = {"project_id": "project-1", "approval_id": "approval-1"}
         text = "Investigate an AI QA product. Initial budget maximum €500. Prepare a proposal."
