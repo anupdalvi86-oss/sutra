@@ -261,12 +261,12 @@ class FounderCommandRouter:
                 summary = re.sub(r"\s+", " ", str(item.get("summary") or "Approval request"))[:180]
                 amount = item.get("amount")
                 currency = re.sub(r"[^A-Z]", "", str(item.get("currency") or "EUR").upper())[:3]
-                value = f"{currency} {float(amount):,.2f}" if isinstance(amount, (int, float)) else "amount not specified"
+                valid_amount = isinstance(amount, int) or (isinstance(amount, float) and math.isfinite(amount))
+                value = f"{currency} {amount:,.2f}"[:48] if valid_amount else "amount not specified"
                 missing = item.get("pending_roles")
-                readiness = "ready for your decision" if item.get("ready") is True else f"waiting for {', '.join(missing) if isinstance(missing, list) else 'department review'}"
+                reviewer_list = ", ".join(str(role)[:32] for role in missing[:3]) if isinstance(missing, list) and missing else "department review"
+                readiness = "ready for your decision" if item.get("ready") is True else f"waiting for {reviewer_list}"
                 lines.extend((f"• {summary} — {value}; {readiness}", f"  ID: {approval_id}"))
-                if len(lines) >= 21:
-                    break
             lines.append("Approve or reject only when ready: approve <approval-id> [comment] / reject <approval-id> [comment].")
             return "\n".join(lines)
         if command.kind == "proposal":

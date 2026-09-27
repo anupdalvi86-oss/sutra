@@ -38,7 +38,7 @@ begin
       where ap.status = 'pending'
         and 'founder' = any(ap.required_roles)
       order by ap.created_at desc
-      limit 10
+      limit 5
     ) row_data;
 
   insert into public.audit_log(actor_type, actor_id, action, resource_type, resource_id, details)
