@@ -78,6 +78,10 @@ select throws_ok($$select public.sutra_get_agent_model_spend_profile('openai','g
   '42501',null,'anon role cannot inspect model route or pricing');
 select throws_ok($$select public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',gen_random_uuid(),gen_random_uuid(),'openai','gpt-4o-mini')$$,
   '42501',null,'anon role cannot create a paid model reservation');
+select throws_ok($$select public.sutra_claim_github_task('sutra-github-worker-12345678')$$,
+  '42501',null,'anon role cannot dispatch GitHub issues');
+select throws_ok($$select * from public.github_task_dispatches$$,
+  '42501',null,'anon role cannot read GitHub dispatch leases or issue metadata');
 reset role;
 set local role service_role;
 select throws_ok($$select public.sutra_authorize_spend('system','test',null,(select id from public.projects order by created_at desc limit 1),null,'ai_api',null,'premature spend',5,'EUR')$$,
@@ -240,9 +244,34 @@ select lives_ok($$select public.sutra_update_task((select id from public.agents 
   'architecture completion records evidence');
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
   'ready','architecture completion releases developer task');
-select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
-  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),'in_progress','{}'::jsonb)$$,
-  'assigned developer can start after architecture');
+select throws_ok($$select public.sutra_claim_github_task('bad-worker')$$,
+  '22023',null,'GitHub task dispatch requires a bounded worker identity');
+select throws_ok($$select * from public.github_task_dispatches$$,
+  '42501',null,'service role cannot read GitHub issue state outside audited RPCs');
+create temporary table github_dispatch_claim(payload jsonb) on commit drop;
+insert into github_dispatch_claim select public.sutra_claim_github_task('sutra-github-worker-12345678');
+select is((select payload->>'title' from github_dispatch_claim),'Implement approved product tasks',
+  'only the founder-approved and sequentially released Developer task is dispatched');
+select throws_ok($$select public.sutra_complete_github_task_dispatch('sutra-github-worker-12345678',
+  (select (payload->>'task_id')::uuid from github_dispatch_claim),gen_random_uuid(),41,'https://github.com/acme/sutra/issues/42')$$,
+  '22023',null,'GitHub issue URL and issue number must match');
+select throws_ok($$select public.sutra_complete_github_task_dispatch('sutra-github-worker-12345678',
+  (select (payload->>'task_id')::uuid from github_dispatch_claim),gen_random_uuid(),41,'https://github.com/acme/sutra/issues/41')$$,
+  '42501',null,'a different lease token cannot complete GitHub task dispatch');
+select lives_ok($$select public.sutra_complete_github_task_dispatch('sutra-github-worker-12345678',
+  (select (payload->>'task_id')::uuid from github_dispatch_claim),
+  (select (payload->>'lease_token')::uuid from github_dispatch_claim),41,'https://github.com/acme/sutra/issues/41')$$,
+  'valid GitHub issue is durably linked to its approved task');
+select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
+  'in_progress','issue creation starts the assigned Developer task');
+select is((select count(*)::integer from public.audit_log where action='github.issue_created'
+  and resource_id=(select (payload->>'task_id')::uuid::text from github_dispatch_claim)),
+  1,'GitHub task issue creation is audit logged');
+select is((select details->>'issue_url' from public.audit_log where action='github.issue_created'
+  and resource_id=(select (payload->>'task_id')::uuid::text from github_dispatch_claim) limit 1),
+  'https://github.com/acme/sutra/issues/41','audit log retains the durable GitHub issue link');
+select is(public.sutra_claim_github_task('sutra-github-worker-abcdefgh')::text,null::text,
+  'the same task is not dispatched twice');
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
   (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),'done','{}'::jsonb)$$,
   '22023',null,'completion without evidence is rejected');

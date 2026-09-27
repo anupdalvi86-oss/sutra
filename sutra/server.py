@@ -15,6 +15,7 @@ import urllib.request
 import uuid
 from urllib.parse import urlsplit
 
+from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .runtime import FounderCommandRouter, IntegrationError, SupabaseREST, telegram_poll_loop
 from .worker import AgentWorker, HermesAgentClient
 
@@ -54,6 +55,8 @@ class SutraApplication:
         self.telegram_thread: threading.Thread | None = None
         self.agent_worker_thread: threading.Thread | None = None
         self.agent_worker_status = "disabled"
+        self.github_dispatcher_thread: threading.Thread | None = None
+        self.github_dispatcher_status = "disabled"
 
     def start(self) -> None:
         if self.store and self.founder_id:
@@ -89,6 +92,22 @@ class SutraApplication:
                             target=worker.run, args=(self.telegram_stop,), daemon=True, name="sutra-agent-worker")
                         self.agent_worker_thread.start()
                         self.agent_worker_status = "running"
+        if os.environ.get("SUTRA_ENABLE_GITHUB_DISPATCHER", "false").lower() == "true":
+            github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+            github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+            if not self.store or not github_token or not github_repository:
+                self.github_dispatcher_status = "blocked_runtime_configuration"
+            else:
+                try:
+                    issues = GitHubIssues(github_token, github_repository)
+                    dispatcher = GitHubTaskDispatcher(self.store, issues)
+                    self.github_dispatcher_thread = threading.Thread(
+                        target=dispatcher.run, args=(self.telegram_stop,), daemon=True,
+                        name="sutra-github-task-dispatcher")
+                    self.github_dispatcher_thread.start()
+                    self.github_dispatcher_status = "running"
+                except ValueError:
+                    self.github_dispatcher_status = "blocked_runtime_configuration"
         if self.store and self.router and self.telegram_token and self.founder_verified and os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
             self.telegram_thread = threading.Thread(
                 target=telegram_poll_loop,
@@ -115,12 +134,15 @@ class SutraApplication:
             "telegram": telegram,
             "hermes_gateway": gateway,
             "agent_worker": self.agent_worker_status,
+            "github_dispatcher": self.github_dispatcher_status,
         }
 
     def close(self) -> None:
         self.telegram_stop.set()
         if self.agent_worker_thread:
             self.agent_worker_thread.join(timeout=2)
+        if self.github_dispatcher_thread:
+            self.github_dispatcher_thread.join(timeout=2)
 
 
 class SutraHandler(BaseHTTPRequestHandler):
