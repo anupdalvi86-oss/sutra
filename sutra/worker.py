@@ -453,31 +453,40 @@ class AgentWorker:
     """Executes one leased, database-spend-gated review or task artifact at a time."""
 
     def __init__(self, store: Any, hermes: HermesAgentClient, provider: str, model: str,
-                 worker_id: str | None = None):
+                 worker_id: str | None = None,
+                 role_routes: dict[str, tuple[str, str]] | None = None):
         self.store = store
         self.hermes = hermes
         self.provider = provider
         self.model = model
+        self.role_routes = role_routes or {}
         self.worker_id = worker_id or "sutra-worker-" + uuid.uuid4().hex[:16]
 
     def _settle_spend(self, run: dict[str, Any], reservation_id: str,
-                      usage: dict[str, Any] | None) -> str:
+                      usage: dict[str, Any] | None, provider: str, model: str) -> str:
         try:
             settled = self.store.reconcile_agent_run_spend(
-                self.worker_id, run, reservation_id, self.provider, self.model, usage)
+                self.worker_id, run, reservation_id, provider, model, usage)
         except IntegrationError:
             if usage is None:
                 raise
             settled = self.store.reconcile_agent_run_spend(
-                self.worker_id, run, reservation_id, self.provider, self.model, None)
+                self.worker_id, run, reservation_id, provider, model, None)
         return settled.get("status", "unknown")
 
     def run_once(self) -> str:
         run = self.store.claim_agent_run(self.worker_id)
         if run is None:
             return "idle"
+        agent = run.get("agent")
+        role = agent.get("slug") if isinstance(agent, dict) else None
+        provider, model = self.role_routes.get(role, (self.provider, self.model))
+        if not provider or not model:
+            self.store.complete_agent_run(self.worker_id, run, "failed",
+                {"summary": "No exact model route is configured for this role"}, "missing_model_route")
+            return "failed_model_route"
         try:
-            reservation = self.store.reserve_agent_run_spend(self.worker_id, run, self.provider, self.model)
+            reservation = self.store.reserve_agent_run_spend(self.worker_id, run, provider, model)
         except IntegrationError:
             self.store.complete_agent_run(self.worker_id, run, "retry",
                 {"summary": "Database spend preflight was unavailable; no model request was made"}, "spend_preflight_unavailable")
@@ -498,11 +507,11 @@ class AgentWorker:
         except IntegrationError:
             return "spend_start_pending"
         try:
-            result, usage = self.hermes.review(run, self.provider, self.model,
+            result, usage = self.hermes.review(run, provider, model,
                 max_output_tokens, max_input_tokens)
         except AgentOutputError as exc:
             try:
-                spend_status = self._settle_spend(run, reservation_id, exc.usage)
+                spend_status = self._settle_spend(run, reservation_id, exc.usage, provider, model)
             except IntegrationError:
                 return "spend_reconciliation_pending"
             if spend_status != "reconciled":
@@ -513,7 +522,7 @@ class AgentWorker:
             return "retry"
         except IntegrationError:
             try:
-                self._settle_spend(run, reservation_id, None)
+                self._settle_spend(run, reservation_id, None, provider, model)
                 self.store.complete_agent_run(self.worker_id, run, "failed",
                     {"summary": "Hermes call outcome or usage could not be verified; full reserve retained"}, "unknown_spend")
             except IntegrationError:
@@ -521,14 +530,14 @@ class AgentWorker:
             return "failed_unknown_spend"
         except Exception:
             try:
-                self._settle_spend(run, reservation_id, None)
+                self._settle_spend(run, reservation_id, None, provider, model)
                 self.store.complete_agent_run(self.worker_id, run, "failed",
                     {"summary": "Agent execution failed; full reserve retained"}, "unknown_spend")
             except IntegrationError:
                 return "spend_reconciliation_pending"
             return "failed_unknown_spend"
         try:
-            spend_status = self._settle_spend(run, reservation_id, usage)
+            spend_status = self._settle_spend(run, reservation_id, usage, provider, model)
         except IntegrationError:
             return "spend_reconciliation_pending"
         if spend_status != "reconciled":

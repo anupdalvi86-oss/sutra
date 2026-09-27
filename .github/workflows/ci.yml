@@ -55,6 +55,7 @@ jobs:
           docker run --rm --entrypoint /bin/sh sutra-hermes:ci -ec '
             export HERMES_HOME=/tmp/sutra-startup-test
             mkdir -p "$HERMES_HOME"
+            printf "API_SERVER_KEY=stale-volume-value\nRETAINED_PROVIDER_SETTING=yes\n" > "$HERMES_HOME/.env"
             cat > "$HERMES_HOME/config.yaml" <<EOF
           agent:
             max_turns: unlimited
@@ -77,6 +78,9 @@ jobs:
           assert config["platforms"]["api_server"]["enabled"] is False
           assert config["retained_setting"] is True
           assert open(sys.argv[2]).read() == "existing identity\\n"
+          dotenv = open(sys.argv[1].replace("config.yaml", ".env")).read()
+          assert "API_SERVER_KEY=" not in dotenv
+          assert "RETAINED_PROVIDER_SETTING=yes" in dotenv
           PY
           '
       - name: Verify Hermes API server explicit opt-in

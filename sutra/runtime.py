@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -213,6 +214,12 @@ class FounderCommand:
     budget: float | None = None
 
 
+@dataclass(frozen=True)
+class FounderResponse:
+    text: str
+    reply_markup: dict[str, Any] | None = None
+
+
 MONEY_PATTERNS = (
     re.compile(r"(?:€|EUR\s*)\s*([0-9]+(?:[.,][0-9]{1,2})?)", re.IGNORECASE),
     re.compile(r"([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:€|EUR)", re.IGNORECASE),
@@ -260,24 +267,24 @@ class FounderCommandRouter:
         self.store = store
         self.founder_telegram_user_id = founder_telegram_user_id
 
-    def handle(self, user_id: str, chat_id: str, text: str) -> str:
+    def handle(self, user_id: str, chat_id: str, text: str) -> FounderResponse:
         if not self.founder_telegram_user_id or user_id != self.founder_telegram_user_id or chat_id != user_id:
             digest = hashlib.sha256(str(user_id).encode()).hexdigest()[:24]
             try:
                 self.store.record_denied_identity(digest)
             except IntegrationError:
                 pass
-            return "This founder interface is restricted to the configured founder in a private chat."
+            return FounderResponse("This founder interface is restricted to the configured founder in a private chat.")
         try:
             command = parse_founder_command(text)
         except ValueError as exc:
-            return str(exc)
+            return FounderResponse(str(exc))
         if command.kind == "status":
             try:
                 status = self.store.company_status()
             except IntegrationError:
-                return "I couldn't load company status. No company state was changed; check the database connection and try again."
-            return (
+                return FounderResponse("I couldn't load company status. No company state was changed; check the database connection and try again.")
+            return FounderResponse(
                 "Sutra company status\n"
                 f"Projects: {status['projects']}\n"
                 f"Open tasks: {status['open_tasks']}\n"
@@ -287,10 +294,11 @@ class FounderCommandRouter:
             try:
                 approvals = self.store.founder_pending_approvals(user_id)
             except IntegrationError:
-                return "I couldn't load the founder approval queue. No approval was changed; check the database connection and try again."
+                return FounderResponse("I couldn't load the founder approval queue. No approval was changed; check the database connection and try again.")
             if not approvals:
-                return "No pending founder approval requests."
+                return FounderResponse("No pending founder approval requests.")
             lines = [f"Founder approvals ({len(approvals)} shown):"]
+            keyboard: list[list[dict[str, str]]] = []
             for item in approvals:
                 approval_id = item.get("approval_id")
                 summary = re.sub(r"\s+", " ", str(item.get("summary") or "Approval request"))[:180]
@@ -302,8 +310,18 @@ class FounderCommandRouter:
                 reviewer_list = ", ".join(str(role)[:32] for role in missing[:3]) if isinstance(missing, list) and missing else "department review"
                 readiness = "ready for your decision" if item.get("ready") is True else f"waiting for {reviewer_list}"
                 lines.extend((f"• {summary} — {value}; {readiness}", f"  ID: {approval_id}"))
+                try:
+                    approval_id = str(uuid.UUID(str(approval_id)))
+                except (ValueError, TypeError, AttributeError):
+                    approval_id = ""
+                if item.get("ready") is True and approval_id:
+                    keyboard.append([
+                        {"text": "Approve", "callback_data": f"approve:{approval_id}"},
+                        {"text": "Reject", "callback_data": f"reject:{approval_id}"},
+                    ])
             lines.append("Approve or reject only when ready: approve <approval-id> [comment] / reject <approval-id> [comment].")
-            return "\n".join(lines)
+            markup = {"inline_keyboard": keyboard} if keyboard else None
+            return FounderResponse("\n".join(lines), markup)
         if command.kind == "proposal":
             try:
                 result = self.store.rpc("sutra_submit_proposal", {
@@ -314,8 +332,8 @@ class FounderCommandRouter:
                     "p_currency": "EUR",
                 })
             except IntegrationError:
-                return "I couldn't record that proposal. No project or spending authorization was created; check the database connection and try again."
-            return (
+                return FounderResponse("I couldn't record that proposal. No project or spending authorization was created; check the database connection and try again.")
+            return FounderResponse(
                 "Proposal recorded for CEO → Product → CTO → CFO review, then founder approval.\n"
                 f"Project: {result.get('project_id')}\n"
                 f"Approval: {result.get('approval_id')}\n"
@@ -330,15 +348,44 @@ class FounderCommandRouter:
                     "p_comment": command.comment,
                 })
             except IntegrationError:
-                return "Approval unchanged. Confirm the request is pending and all required department reviews, including CFO, are complete."
-            return f"Approval {result.get('status')}: {result.get('approval_id')}"
-        return (
+                return FounderResponse("Approval unchanged. Confirm the request is pending and all required department reviews, including CFO, are complete.")
+            return FounderResponse(f"Approval {result.get('status')}: {result.get('approval_id')}")
+        return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
             "Use: CEO, show my approvals.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
         )
+
+    def handle_callback(self, user_id: str, chat_id: str, data: str) -> str:
+        """Process a short-lived Telegram button action through the founder-only DB RPC."""
+        if not self.founder_telegram_user_id or user_id != self.founder_telegram_user_id or chat_id != user_id:
+            digest = hashlib.sha256(str(user_id).encode()).hexdigest()[:24]
+            try:
+                self.store.record_denied_identity(digest)
+            except IntegrationError:
+                pass
+            return "Founder approval controls are restricted to the configured founder in a private chat."
+        match = re.fullmatch(r"(approve|reject):([0-9a-f-]{36})", data) if isinstance(data, str) else None
+        if not match:
+            return "Invalid approval action. No approval was changed."
+        try:
+            approval_id = str(uuid.UUID(match.group(2)))
+        except ValueError:
+            return "Invalid approval action. No approval was changed."
+        decision = match.group(1)
+        comment = "Approved from the founder's Telegram approval button." if decision == "approve" else "Rejected from the founder's Telegram approval button."
+        try:
+            result = self.store.rpc("sutra_founder_decide_approval", {
+                "p_founder_telegram_user_id": user_id,
+                "p_approval_id": approval_id,
+                "p_decision": decision,
+                "p_comment": comment,
+            })
+        except IntegrationError:
+            return "Approval unchanged. Confirm it is pending and all required department reviews, including CFO, are complete."
+        return f"Approval {result.get('status')}: {result.get('approval_id')}"
 
 
 def telegram_call(token: str, method: str, payload: dict[str, Any], timeout: float = 35.0) -> Any:
@@ -379,6 +426,34 @@ def telegram_poll_loop(token: str, router: FounderCommandRouter, stop: threading
                 if not isinstance(update, dict) or isinstance(update.get("update_id"), bool) or not isinstance(update.get("update_id"), int):
                     continue
                 offset = update["update_id"] + 1
+                callback = update.get("callback_query")
+                if isinstance(callback, dict):
+                    sender_obj = callback.get("from")
+                    message = callback.get("message")
+                    chat_obj = message.get("chat") if isinstance(message, dict) else None
+                    sender_id = sender_obj.get("id") if isinstance(sender_obj, dict) else None
+                    chat_id = chat_obj.get("id") if isinstance(chat_obj, dict) else None
+                    callback_id = callback.get("id")
+                    if (isinstance(sender_id, int) and not isinstance(sender_id, bool)
+                            and isinstance(chat_id, int) and not isinstance(chat_id, bool)
+                            and isinstance(callback_id, str) and len(callback_id) <= 256):
+                        callback_text = router.handle_callback(str(sender_id), str(chat_id), callback.get("data", ""))
+                        approved = callback_text.startswith("Approval approved:") or callback_text.startswith("Approval rejected:")
+                        try:
+                            telegram_call(token, "answerCallbackQuery", {
+                                "callback_query_id": callback_id,
+                                "text": callback_text[:180],
+                                "show_alert": not approved,
+                            }, timeout=10)
+                            if approved and isinstance(message, dict) and isinstance(message.get("message_id"), int):
+                                telegram_call(token, "editMessageReplyMarkup", {
+                                    "chat_id": chat_id,
+                                    "message_id": message["message_id"],
+                                    "reply_markup": {"inline_keyboard": []},
+                                }, timeout=10)
+                        except IntegrationError:
+                            continue
+                    continue
                 message = update.get("message") or update.get("edited_message") or {}
                 if not isinstance(message, dict):
                     continue
@@ -393,7 +468,10 @@ def telegram_poll_loop(token: str, router: FounderCommandRouter, stop: threading
                     continue
                 try:
                     reply = router.handle(sender, chat, text)
-                    telegram_call(token, "sendMessage", {"chat_id": chat, "text": reply[:3900]}, timeout=10)
+                    payload = {"chat_id": chat, "text": reply.text[:3900]}
+                    if reply.reply_markup:
+                        payload["reply_markup"] = reply.reply_markup
+                    telegram_call(token, "sendMessage", payload, timeout=10)
                 except IntegrationError:
                     # Keep the polling loop alive; do not log command content or secrets.
                     continue

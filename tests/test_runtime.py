@@ -25,21 +25,21 @@ class FounderCommandTests(unittest.TestCase):
 
     def test_status_reads_authoritative_counts(self):
         self.store.company_status.return_value = {"projects": 2, "open_tasks": 3, "pending_approvals": 1}
-        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.")
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.").text
         self.assertIn("Projects: 2", reply)
         self.assertIn("Pending approvals: 1", reply)
         self.store.company_status.assert_called_once_with()
 
     def test_status_database_failure_returns_a_clear_fail_closed_reply(self):
         self.store.company_status.side_effect = IntegrationError("unavailable")
-        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.")
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.").text
         self.assertIn("couldn't load company status", reply)
         self.assertIn("No company state was changed", reply)
 
     def test_proposal_creates_persisted_approval_request(self):
         self.store.rpc.return_value = {"project_id": "project-1", "approval_id": "approval-1"}
         text = "Investigate an AI QA product. Initial budget maximum €500. Prepare a proposal."
-        reply = self.router.handle(FOUNDER, FOUNDER, text)
+        reply = self.router.handle(FOUNDER, FOUNDER, text).text
         self.assertIn("No spending is authorized until approval", reply)
         args = self.store.rpc.call_args
         self.assertEqual(args.args[0], "sutra_submit_proposal")
@@ -49,7 +49,7 @@ class FounderCommandTests(unittest.TestCase):
 
     def test_founder_can_decide_only_explicit_approval_command(self):
         self.store.rpc.return_value = {"status": "approved", "approval_id": APPROVAL}
-        reply = self.router.handle(FOUNDER, FOUNDER, f"approve {APPROVAL} go ahead")
+        reply = self.router.handle(FOUNDER, FOUNDER, f"approve {APPROVAL} go ahead").text
         self.assertIn("approved", reply)
         self.assertEqual(self.store.rpc.call_args.args[0], "sutra_founder_decide_approval")
         self.assertEqual(self.store.rpc.call_args.args[1]["p_comment"], "go ahead")
@@ -59,29 +59,68 @@ class FounderCommandTests(unittest.TestCase):
             "approval_id": APPROVAL, "summary": "AI QA opportunity", "amount": 500,
             "currency": "EUR", "pending_roles": ["cfo"], "ready": False,
         }]
-        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show my approvals.")
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show my approvals.").text
         self.assertIn("AI QA opportunity", reply)
         self.assertIn("waiting for cfo", reply)
         self.assertIn(APPROVAL, reply)
         self.store.founder_pending_approvals.assert_called_once_with(FOUNDER)
         self.store.rpc.assert_not_called()
 
+    def test_ready_founder_approval_queue_includes_inline_decision_buttons(self):
+        self.store.founder_pending_approvals.return_value = [{
+            "approval_id": APPROVAL, "summary": "AI QA opportunity", "amount": 500,
+            "currency": "EUR", "pending_roles": [], "ready": True,
+        }]
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show my approvals.")
+        self.assertIn("ready for your decision", reply.text)
+        self.assertEqual(reply.reply_markup, {"inline_keyboard": [[
+            {"text": "Approve", "callback_data": f"approve:{APPROVAL}"},
+            {"text": "Reject", "callback_data": f"reject:{APPROVAL}"},
+        ]]})
+        self.store.rpc.assert_not_called()
+
+    def test_approval_callback_records_founder_decision_through_database_rpc(self):
+        self.store.rpc.return_value = {"status": "approved", "approval_id": APPROVAL}
+        reply = self.router.handle_callback(FOUNDER, FOUNDER, f"approve:{APPROVAL}")
+        self.assertEqual(reply, f"Approval approved: {APPROVAL}")
+        self.store.rpc.assert_called_once_with("sutra_founder_decide_approval", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_approval_id": APPROVAL,
+            "p_decision": "approve",
+            "p_comment": "Approved from the founder's Telegram approval button.",
+        })
+
+    def test_approval_callback_rejects_nonfounder_group_and_malformed_actions(self):
+        denied = self.router.handle_callback("987654321", "987654321", f"approve:{APPROVAL}")
+        self.assertIn("restricted", denied)
+        group = self.router.handle_callback(FOUNDER, "-100123", f"approve:{APPROVAL}")
+        self.assertIn("restricted", group)
+        malformed = self.router.handle_callback(FOUNDER, FOUNDER, f"approve:{APPROVAL[:-1]}z")
+        self.assertIn("Invalid", malformed)
+        self.store.rpc.assert_not_called()
+        self.assertEqual(self.store.record_denied_identity.call_count, 2)
+
+    def test_approval_callback_database_rejection_fails_closed(self):
+        self.store.rpc.side_effect = IntegrationError("not ready")
+        reply = self.router.handle_callback(FOUNDER, FOUNDER, f"approve:{APPROVAL}")
+        self.assertIn("Approval unchanged", reply)
+
     def test_approval_queue_failure_fails_closed(self):
         self.store.founder_pending_approvals.side_effect = IntegrationError("unavailable")
-        reply = self.router.handle(FOUNDER, FOUNDER, "show my approvals")
+        reply = self.router.handle(FOUNDER, FOUNDER, "show my approvals").text
         self.assertIn("No approval was changed", reply)
         self.store.rpc.assert_not_called()
 
     def test_rejects_nonfounder_and_group_chats(self):
         self.store.record_denied_identity.return_value = None
-        response = self.router.handle("987654321", "987654321", "CEO, give me company status")
+        response = self.router.handle("987654321", "987654321", "CEO, give me company status").text
         self.assertIn("restricted", response)
         self.store.company_status.assert_not_called()
         self.store.rpc.assert_not_called()
         self.store.record_denied_identity.assert_called_once()
         self.assertEqual(len(self.store.record_denied_identity.call_args.args[0]), 24)
 
-        group_response = self.router.handle(FOUNDER, "-100123", "CEO, give me company status")
+        group_response = self.router.handle(FOUNDER, "-100123", "CEO, give me company status").text
         self.assertIn("restricted", group_response)
         self.store.company_status.assert_not_called()
 
@@ -109,7 +148,7 @@ class FounderCommandTests(unittest.TestCase):
 
     def test_unavailable_audit_store_does_not_grant_access(self):
         self.store.record_denied_identity.side_effect = IntegrationError("unavailable")
-        response = self.router.handle("1", "1", "CEO status")
+        response = self.router.handle("1", "1", "CEO status").text
         self.assertIn("restricted", response)
         self.store.company_status.assert_not_called()
 
@@ -165,6 +204,35 @@ class TaskReviewStoreTests(unittest.TestCase):
 
 
 class TelegramPollingTests(unittest.TestCase):
+    def test_polling_routes_founder_approval_buttons_and_clears_them(self):
+        class StopAfterOneUpdate:
+            def __init__(self):
+                self.checks = 0
+
+            def is_set(self):
+                self.checks += 1
+                return self.checks > 1
+
+            def wait(self, _seconds):
+                return None
+
+        store = Mock()
+        store.rpc.return_value = {"status": "approved", "approval_id": APPROVAL}
+        router = FounderCommandRouter(store, FOUNDER)
+        update = {"update_id": 12, "callback_query": {
+            "id": "callback-1", "data": f"approve:{APPROVAL}",
+            "from": {"id": int(FOUNDER)},
+            "message": {"message_id": 7, "chat": {"id": int(FOUNDER)}},
+        }}
+        with patch("sutra.runtime.telegram_call", side_effect=[[], [update], {"ok": True}, {"ok": True}]) as call:
+            telegram_poll_loop("unit-test-token", router, StopAfterOneUpdate())
+        methods = [item.args[1] for item in call.call_args_list]
+        self.assertEqual(methods, ["getUpdates", "getUpdates", "answerCallbackQuery", "editMessageReplyMarkup"])
+        store.rpc.assert_called_once_with("sutra_founder_decide_approval", {
+            "p_founder_telegram_user_id": FOUNDER, "p_approval_id": APPROVAL,
+            "p_decision": "approve", "p_comment": "Approved from the founder's Telegram approval button.",
+        })
+
     def test_health_status_tracks_poll_recovery_without_logging_or_stopping(self):
         class StopAfterTwoPolls:
             def __init__(self):
