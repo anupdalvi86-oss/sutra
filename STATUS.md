@@ -4,7 +4,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 
 ## What is working
 
-- Main is at `b9948ec` (PR #8). The repository contains the founder-controlled company schema, audit trail, configurable spend policies, sequential CEO → CPO → CTO → CFO → Product Manager proposal reviews, and post-approval task handoffs through engineering, QA, Security, DevOps, Marketing and Sales.
+- Main contains PR #8’s spend-ledger changes. The repository contains the founder-controlled company schema, audit trail, configurable spend policies, sequential CEO → CPO → CTO → CFO → Product Manager proposal reviews, and post-approval task handoffs through engineering, QA, Security, DevOps, Marketing and Sales.
 - Supabase is the authoritative state model. Founder-only functions change governance settings and budgets; agent self-escalation is rejected. Service tables use RLS and expose no direct access to `anon` or `authenticated`.
 - Financial defaults remain in database policy: up to €10 automatic, above €10 to €50 department head, above €50 to below €200 CFO and CEO, €200 and above founder. Per-transaction and company/project/department/agent/category/vendor period limits support warning thresholds and hard stops.
 - Migrations `20260927025955_sutra_agent_worker.sql` and `20260927025959_agent_run_spend_ledger.sql` are applied to the hosted project. A spend reservation ledger links each leased review run. A provider call needs a valid lease and approved reservation; a review cannot succeed until usage is reconciled. Pending spend approvals block and then resume runs. Unknown usage keeps the full reserved expense and is audited.
