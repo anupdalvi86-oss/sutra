@@ -63,8 +63,8 @@ set local role service_role;
 select throws_ok($$select public.sutra_authorize_spend('system','test',null,(select id from public.projects order by created_at desc limit 1),null,'ai_api',null,'premature spend',5,'EUR')$$,
   '42501',null,'spending against a proposed project is blocked');
 select lives_ok($$select public.sutra_set_company_setting('12345678',
-  'department_head:' || (select department_id::text from public.agents where slug='ceo'),
-  to_jsonb((select id::text from public.agents where slug='ceo')))$$,
+  'department_head:' || (select department_id::text from public.agents where slug='cpo'),
+  to_jsonb((select id::text from public.agents where slug='cpo')))$$,
   'founder designates a department head for review-spend approval');
 create temporary table worker_claims(role text,run_id uuid,lease_token uuid,sequence_no integer) on commit drop;
 create temporary table worker_spend_decision(payload jsonb) on commit drop;
@@ -98,7 +98,7 @@ select is((select project_id::text from public.expenses where id=(select (payloa
   'model spend approval is tied to its proposal project');
 select is((public.sutra_decide_role_approval(
   (select (payload->>'approval_id')::uuid from worker_spend_decision),
-  (select id::text from public.agents where slug='ceo'),'department_head','approve','Bounded review spend')->>'status'),
+  (select id::text from public.agents where slug='cpo'),'department_head','approve','Bounded review spend')->>'status'),
   'approved','designated department head can approve a model spend request');
 truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
