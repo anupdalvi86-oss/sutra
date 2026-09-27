@@ -106,11 +106,13 @@ jobs:
           import inspect
           from gateway.platforms.api_server import APIServerAdapter, _request_agent_overrides
           from run_agent import AIAgent
-          request = {"provider": "openai", "model": "gpt-4o-mini", "max_tokens": 734, "require_model_lock": True}
+          request = {"provider": "openai", "model": "gpt-6-luna", "max_tokens": 734, "require_model_lock": True,
+                     "model_options": {"response_format": {"type": "json_object"}}}
           overrides = _request_agent_overrides(request, virtual_model="hermes-agent")
           assert overrides["max_tokens"] == 734
           assert overrides["requested_provider"] == "openai"
-          assert overrides["requested_model"] == "gpt-4o-mini"
+          assert overrides["requested_model"] == "gpt-6-luna"
+          assert overrides["model_options"] == {"response_format": {"type": "json_object"}}
           assert overrides["confirmed_runtime_lock"] is True
           try:
               _request_agent_overrides({**request, "max_tokens": 0}, virtual_model="hermes-agent")

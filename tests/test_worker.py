@@ -248,6 +248,23 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertNotIn("tools", request_body)
         self.assertEqual(request.call_args.kwargs["timeout"], 180.0)
 
+    def test_product_manager_requests_json_mode_and_explicit_object_contract(self):
+        payload = {"choices": [{"message": {"content": json.dumps(artifact("product_manager"))}}],
+                   "usage": {"prompt_tokens": 30, "completion_tokens": 40}}
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response) as request:
+            result, _usage = HermesAgentClient(
+                "https://hermes.example", "hermes-key", "openai", "gpt-6-luna"
+            ).review(claimed_run("product_manager"), max_output_tokens=500)
+        request_body = json.loads(request.call_args.args[0].data)
+        self.assertEqual(request_body["model_options"]["response_format"], {"type": "json_object"})
+        system_prompt = request_body["messages"][0]["content"]
+        self.assertIn("exactly one JSON object", system_prompt)
+        self.assertIn("acceptance_criteria", result)
+
     def test_model_call_accepts_whitespace_around_a_fenced_json_object(self):
         content = "  \n```json\n" + json.dumps(artifact()) + "\n```  \n"
         payload = {"choices": [{"message": {"content": content}}],

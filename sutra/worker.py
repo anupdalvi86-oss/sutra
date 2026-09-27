@@ -211,12 +211,16 @@ class HermesAgentClient:
             )
         elif role == "product_manager":
             role_output = (
-                "Return JSON fields summary (the bounded product scope), recommendation, evidence "
-                "(an array of source/url/claim objects), assumptions, risks, milestones, and "
-                "acceptance_criteria. For this role, evidence, milestones, and acceptance_criteria "
-                "are required non-empty arrays of 1-10 concise items. Carry forward the CPO's cited "
-                "sources for material customer and market claims; do not invent findings or treat "
-                "a proposed budget as approved spending."
+                "Return exactly one JSON object, with no prose, markdown, code fence, or top-level array. "
+                "Its top-level keys must be summary (the bounded product scope), recommendation, "
+                "evidence (an array of source/url/claim objects), assumptions, risks, milestones, and "
+                "acceptance_criteria. Use this shape: {\"summary\":\"...\",\"recommendation\":\"...\","
+                "\"evidence\":[{\"source\":\"...\",\"url\":\"https://...\",\"claim\":\"...\"}],"
+                "\"assumptions\":[\"...\"],\"risks\":[\"...\"],\"milestones\":[\"...\"],"
+                "\"acceptance_criteria\":[\"...\"]}. Replace every placeholder with supported content. "
+                "Evidence, milestones, and acceptance_criteria must be non-empty arrays of 1-10 concise items. "
+                "Carry forward the CPO's cited sources for material customer and market claims; do not "
+                "invent findings or treat a proposed budget as approved spending."
             )
         else:
             role_output = (
@@ -239,6 +243,8 @@ class HermesAgentClient:
             "model": model,
             "provider": provider,
             "require_model_lock": True,
+            **({"model_options": {"response_format": {"type": "json_object"}}}
+               if role == "product_manager" else {}),
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
