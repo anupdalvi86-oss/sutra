@@ -4,14 +4,15 @@
 
 1. Install the Supabase CLI and Docker.
 2. For local development, run `supabase start`, `supabase db reset`, `supabase test db`, and `supabase db lint --local --level error`.
-3. For the existing `sutra` project, verify the project ref and database backup/recovery path before applying the additive migration. Link with the Supabase CLI and run `supabase db push` from an authorized operator session. The project service credential must stay in server-side Railway variables.
-4. Confirm the founder Telegram ID, review default policies, and only then enable external founder commands.
+3. The additive operational migration has been applied to the existing `sutra` project (`smqsrigsugjuvuombetq`) and is recorded as `20260927012437`. Verify hosted migration history before using `supabase db push` so the CLI does not attempt to reapply it. The project service credential must stay in server-side Railway variables.
+4. The Supabase organization is on the free plan and had no backup/recovery point visible during rollout. Establish and test a recovery path before future production schema changes.
+5. Confirm the founder Telegram ID, review default policies, and only then enable Telegram founder commands.
 
 Every public company table has RLS enabled. `anon` and `authenticated` have no table access. The service role has no direct write access to budgets, spending policies, company settings, expenses, approvals or audit records; use the explicit audited RPC functions.
 
 ## Railway services
 
-The current Railway deployment is Hermes-only and remains connected to `praveen-ks-2001/hermes-agent-template`, not this repository. Connect Sutra's GitHub repository to the existing Hermes service only after confirming the intended branch and reviewing the provider's repository-access grant. Configure two services in the existing Railway project after checking current usage and free allowance:
+The current Railway deployment is Hermes-only and remains connected to `praveen-ks-2001/hermes-agent-template`, not this repository. Railway must be granted access to the private Sutra repository in its GitHub integration before it can deploy Sutra. The existing project was near its `$5` included usage credit (`$1.54` current, `$4.81` estimated), so check current usage and plan before creating a second service:
 
 | Service | Config | Volume | Allowed secrets |
 | --- | --- | --- | --- |
