@@ -42,6 +42,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Sutra API image
         run: docker build -f Dockerfile.api -t sutra-api:ci .
+      - name: Build Sutra API package-root image
+        run: docker build -t sutra-api-package:ci ./sutra
       - name: Build Hermes image
         run: docker build -f Dockerfile -t sutra-hermes:ci .
       - name: Verify Hermes startup bounds
