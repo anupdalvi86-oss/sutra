@@ -11,7 +11,7 @@ import urllib.request
 import uuid
 from typing import Any, Callable
 
-from .runtime import IntegrationError
+from .runtime import IntegrationError, open_outbound_request
 
 
 class AgentOutputError(ValueError):
@@ -210,7 +210,7 @@ class HermesAgentClient:
             "Accept": "application/json",
         })
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+            with open_outbound_request(req, timeout=self.timeout) as response:
                 raw = response.read(64_001)
                 if len(raw) > 64_000:
                     raise AgentOutputError("Hermes response exceeded the size limit")

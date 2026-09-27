@@ -1,7 +1,17 @@
 import unittest
+import urllib.error
+import urllib.request
 from unittest.mock import Mock, patch
 
-from sutra.runtime import FounderCommandRouter, IntegrationError, SupabaseREST, parse_founder_command, proposal_name, telegram_poll_loop
+from sutra.runtime import (
+    FounderCommandRouter,
+    IntegrationError,
+    SupabaseREST,
+    parse_founder_command,
+    proposal_name,
+    telegram_poll_loop,
+    validate_outbound_request,
+)
 
 
 FOUNDER = "123456789"
@@ -102,6 +112,24 @@ class FounderCommandTests(unittest.TestCase):
         response = self.router.handle("1", "1", "CEO status")
         self.assertIn("restricted", response)
         self.store.company_status.assert_not_called()
+
+
+class OutboundRequestSecurityTests(unittest.TestCase):
+    def test_outbound_requests_allow_https_and_railway_private_http_only(self):
+        urls = ("https://api.example.test/resource", "http://sutra.railway.internal:8642/health")
+        for url in urls:
+            with self.subTest(url=url):
+                validate_outbound_request(urllib.request.Request(url))
+
+    def test_outbound_requests_reject_unsafe_schemes_and_authorities(self):
+        for url in (
+            "file:///etc/passwd",
+            "ftp://example.test/file",
+            "http://example.test/resource",
+            "https://user:password@example.test/resource",
+        ):
+            with self.subTest(url=url), self.assertRaises(urllib.error.URLError):
+                validate_outbound_request(urllib.request.Request(url))
 
 
 class TaskReviewStoreTests(unittest.TestCase):

@@ -17,7 +17,14 @@ from urllib.parse import urlsplit
 
 from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .github_webhook import normalize_github_event, verify_github_signature
-from .runtime import FounderCommandRouter, IntegrationError, SupabaseREST, telegram_call, telegram_poll_loop
+from .runtime import (
+    FounderCommandRouter,
+    IntegrationError,
+    SupabaseREST,
+    open_outbound_request,
+    telegram_call,
+    telegram_poll_loop,
+)
 from .worker import AgentWorker, HermesAgentClient
 
 
@@ -31,7 +38,7 @@ class GatewayProbe:
             return "not_configured"
         request = urllib.request.Request(url, headers={"Accept": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=1.5) as response:
+            with open_outbound_request(request, timeout=1.5) as response:
                 if response.status != 200:
                     return "unreachable"
                 payload = json.loads(response.read(4096))
@@ -371,7 +378,8 @@ class SutraHandler(BaseHTTPRequestHandler):
 def serve() -> None:
     app = SutraApplication()
     app.start()
-    host = os.environ.get("SUTRA_BIND_HOST", "0.0.0.0")
+    # Railway's private health check connects through the container interface.
+    host = os.environ.get("SUTRA_BIND_HOST", "0.0.0.0")  # nosec B104
     port = int(os.environ.get("PORT", "8080"))
     server = ThreadingHTTPServer((host, port), SutraHandler)
     server.daemon_threads = True

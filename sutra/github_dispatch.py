@@ -12,7 +12,7 @@ import urllib.request
 import uuid
 from typing import Any
 
-from .runtime import IntegrationError
+from .runtime import IntegrationError, open_outbound_request
 
 
 class GitHubAPIError(IntegrationError):
@@ -50,7 +50,7 @@ class GitHubIssues:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with open_outbound_request(request, timeout=self.timeout) as response:
                 raw = response.read(1_000_001)
                 if len(raw) > 1_000_000:
                     raise GitHubAPIError("malformed_github_response")
