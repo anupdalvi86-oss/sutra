@@ -4,7 +4,7 @@
 
 1. Install the Supabase CLI and Docker.
 2. For local development, run `supabase start`, `supabase db reset`, `supabase test db`, and `supabase db lint --local --level error`.
-3. Hosted migration history includes the operational foundation (`20260927012437`), agent worker (`20260927025955`), spend ledger (`20260927025959`), founder-controlled model costs (`20260927061227`), and spend-gated Hermes worker (`20260927063326`). The migrations were applied through the authenticated Supabase connector after CI passed. The Supabase CLI is not linked on this workstation; authenticate and compare versions before using `supabase db push` to avoid reapplying them. The project service credential must stay in server-side Railway variables.
+3. Hosted migration history includes the operational foundation (`20260927012437`), agent worker (`20260927025955`), spend ledger (`20260927025959`), founder-controlled model costs (`20260927061227`), spend-gated Hermes worker (`20260927063326`), and GitHub approved-task dispatch (`20260927065915`). The migrations were applied through the authenticated Supabase connector after CI passed. The Supabase CLI is not linked on this workstation; authenticate and compare versions before using `supabase db push` to avoid reapplying them. The project service credential must stay in server-side Railway variables.
 4. The Supabase organization is on the free plan and the dashboard displays a grace-period warning; no backup/recovery point was visible during rollout. Establish and test a recovery path before future production schema changes.
 5. Confirm the founder Telegram ID, review default policies, and only then enable Telegram founder commands.
 
