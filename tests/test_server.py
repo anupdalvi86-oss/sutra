@@ -4,6 +4,7 @@ import unittest
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from unittest.mock import patch
 
 from sutra.runtime import IntegrationError
 from sutra.server import SutraApplication, SutraHandler
@@ -112,6 +113,14 @@ class InternalEndpointTests(unittest.TestCase):
         name, rpc_payload = self.app.store.calls[-1]
         self.assertEqual(name, "sutra_update_task")
         self.assertEqual(rpc_payload["p_actor_agent_id"], AGENT_ID)
+
+    def test_agent_worker_cannot_start_without_database_spend_preflight(self):
+        with patch.dict("os.environ", {"SUTRA_ENABLE_AGENT_WORKER": "true"}, clear=False):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+        self.assertEqual(app.agent_worker_status, "blocked_spend_preflight")
+        self.assertIsNone(app.agent_worker_thread)
 
 
 if __name__ == "__main__":

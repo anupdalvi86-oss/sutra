@@ -13,6 +13,8 @@ Sutra is a governed company operations runtime. Supabase holds authoritative com
 
 The SQL workflow stores real work items and approval evidence. It does not fabricate research results or independently execute tasks. A worker must consume ready tasks, produce GitHub issues/PRs and record QA/security evidence before release.
 
+PR #4 adds an experimental sequential Hermes proposal-review worker and database leases. It remains disabled because provider calls are not yet reserved and reconciled through Supabase spending policy; see [issue #5](https://github.com/anupdalvi86-oss/sutra/issues/5). Do not enable `SUTRA_ENABLE_AGENT_WORKER` until that control exists. The additive worker migration is not yet applied to the hosted project.
+
 ## Local verification
 
 Python 3.12+ has no third-party dependencies:
