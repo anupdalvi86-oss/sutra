@@ -33,7 +33,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 
 1. The live Codex/GitHub execution path is not enabled. The private Railway `sutra-api` does not have `OPENAI_API_KEY`, `GITHUB_TOKEN`, or `GITHUB_WEBHOOK_SECRET`; `SUTRA_ENABLE_CODEX_RUNNER` remains false. The user-provided OpenAI key was authorized for the separate Hermes service only, not for transfer to `sutra-api`.
 2. A repo-scoped GitHub token is needed for the runner to read approved issues, push task branches, create PRs and poll CI. It should have only Metadata read, Contents read/write, Issues read, Pull requests read/write, and Actions read for this repository.
-3. PR/CI evidence polling is implemented in the current follow-up change but is not active in production until that change is merged and the runner is configured. This keeps the API private; direct webhook ingress is optional.
+3. Private PR/CI evidence polling is included in the current Railway release. It remains dormant until the Codex runner is configured and enabled. This keeps the API private; direct webhook ingress is optional.
 4. The current local machine did not have enough Docker disk space for a local Supabase container test. Hosted Supabase pgTAP passed in CI.
 
 ## Credentials / integrations still required
