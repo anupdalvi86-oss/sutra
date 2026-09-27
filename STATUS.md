@@ -27,7 +27,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 
 ## Deployment status
 
-- Railway: the pre-existing Hermes service is present; its gateway was reported stopped. No Sutra API is deployed.
+- Railway: the existing Hermes service is present, but its source is `praveen-ks-2001/hermes-agent-template`, not this Sutra repository. Its public `/health` says `gateway: stopped`; no Sutra API is deployed.
 - Supabase: hosted project is healthy in its dashboard; migration is not applied and authenticated API/database access is unverified.
 - Telegram: not configured.
 - GitHub: [PR #2](https://github.com/anupdalvi86-oss/sutra/pull/2) is open; the prior Python/database/secret checks passed, with image-build checks pending.
@@ -35,7 +35,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 ## Remaining blockers
 
 1. **Hosted database rollout:** the Supabase connector can reach the production database, but no backup/recovery point is visible. The migration is additive and passed local clean/legacy-layout runs; it has not touched production. The repo version must be merged or otherwise pinned before applying it so hosted migration history remains aligned.
-2. **Railway runtime/API:** the Hermes gateway is currently stopped. The Sutra API is not deployed, and the project is close to its current $5 included-usage allowance. Do not add a service or deploy until projected use stays within the founder's no-spend constraint.
+2. **Railway runtime/API:** the Hermes service is still connected to a different GitHub repository. Connecting this private Sutra repo requires a Railway GitHub authorization in the browser. The Sutra API is not deployed, and the project is close to its current $5 included-usage allowance. No new service was created.
 3. **Telegram:** a bot token and founder numeric user ID must be placed in Railway variables. The database founder identity is not registered yet.
 4. **Autonomous execution:** queued agent handoffs and gated tasks are persisted, but there is no worker that dispatches tasks to Hermes/Codex, creates GitHub issues/PRs, or records real research, QA and security evidence. This system stores workflow state but is not yet a self-operating company.
 5. **Hermes image:** GitHub Actions is now building the pinned image. Verify a running gateway with the configured provider before any Railway rollout; the existing service currently reports `gateway: stopped`.
@@ -44,6 +44,6 @@ Updated: 2026-09-27 (Europe/Stockholm)
 
 1. Review the PR and all CI jobs, including image builds.
 2. Establish a recoverable Supabase change path, then apply the merged migration and verify the service-role/RLS behavior on the hosted project.
-3. Restore Hermes gateway health, then check Railway billing before provisioning the isolated API service.
+3. Authorize Railway's GitHub connection to the Sutra repository, then deploy the existing Hermes service and verify its gateway. Check projected usage before provisioning the isolated API service.
 4. Configure Telegram credentials and a founder ID, then verify founder bootstrap and the command/approval flow in a private chat.
 5. Build a worker that consumes only ready tasks, creates GitHub artifacts, records real evidence and stops at the existing approval gates.
