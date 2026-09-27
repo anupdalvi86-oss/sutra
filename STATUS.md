@@ -4,47 +4,45 @@ Updated: 2026-09-27 (Europe/Stockholm)
 
 ## What is working
 
-- Main contains PR #8’s spend-ledger changes. The repository contains the founder-controlled company schema, audit trail, configurable spend policies, sequential CEO → CPO → CTO → CFO → Product Manager proposal reviews, and post-approval task handoffs through engineering, QA, Security, DevOps, Marketing and Sales.
-- Supabase is the authoritative state model. Founder-only functions change governance settings and budgets; agent self-escalation is rejected. Service tables use RLS and expose no direct access to `anon` or `authenticated`.
-- Financial defaults remain in database policy: up to €10 automatic, above €10 to €50 department head, above €50 to below €200 CFO and CEO, €200 and above founder. Per-transaction and company/project/department/agent/category/vendor period limits support warning thresholds and hard stops.
-- Hosted migrations include `20260927025955 sutra_agent_worker`, `20260927025959 agent_run_spend_ledger`, and `20260927061227 trusted_model_cost_profiles`. A spend reservation ledger links each leased review run. A provider call needs a valid lease and approved reservation; a review cannot succeed until usage is reconciled. Pending spend approvals block and then resume runs. Unknown usage keeps the full reserved expense and is audited.
-- Founder-only, audit-logged model price profiles have hard input/output token ceilings. Reservations snapshot profile rates and ceilings; the database calculates the maximum reserve and validates actual cost from reported tokens. The hosted profile table is empty, so no route is authorized until the founder configures exact rates and limits.
-- Telegram command routing, founder identity checks, proposal persistence, internal authorized endpoints, health endpoint, Railway manifests and pinned Hermes container startup are implemented. Hermes runtime configuration limits turns/retries and keeps the API toolset web-only.
-- No credentials or tokens are committed. The experimental model worker is intentionally disabled; repository PR/CI work does not make model calls.
+- Main contains the operational company schema, 14 organizational roles, audited company state, configurable spending policies and budgets, Telegram command routing, the Railway API/Hermes container definitions, and a leased agent worker gated by database-backed model cost controls.
+- Supabase is the authoritative company state. Proposal intake persists a project, objective, approval, audit record, sequential CEO → Product → CTO → CFO → Product Manager reviews, and a blocked research task. Founder approval produces the downstream PM → Architect → Developer → QA → Security → DevOps → Marketing → Sales task chain.
+- Spending thresholds are stored in database policy: `<= €10` automatic, `> €10 to €50` department head, `> €50 to < €200` CFO and CEO, and `>= €200` founder. Period and scope limits cover transaction, company, project, department, agent, category, vendor, daily, monthly and lifetime budgets, with warnings and hard stops. Department-head spend stays blocked until an active department approver is assigned.
+- The worker requires an active founder-configured provider/model price profile. Supabase calculates the maximum three-iteration reserve, snapshots rates and token ceilings, and calculates actual cost from reported usage. An approved reservation must begin before Hermes is called; successful review requires usage reconciliation. Unknown or out-of-profile usage retains the reserve and fails closed. The exact pinned Hermes API is patched to pass output-token caps and forbid model fallback.
+- Supabase security checks confirm RLS is on for the model profile and spend reservation tables, neither `anon` nor `service_role` has direct SELECT, and the profile, reserve and reconciliation RPCs are executable by `service_role` only. There are zero active model profiles, so no agent model request can run.
+- CI exercises the simulated founder → CEO/departments → CFO → founder approval workflow, budget gates, audit events, approval resumption, the review success gate, and spend reconciliation. This is a database-backed simulation, not a live Telegram/model session.
+- No credentials or tokens are committed. `SUTRA_ENABLE_AGENT_WORKER` and Telegram polling remain off until the founder credentials and route are configured.
 
-## Tests and checks performed
+## Tests and security checks
 
-- `python3 -m unittest discover -s tests -v` — 21 passed.
-- `python3 -m compileall -q sutra tests` — passed.
-- `git diff --check` — passed.
-- PR #8 CI run `36289846393` — passed Python tests, local Supabase migrations, pgTAP policy/workflow tests, database lint, both container builds and Gitleaks. Main post-merge run `36289935100` also passed all jobs.
-- PR #10 CI run `36299288049` — passed Python tests, local Supabase migrations, all 89 pgTAP policy/workflow assertions, database lint, both container builds and Gitleaks. Live Supabase verification confirms the profile table has RLS and no direct select grants to `anon` or `service_role`; only `service_role` can call the profile-derived reserve RPC; there are zero configured routes. The founder-profile update and reserve/reconcile triggers are live.
-- pgTAP exercises the proposal run sequence, an €11 model reserve, department-head approval/requeue, reservation reuse, usage reconciliation before success, founder approval sequencing, policy boundaries, budget hard stops and audit events.
-- The authenticated Supabase dashboard ran a read-only catalog query showing 15 public tables with RLS enabled, no `anon`/`authenticated` select grants and service-role read-only access. After CI passed, both additive migrations were applied through the authenticated Supabase connector. Live SQL verification confirmed migration history, ledger RLS, no direct ledger table select grants, service-role-only RPC execution, `expenses.actual_amount`, and both approval/success-gate triggers.
-- The Supabase Security Advisor reports 17 informational RLS-without-policy results on server-only tables; direct API grants are withheld. The performance advisor reports 31 unused indexes on this low-traffic project, including the new ledger indexes; re-evaluate against production query patterns before removing indexes. [RLS lint guidance](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy) and [unused-index guidance](https://supabase.com/docs/guides/database/database-linter?lint=0005_unused_index).
-- The exact pinned Hermes source was checked: its OpenAI-compatible API ignores `max_tokens`. The startup image test verifies the configured turn and retry limits.
-- The new model-cost migration and its pgTAP fixtures are being validated in CI. Local Supabase startup could not complete because the Docker image pull exhausted available disk (`no space left on device`); the retry was stopped without running Docker cleanup or deleting user data.
+- PR #11 CI run `36300280029` passed: Python unit tests and compile check, local Supabase migrations, pgTAP policy/workflow tests, database lint, Sutra API and Hermes image builds, Hermes request cap/route-lock verification, and Gitleaks secret scanning.
+- Main post-merge CI run `36300434840` passed Python tests and compile check, local Supabase migrations, pgTAP policy/workflow tests, database lint, both container builds, Hermes request-control verification and Gitleaks.
+- Python unit tests: 25 passed locally before merge. Python compile checks and `git diff --check` passed.
+- Supabase pgTAP tests cover threshold boundaries, budget hard stops, founder-only governance changes, agent self-escalation denial, approval routing, reservation/reconciliation and audit records.
+- Hosted Supabase migration `20260927063326 spend_gated_hermes_worker` was applied after PR #11 passed CI. Live catalog checks confirmed expected RLS/table grants and service-role-only RPC grants. Supabase connectivity and the empty active-profile state were verified.
+- Supabase Security Advisor reports 17 informational RLS-enabled/no-policy findings for server-only tables whose API grants are withheld. Performance Advisor reports 31 unused indexes on this low-traffic project; review after real workload data exists rather than dropping indexes now. [RLS lint guidance](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy), [unused-index guidance](https://supabase.com/docs/guides/database/database-linter?lint=0005_unused_index).
+- Local Supabase startup could not complete because Docker ran out of disk while pulling images. No Docker cleanup or user data deletion was attempted; hosted database checks and GitHub-hosted database CI succeeded.
 
 ## Deployment and integrations
 
-- **Supabase:** Project `sutra` (`smqsrigsugjuvuombetq`, `eu-central-1`) is active and reachable on PostgreSQL 17.6. Hosted history contains base schema, operational foundation (`20260927012437`), agent worker (`20260927025955`) and spend ledger (`20260927025959`). The Supabase CLI is installed but logged out and requires an access token for future CLI deployments; the managed connector applied these two migrations. The dashboard displays “Grace period is over” and warns requests may stop when quota is exhausted. No paid upgrade was made. No visible backup/recovery point was confirmed.
-- **Railway:** Existing project `lovely-playfulness` still runs a Hermes-only service from `praveen-ks-2001/hermes-agent-template`, not this repository. The authenticated usage page shows `$1.54` current and `$4.81` estimated against `$5` included usage. A Sutra API service was not added because it could exceed included usage. The Railway CLI is unavailable. No Hermes provider credential is configured for Sutra.
-- **Telegram:** Not configured. A bot token and founder’s numeric Telegram user ID must be added in the API secret manager before enabling polling.
-- **Model provider:** No usable provider credential/route is configured. Add a founder-configured model price profile and an exact route before enabling the worker. `max_tokens` is not an effective cap in the pinned API, so runtime output-token enforcement is still required before any provider call.
-- **Engineering execution:** Approved proposals create durable engineering-through-sales tasks, but Sutra does not yet dispatch tasks to Codex, create PRs, attach QA/security evidence or perform release handoff.
-- **URLs:** No Sutra API deployment URL is available. The existing Hermes endpoint reported HTTP 200 with `gateway: stopped` in the last runtime probe.
+- **Supabase:** Project `sutra` (`smqsrigsugjuvuombetq`, `eu-central-1`) is reachable on PostgreSQL 17.6. Hosted migration history now includes `20260927063326 spend_gated_hermes_worker`. The project displayed a grace-period/quota warning; no paid plan change or recovery point was confirmed. The authenticated Supabase connector applied the migrations; the local CLI is not authenticated.
+- **Railway:** No Sutra API has been deployed. The existing `lovely-playfulness` project has a Hermes-only service connected to `praveen-ks-2001/hermes-agent-template`, not this repository. The last observed usage was `$1.54` current and `$4.81` estimated against `$5` included usage. Adding a service risks exceeding the no-spend limit, so deployment was not triggered. No Sutra API URL exists.
+- **Hermes:** The repository pins and patches the runtime and CI builds/verifies its image. The separate existing Railway gateway last reported `gateway: stopped`; no live Sutra API-to-Hermes run has been verified.
+- **Telegram:** Not configured. Telegram requires a bot token and the founder's numeric Telegram user ID in the Sutra API secret manager. The code restricts private commands to the configured founder, but no live bot command has been exercised.
+- **Model provider:** No provider credential or active model profile/route exists. The model spend profile must be explicitly configured and founder-authorized before the worker can make a call.
+- **Engineering execution:** Approved proposals create durable engineering-to-sales tasks, but Sutra does not yet dispatch them to Codex/GitHub, create issues/PRs, attach QA/security evidence or perform release handoff.
 
 ## Remaining blockers
 
-1. Finish and merge the database-controlled model-price profile migration; patch and test the pinned Hermes API so exact route and output-token ceilings are enforced, then wire the worker to reserve, start and reconcile each call. Keep `SUTRA_ENABLE_AGENT_WORKER=false` until verified.
-2. Deploy Sutra API on Railway only after confirming an allowance or free deployment option that does not exceed the no-spend constraint. The current service is attached to another repository and usage is near the included limit.
-3. Add Telegram bot token and founder numeric ID through Railway’s secret manager. Never send them in chat.
-4. Build the approved-task-to-Codex/GitHub issue/PR dispatcher, then capture real QA, Security and release-readiness artifacts.
-5. Check Supabase quota and configure a tested recovery option before future schema changes; the project currently displays the grace-period warning.
+1. A founder must add a provider key and an exact model route, then configure an audited model price profile and ceilings in Supabase.
+2. A founder must add the Telegram bot token and numeric founder user ID to the API's secret manager.
+3. Confirm Railway included usage/cost headroom before deploying the API service. The last observed allowance was almost exhausted, and no spend was authorized.
+4. Supabase quota is in a grace-period warning; check the project remains available and establish a recovery option before further production schema changes.
+5. Implement and validate the approved-task-to-Codex/GitHub issue/PR dispatcher and persistent QA, Security and release-readiness evidence.
 
 ## Recommended next steps
 
-1. Validate and deploy the database-controlled model price profile; add exact route and output-token enforcement to the pinned Hermes API. Exercise approval, hard-stop, unknown-usage and audit paths before enabling model calls.
-2. Confirm Railway costs before adding the API service. Then add provider and Telegram secrets only in their destination secret managers and verify `/health`.
-3. Implement Codex engineering dispatch and record pull request, test, security review and release evidence in Supabase/GitHub.
-4. Monitor Supabase quota and establish a tested recovery option before subsequent schema changes.
+1. Add provider and Telegram secrets only in their service secret manager; never send them in chat or commit them.
+2. Configure the founder-authorized provider/model price profile in Supabase and confirm budgets and department approvers.
+3. Confirm Railway cost headroom, deploy the API, configure private Hermes access, and verify `/health` and a founder-only Telegram status command.
+4. Add engineering dispatch and record PR, test, security review and release evidence in Supabase/GitHub; exercise the full approval flow with a non-spending test request.
+5. Monitor Supabase quota and test a recovery path before future migrations.
