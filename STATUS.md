@@ -38,7 +38,7 @@ Updated: 2026-09-27 (Europe/Stockholm)
 - **Telegram:** Not configured. Telegram requires a bot token and the founder's numeric Telegram user ID in the Sutra API secret manager. The code restricts private commands to the configured founder, but no live bot command has been exercised.
 - **Model provider:** No provider credential or active model profile/route exists. The model spend profile must be explicitly configured and founder-authorized before the worker can make a call.
 - **Engineering execution:** Approved engineering work can be dispatched to GitHub issues after deployment and least-privilege token configuration. Signed PR/CI evidence ingestion is implemented, but no production webhook is registered or configured. Codex task execution, QA/Security review automation and release readiness remain unimplemented.
-- **GitHub:** The code uses `GITHUB_TOKEN` only in the Sutra API and only when `SUTRA_ENABLE_GITHUB_DISPATCHER=true`. No production token, webhook secret, repository webhook or branch-protection evidence is configured; dispatch and webhook endpoint remain disabled.
+- **GitHub:** The code uses `GITHUB_TOKEN` only in the Sutra API and only when `SUTRA_ENABLE_GITHUB_DISPATCHER=true`. No production token, webhook secret, or repository webhook is configured; dispatch and webhook endpoint remain disabled. GitHub returned 403 for branch protection because this private repository requires GitHub Pro or public visibility for that feature. The hooks API currently returns an empty list.
 
 ## Remaining blockers
 
@@ -53,5 +53,5 @@ Updated: 2026-09-27 (Europe/Stockholm)
 1. Add provider, Telegram, and least-privilege GitHub issue secrets only in their service secret manager; never send them in chat or commit them.
 2. Configure the founder-authorized provider/model price profile in Supabase and confirm budgets and department approvers.
 3. Confirm Railway cost headroom, deploy the API, configure private Hermes access, and verify `/health` and a founder-only Telegram status command.
-4. Configure the least-privilege GitHub issue token, webhook secret, repository webhook and CI-required branch protection; then add Codex execution and record QA, Security and release evidence in Supabase/GitHub. Exercise the founder approval flow in live Telegram with a non-spending test request.
+4. Configure the least-privilege GitHub issue token, webhook secret and repository webhook. To require CI for merges, enable an eligible GitHub plan or make the repository public; then add Codex execution and record QA, Security and release evidence in Supabase/GitHub. Exercise the founder approval flow in live Telegram with a non-spending test request.
 5. Monitor Supabase quota and test a recovery path before future migrations.
