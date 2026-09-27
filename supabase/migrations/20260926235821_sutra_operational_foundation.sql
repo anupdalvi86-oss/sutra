@@ -839,7 +839,7 @@ $$;
 create or replace function public.sutra_decide_role_approval(
   p_approval_id uuid,p_actor_id text,p_actor_role text,p_decision text,p_comment text default ''
 ) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
-declare approval_row public.approvals%rowtype; actor_ok boolean; next_status text; approval_department_id uuid; designated_head text;
+declare approval_row public.approvals%rowtype; actor_ok boolean; next_status text; approval_department_id uuid;
 begin
   if p_decision not in ('approve','reject') or p_actor_role not in ('ceo','cfo','department_head') then raise exception 'invalid role approval request' using errcode = '22023'; end if;
   select * into approval_row from public.approvals where id=p_approval_id for update;
@@ -850,10 +850,11 @@ begin
       left join public.projects p on p.id=ap.project_id
       left join public.expenses e on e.id=ap.expense_id
       where ap.id=p_approval_id;
-    select value #>> '{}' into designated_head from public.company_settings
-      where key='department_head:' || approval_department_id::text;
-    select designated_head=p_actor_id and exists(
-      select 1 from public.agents a where a.id::text=p_actor_id and a.department_id=approval_department_id and a.active
+    select exists(
+      select 1 from public.company_settings s
+      join public.agents a on a.id::text = s.value #>> '{}'
+      where s.key='department_head:' || approval_department_id::text
+        and a.id::text=p_actor_id and a.department_id=approval_department_id and a.active
     ) into actor_ok;
   else
     select exists(select 1 from public.agents a where a.id::text=p_actor_id and a.slug=p_actor_role and a.active) into actor_ok;

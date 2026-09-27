@@ -1,5 +1,5 @@
 begin;
-select plan(45);
+select plan(46);
 
 insert into public.company_settings(key,value,governance_sensitive,updated_by)
 values('founder_telegram_user_id','"12345678"'::jsonb,true,'test')
@@ -47,6 +47,9 @@ select lives_ok($$select public.sutra_set_company_setting('12345678',
   'department_head:' || (select department_id::text from public.agents where slug='developer'),
   to_jsonb((select id::text from public.agents where slug='developer')))$$,
   'founder can designate a department head through the audited setting function');
+select ok(exists(select 1 from public.company_settings s join public.agents a on a.id::text=s.value #>> '{}'
+  where s.key='department_head:' || (select department_id::text from public.agents where slug='developer')
+    and a.slug='developer'),'founder-designated head is visible to the policy lookup');
 select is((public.sutra_decide_role_approval((select id from public.approvals where approval_type='spend' order by created_at desc limit 1),
   (select id::text from public.agents where slug='developer'),'department_head','approve','Designated head review')->>'status'),
   'approved','only the designated department head can approve');
