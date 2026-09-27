@@ -96,6 +96,12 @@ select is((select status from public.agent_runs where id=(select run_id from wor
 select is((select project_id::text from public.expenses where id=(select (payload->>'expense_id')::uuid from worker_spend_decision)),
   (select project_id::text from public.agent_runs where id=(select run_id from worker_claims)),
   'model spend approval is tied to its proposal project');
+select is((select count(*)::integer from public.approvals ap
+  join public.projects p on p.id=ap.project_id
+  join public.agents a on a.slug='cpo' and a.department_id=p.department_id and a.active
+  join public.company_settings s on s.key='department_head:' || p.department_id::text
+    and s.value #>> '{}'=a.id::text where ap.id=(select (payload->>'approval_id')::uuid from worker_spend_decision)),
+  1,'configured department head matches the proposal department and approval');
 select is((public.sutra_decide_role_approval(
   (select (payload->>'approval_id')::uuid from worker_spend_decision),
   (select id::text from public.agents where slug='cpo'),'department_head','approve','Bounded review spend')->>'status'),
