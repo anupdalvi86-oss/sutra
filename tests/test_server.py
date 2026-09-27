@@ -330,7 +330,7 @@ class InternalEndpointTests(unittest.TestCase):
             self.assertEqual(app.health()["telegram"], "running")
             app.close()
 
-    def test_telegram_health_fails_closed_for_invalid_token_or_api_response(self):
+    def test_telegram_health_retries_after_transient_startup_failure(self):
         env = {
             "SUTRA_ENABLE_TELEGRAM": "true",
             "SUTRA_ENABLE_AGENT_WORKER": "false",
@@ -344,8 +344,9 @@ class InternalEndpointTests(unittest.TestCase):
             app = SutraApplication()
             app.store = FakeStore()
             app.start()
-            self.assertEqual(app.health()["telegram"], "unreachable")
-            thread_type.assert_not_called()
+            self.assertEqual(app.health()["telegram"], "starting")
+            thread_type.assert_called_once()
+            thread_type.return_value.start.assert_called_once()
 
         with patch.dict("os.environ", env, clear=False), \
                 patch("sutra.server.telegram_call", return_value={"ok": True}), \
