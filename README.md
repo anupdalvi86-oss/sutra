@@ -13,7 +13,7 @@ Sutra is a governed company operations runtime. Supabase holds authoritative com
 
 The SQL workflow stores real work items and approval evidence. It does not fabricate research results or independently execute tasks. A worker must consume ready tasks, produce GitHub issues/PRs and record QA/security evidence before release.
 
-Merged PRs #4, #7 and #8 add sequential proposal-review leases, bounded Hermes retries, and a database-backed per-run model spend ledger. Provider calls must be reserved and approved before start; usage must reconcile before a review can succeed, and unknown usage retains its full reserve. The worker still remains disabled because it is not yet wired to these RPCs and no trusted bounded model price/route is configured. The Hermes OpenAI-compatible endpoint ignores request `max_tokens`. The worker migrations are not yet applied to the hosted project; see [STATUS.md](STATUS.md) for current service and access blockers.
+Merged PRs #4, #7 and #8 add sequential proposal-review leases, bounded Hermes retries, and a database-backed per-run model spend ledger. Provider calls must be reserved and approved before start; usage must reconcile before a review can succeed, and unknown usage retains its full reserve. These migrations are now applied to the hosted project. The worker remains disabled until wired to the spend RPCs and a trusted bounded model price/route is configured. The Hermes OpenAI-compatible endpoint ignores request `max_tokens`; see [STATUS.md](STATUS.md) for current service blockers.
 
 ## Local verification
 
