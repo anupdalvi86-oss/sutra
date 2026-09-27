@@ -313,6 +313,69 @@ select is((select status from public.tasks where owner_agent_id=(select id from 
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
   'ready','verified Developer work releases the QA task');
 
+select throws_ok($$select * from public.task_review_evidence$$,'42501',null,
+  'service role cannot bypass the review RPC to read immutable review evidence');
+select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='qa'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
+  'in_progress','{}'::jsonb)$$,'QA starts its assigned review task');
+select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='qa'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
+  'done','{"summary":"looks good"}'::jsonb)$$,'42501',null,
+  'generic task completion cannot bypass persisted QA evidence');
+select throws_ok($$select public.sutra_submit_task_review(
+  (select id from public.agents where slug='qa'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
+  jsonb_build_object('result','pass','summary','QA evidence checked','tested_commit_sha',repeat('b',40),
+    'acceptance_criteria','[]'::jsonb,'tests','[]'::jsonb))$$,'42501',null,
+  'QA review cannot claim a commit other than the merged Developer commit');
+select throws_ok($$select public.sutra_submit_task_review(
+  (select id from public.agents where slug='security'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
+  jsonb_build_object('result','pass','summary','review submitted for wrong role','tested_commit_sha',repeat('a',40),
+    'acceptance_criteria','[]'::jsonb))$$,'42501',null,'Security cannot submit evidence for QA work assigned to another role');
+select lives_ok($$select public.sutra_submit_task_review(
+  (select id from public.agents where slug='qa'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
+  jsonb_build_object('result','pass','summary','QA test suite and acceptance evidence passed','tested_commit_sha',repeat('a',40),
+    'acceptance_criteria',jsonb_build_array(
+      jsonb_build_object('criterion','Acceptance criteria have evidence','result','pass','evidence_url','https://github.com/acme/sutra/pull/88'),
+      jsonb_build_object('criterion','Failures are recorded','result','pass','evidence_url','https://github.com/acme/sutra/actions/runs/201')),
+    'tests',jsonb_build_array(jsonb_build_object('name','release test suite','result','pass','evidence_url','https://github.com/acme/sutra/actions/runs/201'))))$$,
+  'valid QA review persists verified commit and test evidence');
+select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='qa') order by created_at desc limit 1),
+  'done','passing persisted QA evidence completes QA task');
+select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
+  'ready','QA completion releases Security review');
+reset role;
+select is((select count(*)::integer from public.task_review_evidence where review_role='qa' and tested_commit_sha=repeat('a',40)),
+  1,'QA evidence is durably stored with its exact Developer commit');
+select is((select count(*)::integer from public.audit_log where action='task.review_submitted' and actor_id='qa'),
+  1,'QA review submission is audit logged');
+set local role service_role;
+select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='security'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
+  'in_progress','{}'::jsonb)$$,'Security starts its assigned review task');
+select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='security'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
+  'done','{"summary":"no findings"}'::jsonb)$$,'42501',null,
+  'generic task completion cannot bypass persisted Security evidence');
+select lives_ok($$select public.sutra_submit_task_review(
+  (select id from public.agents where slug='security'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
+  jsonb_build_object('result','pass','summary','Security checks passed with no open findings','tested_commit_sha',repeat('a',40),
+    'acceptance_criteria',jsonb_build_array(
+      jsonb_build_object('criterion','Security findings have severity and owner','result','pass','evidence_url','https://github.com/acme/sutra/pull/88'),
+      jsonb_build_object('criterion','Release blockers are explicit','result','pass','evidence_url','https://github.com/acme/sutra/actions/runs/201')),
+    'findings','[]'::jsonb,'release_blockers','[]'::jsonb,
+    'checks',jsonb_build_array(jsonb_build_object('name','dependency and secret checks','result','pass','evidence_url','https://github.com/acme/sutra/actions/runs/201'))))$$,
+  'valid Security review persists checks, findings, blockers, and exact commit');
+select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='security') order by created_at desc limit 1),
+  'done','passing persisted Security evidence completes Security task');
+select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='devops') order by created_at desc limit 1),
+  'ready','Security completion releases DevOps handoff');
+select is((select count(*)::integer from public.audit_log where action='task.review_submitted' and actor_id='security'),
+  1,'Security review submission is audit logged');
+
 select lives_ok($$select public.sutra_set_budget('12345678','company','*','transaction',5,80,true)$$,
   'founder can configure a transaction hard stop through the audited policy function');
 select throws_ok($$select public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'over hard stop',6,'EUR')$$,

@@ -120,6 +120,29 @@ class InternalEndpointTests(unittest.TestCase):
         self.assertEqual(name, "sutra_update_task")
         self.assertEqual(rpc_payload["p_actor_agent_id"], AGENT_ID)
 
+    def test_task_review_routes_bounded_evidence_to_database_gate(self):
+        payload = {
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "actor_agent_id": AGENT_ID,
+            "evidence": {"result": "pass", "summary": "Review evidence ready"},
+        }
+        request = Request(f"{self.base}/internal/task-review", data=json.dumps(payload).encode(),
+                          headers={"Content-Type": "application/json", "Authorization": "Bearer unit-test-only-token"}, method="POST")
+        with urlopen(request, timeout=2) as response:
+            self.assertEqual(response.status, 200)
+        name, rpc_payload = self.app.store.calls[-1]
+        self.assertEqual(name, "sutra_submit_task_review")
+        self.assertEqual(rpc_payload["p_task_id"], payload["task_id"])
+        self.assertEqual(rpc_payload["p_evidence"]["result"], "pass")
+
+        before = len(self.app.store.calls)
+        malformed = Request(f"{self.base}/internal/task-review", data=json.dumps({**payload, "unexpected": True}).encode(),
+                             headers={"Content-Type": "application/json", "Authorization": "Bearer unit-test-only-token"}, method="POST")
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(malformed, timeout=2)
+        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(len(self.app.store.calls), before)
+
     def test_github_webhook_requires_signature_and_persists_normalized_event(self):
         secret = "unit-test-webhook-secret"
         old_secret, old_repo = self.app.github_webhook_secret, self.app.github_repository
