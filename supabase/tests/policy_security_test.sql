@@ -7,6 +7,15 @@ on conflict(key) do update set value=excluded.value;
 
 set local role service_role;
 
+select lives_ok($$select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-4o-mini',0,5000,10000,2200,true)$$,
+  'founder configures the test model price and hard token ceiling');
+select lives_ok($$select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-4o-mini-test-cheap',0,4.545,10000,2200,true)$$,
+  'founder configures a low-cost fixture route for downstream departments');
+select throws_ok($$select public.sutra_set_agent_model_spend_profile('agent','openai','gpt-4o-mini',0,1,10000,2200,true)$$,
+  '42501',null,'agents cannot configure model price or token authority');
+select throws_ok($$update public.agent_model_spend_profiles set output_eur_per_million_tokens=1 where provider='openai'$$,
+  '42501',null,'server role cannot change model price profiles directly');
+
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 10',10,'EUR')->>'status'),'approved','€10 is automatic');
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 10.01',10.01,'EUR')->'required_approvers')::text,'["department_head"]','above €10 requires department head');
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 50',50,'EUR')->'required_approvers')::text,'["department_head"]','€50 remains in department approval tier');
@@ -70,29 +79,38 @@ create temporary table worker_claims(role text,run_id uuid,lease_token uuid,sequ
 create temporary table worker_spend_decision(payload jsonb) on commit drop;
 create function pg_temp.prepare_agent_run_spend(p_run_id uuid,p_lease_token uuid) returns jsonb
 language plpgsql as $$
-declare reservation jsonb; reservation_id uuid; reconciliation jsonb;
+declare reservation jsonb; reservation_id uuid; reconciliation jsonb; model_name text;
 begin
-  reservation := public.sutra_reserve_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,
-    'openai','gpt-4o-mini',0.01);
+  select case when a.slug='ceo' then 'gpt-4o-mini' else 'gpt-4o-mini-test-cheap' end
+    into model_name from public.agent_runs r join public.agents a on a.id=r.agent_id where r.id=p_run_id;
+  reservation := public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',p_run_id,p_lease_token,
+    'openai',model_name);
   if reservation->>'status' <> 'approved' then raise exception 'test reservation unexpectedly needs approval'; end if;
   reservation_id := (reservation->>'reservation_id')::uuid;
   perform public.sutra_begin_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id);
   reconciliation := public.sutra_reconcile_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id,
-    'openai','gpt-4o-mini',0.01,1,1,'{"source":"test_usage"}'::jsonb,true);
+    'openai',model_name,0.01,1,1,'{"source":"test_usage"}'::jsonb,true);
   return reservation || jsonb_build_object('reconciliation',reconciliation);
 end;
 $$;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+select throws_ok($$select public.sutra_reserve_agent_run_spend('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini',0.01)$$,
+  '42501',null,'worker cannot underquote the database-calculated maximum model cost');
 select is((select role from worker_claims),'ceo','CEO receives the first leased review run');
 select is(public.sutra_claim_agent_run('sutra-worker-abcdefgh')::text,null::text,
   'later department work stays unclaimable until the prior review completes');
-insert into worker_spend_decision select public.sutra_reserve_agent_run_spend('sutra-worker-12345678',
-  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini',11);
+insert into worker_spend_decision select public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini');
 select is((select payload->>'status' from worker_spend_decision),'requested',
   'model spend above €10 follows the configured approval tier');
 select is((select status from public.agent_runs where id=(select run_id from worker_claims)),'blocked',
   'worker cannot proceed while model spend approval is pending');
+select is((select (payload->>'max_output_tokens')::integer from worker_spend_decision),2200,
+  'reservation snapshots the founder-configured output token ceiling');
+select is((select (payload->>'output_eur_per_million_tokens')::numeric from worker_spend_decision),5000::numeric,
+  'reservation snapshots database pricing instead of trusting the worker quote');
 select is((select project_id::text from public.expenses where id=(select (payload->>'expense_id')::uuid from worker_spend_decision)),
   (select project_id::text from public.agent_runs where id=(select run_id from worker_claims)),
   'model spend approval is tied to its proposal project');

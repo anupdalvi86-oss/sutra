@@ -25,5 +25,8 @@ Initial EUR ranges use half-open explicit boundaries: up to and including €10;
 
 Department-head approvals fail closed until the founder assigns a head with `sutra_set_company_setting`, using key `department_head:<department UUID>` and the selected agent UUID as the value. This prevents any active department agent from approving requests by default. The assignment is audit logged.
 
+## Model inference spend
+Model inference is fail-closed unless an active `agent_model_spend_profiles` row exists for the exact provider/model. This table has no direct API grants. The founder configures EUR-per-million-token prices and maximum input/output tokens with `sutra_set_agent_model_spend_profile`. Reservation rows snapshot both rates and ceilings; database triggers verify the maximum reserve and calculate-check settled spend against provider-reported token usage. The worker cannot submit a cheaper quote or lower actual amount. The deployed Hermes API must enforce the same route and output cap before the worker may be enabled.
+
 ## Mandatory approval categories
 Initially require founder approval for material spending, contracts/legal commitments, banking/payment access, destructive production operations, major pricing changes and governance-policy changes.
