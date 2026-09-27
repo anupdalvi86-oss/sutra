@@ -4,7 +4,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 
 ## What is working
 
-- The production Railway `sutra-api` service is online. Deployment `7050454e-466e-462d-a9df-b47cd7e45e2e` for merged commit `68ab9ee` is active and marked successful. The deploy log records container startup and a successful `/health` request. The API remains private; no public service URL is configured.
+- The production Railway `sutra-api` service is online. Deployment `5ff666ba-77cf-491e-a6ac-a2ac9f0a3665` for merged commit `a659f02` is active and marked successful. The API remains private; no public service URL is configured.
 - A fresh message from the configured founder account to `@sutra86bot` received a company status response. The response reported 3 projects, 3 open tasks and 2 pending approvals.
 - Supabase project `smqsrigsugjuvuombetq` is reachable. The Codex runner claim column and restricted RPC exist, and migration `20260927224724_claim_codex_runner_lease` is recorded as applied.
 - The founder proposal workflow has durable project/approval records. One €500 proposal is ready for the founder decision and another is still awaiting CFO review. Neither approval was changed; no €500 spend is authorized.
@@ -14,19 +14,19 @@ Updated: 2026-09-28 (Europe/Stockholm)
 
 - Railway project: `valiant-liberation`, production environment.
 - API service: `sutra-api`, private, online; active deployment ID above.
-- Hermes service: `sutra` with persistent volume; previously observed online. Its API remains private.
+- Hermes service: `sutra` online with its persistent volume; its API remains private.
 - Telegram: founder-only bot responds to the configured founder account.
 - Supabase: migrations through the runner claim are applied.
-- GitHub: repository `anupdalvi86-oss/sutra`; PR #65 merged. CI deployment is active.
+- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#68 merged. Python, database/pgTAP, container and secret-scan CI checks passed.
 
 ## Checks performed
 
-- Local Python suite: `python3 -m pytest -q` — 102 passed.
-- GitHub CI on PR #65: Python, database/pgTAP, container build and secret scan all passed.
+- Local Python suite after private evidence polling: `python3 -m pytest -q` — 105 passed.
+- GitHub CI on PR #67 and PR #68: Python, database/pgTAP, container build and secret scan all passed.
 - `python3 -m bandit -q -r sutra`: no medium or high findings; four low-severity notices relate to subprocess use in the opt-in task runner.
 - Python compile check and `git diff --check` passed.
-- Supabase connectivity and the new migration objects verified with a live read-only SQL query.
-- Railway deploy success, container startup and `/health` were verified in Railway. Telegram status command was verified after deployment.
+- Supabase connectivity, all requested core tables, the one-time runner claim RPC, and no direct `anon`/`authenticated` access were verified with live read-only SQL queries. `customers.status='lead'` represents leads in the same lifecycle table.
+- Railway's current release is marked successful and both services are online. Telegram status command was verified after the current release and returned 3 projects, 3 open tasks, and 2 pending approvals.
 - Supabase security advisor reports 22 informational `rls_enabled_no_policy` findings. Tables intentionally have RLS enabled and no end-user policies; direct client grants are revoked and company writes use restricted server-side RPCs. Recheck if direct client access is introduced.
 
 ## Remaining blockers
@@ -46,7 +46,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 ## Recommended next steps
 
 1. Provide/authorize the `sutra-api` OpenAI credential and repository-scoped GitHub token.
-2. Merge the private PR/CI polling change and keep the API private.
-3. Set the exact model pricing profile and monthly cap in Supabase, then enable the runner only after its health/readiness checks pass.
+2. The private PR/CI polling change is merged; keep the API private.
+3. The exact model profiles and €8/month hard cap are already active in Supabase. Enable the runner only after its health/readiness checks pass.
 4. Submit one low-cost founder-approved test task, verify the cost reservation and audit trail, and review the resulting PR before any merge.
 5. Verify the full QA/security evidence handoff and release readiness. Keep the €500 product proposal pending founder review; it is separate from engineering execution.
