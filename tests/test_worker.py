@@ -267,6 +267,22 @@ class AgentArtifactTests(unittest.TestCase):
         hermes.review.assert_not_called()
         store.begin_agent_run_spend.assert_not_called()
 
+    def test_role_route_is_used_for_preflight_instead_of_default_provider(self):
+        store = self.approved_store("architect")
+        hermes = Mock()
+        hermes.review.return_value = (artifact("architect"), {"prompt_tokens": 20, "completion_tokens": 30})
+        store.reconcile_agent_run_spend.return_value = {"status": "reconciled"}
+        routes = {"architect": ("kimi-coding", "kimi-k2.6")}
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna",
+                             worker_id="sutra-worker-12345678", role_routes=routes)
+        self.assertEqual(worker.run_once(), "succeeded")
+        store.reserve_agent_run_spend.assert_called_once_with(
+            "sutra-worker-12345678", claimed_run("architect"), "kimi-coding", "kimi-k2.6")
+        hermes.review.assert_called_once_with(claimed_run("architect"), "kimi-coding", "kimi-k2.6", 500, 100_000)
+        store.reconcile_agent_run_spend.assert_called_once_with(
+            "sutra-worker-12345678", claimed_run("architect"), "reservation-1",
+            "kimi-coding", "kimi-k2.6", {"prompt_tokens": 20, "completion_tokens": 30})
+
     def test_success_requires_spend_reserve_start_usage_settlement_then_completion(self):
         events = []
         store = self.approved_store()

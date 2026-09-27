@@ -25,7 +25,26 @@ from .runtime import (
     telegram_call,
     telegram_poll_loop,
 )
-from .worker import AgentWorker, HermesAgentClient
+from .worker import AgentWorker, HermesAgentClient, ROLE_GUIDANCE
+
+
+def parse_role_routes(raw: str) -> dict[str, tuple[str, str]]:
+    """Parse explicit, bounded per-role model routes from trusted deployment config."""
+    if not raw.strip():
+        return {}
+    routes = json.loads(raw)
+    if not isinstance(routes, dict) or len(routes) > len(ROLE_GUIDANCE):
+        raise ValueError("role routes must be a bounded JSON object")
+    parsed: dict[str, tuple[str, str]] = {}
+    for role, route in routes.items():
+        if role not in ROLE_GUIDANCE or not isinstance(route, dict) or set(route) != {"provider", "model"}:
+            raise ValueError("role route has an unsupported role or fields")
+        provider, model = route["provider"], route["model"]
+        if (not isinstance(provider, str) or not provider.strip() or len(provider) > 80
+                or not isinstance(model, str) or not model.strip() or len(model) > 160):
+            raise ValueError("role route provider and model must be bounded non-empty strings")
+        parsed[role] = (provider.strip(), model.strip())
+    return parsed
 
 
 class GatewayProbe:
@@ -34,7 +53,9 @@ class GatewayProbe:
     @staticmethod
     def state() -> str:
         url = os.environ.get("HERMES_HEALTH_URL", "")
-        if not url.startswith("https://"):
+        parsed = urlsplit(url)
+        private_railway_http = parsed.scheme == "http" and bool(parsed.hostname) and parsed.hostname.endswith(".railway.internal")
+        if parsed.scheme != "https" and not private_railway_http:
             return "not_configured"
         request = urllib.request.Request(url, headers={"Accept": "application/json"})
         try:
@@ -83,26 +104,31 @@ class SutraApplication:
             model = os.environ.get("SUTRA_HERMES_MODEL", "").strip()
             hermes_url = os.environ.get("HERMES_AGENT_API_URL", "").strip()
             hermes_key = os.environ.get("HERMES_AGENT_API_KEY", "").strip()
+            try:
+                role_routes = parse_role_routes(os.environ.get("SUTRA_HERMES_ROLE_ROUTES", ""))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                role_routes = {}
+                self.agent_worker_status = "blocked_runtime_configuration"
             if not self.store or not provider or not model or not hermes_url or not hermes_key:
                 self.agent_worker_status = "blocked_runtime_configuration"
             else:
-                try:
-                    profile = self.store.get_agent_model_spend_profile(provider, model)
-                except IntegrationError:
-                    profile = {"configured": False}
-                    self.agent_worker_status = "blocked_model_profile"
-                if self.agent_worker_status != "blocked_model_profile":
-                    if profile.get("configured") is not True:
+                profile_routes = {(provider, model), *role_routes.values()}
+                for route_provider, route_model in profile_routes:
+                    try:
+                        profile = self.store.get_agent_model_spend_profile(route_provider, route_model)
+                    except IntegrationError:
+                        profile = {"configured": False}
+                    if (profile.get("configured") is not True
+                            or profile.get("provider") != route_provider or profile.get("model") != route_model):
                         self.agent_worker_status = "blocked_model_profile"
-                    elif profile.get("provider") != provider or profile.get("model") != model:
-                        self.agent_worker_status = "blocked_model_profile"
-                    else:
-                        hermes = HermesAgentClient(hermes_url, hermes_key, provider, model)
-                        worker = AgentWorker(self.store, hermes, provider, model)
-                        self.agent_worker_thread = threading.Thread(
-                            target=worker.run, args=(self.telegram_stop,), daemon=True, name="sutra-agent-worker")
-                        self.agent_worker_thread.start()
-                        self.agent_worker_status = "running"
+                        break
+                if self.agent_worker_status not in {"blocked_model_profile", "blocked_runtime_configuration"}:
+                    hermes = HermesAgentClient(hermes_url, hermes_key, provider, model)
+                    worker = AgentWorker(self.store, hermes, provider, model, role_routes=role_routes)
+                    self.agent_worker_thread = threading.Thread(
+                        target=worker.run, args=(self.telegram_stop,), daemon=True, name="sutra-agent-worker")
+                    self.agent_worker_thread.start()
+                    self.agent_worker_status = "running"
         if os.environ.get("SUTRA_ENABLE_GITHUB_DISPATCHER", "false").lower() == "true":
             github_token = os.environ.get("GITHUB_TOKEN", "").strip()
             github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()

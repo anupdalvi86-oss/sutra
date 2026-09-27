@@ -89,3 +89,26 @@ os.replace(temporary, path)
 PY
 
 chown hermes:hermes "$HERMES_HOME/SOUL.md" "$HERMES_HOME/config.yaml"
+
+# Railway's environment is the source of truth for the private API key. An old
+# persisted .env value would otherwise override it when Hermes loads dotenv with
+# override=True, silently breaking Sutra's matching client credential.
+if [ -f "$HERMES_HOME/.env" ]; then
+  python3 - "$HERMES_HOME/.env" <<'PY'
+import os
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as stream:
+    lines = stream.readlines()
+kept = [line for line in lines if not re.match(r"^\s*(?:export\s+)?API_SERVER_KEY\s*=", line)]
+if kept != lines:
+    temporary = path + ".sutra.tmp"
+    with open(temporary, "w", encoding="utf-8") as stream:
+        stream.writelines(kept)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+PY
+  chown hermes:hermes "$HERMES_HOME/.env"
+fi

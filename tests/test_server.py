@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 from unittest.mock import patch
 
 from sutra.runtime import IntegrationError
-from sutra.server import SutraApplication, SutraHandler
+from sutra.server import GatewayProbe, SutraApplication, SutraHandler, parse_role_routes
 
 AGENT_ID = "00000000-0000-4000-8000-000000000002"
 
@@ -55,6 +55,36 @@ class InternalEndpointTests(unittest.TestCase):
 
     def get(self, path):
         return urlopen(f"{self.base}{path}", timeout=2)
+
+    def test_model_role_routes_are_validated_and_reject_unknown_fields(self):
+        self.assertEqual(parse_role_routes(
+            '{"architect":{"provider":"kimi-coding","model":"kimi-k2.6"}}'),
+            {"architect": ("kimi-coding", "kimi-k2.6")})
+        for malformed in (
+            "[]", '{"unknown":{"provider":"openai","model":"gpt-6-luna"}}',
+            '{"cpo":{"provider":"openai","model":"gpt-6-luna","key":"secret"}}',
+            '{"ceo":{"provider":"","model":"gpt-6-luna"}}',
+        ):
+            with self.subTest(malformed=malformed), self.assertRaises((ValueError, TypeError)):
+                parse_role_routes(malformed)
+
+    def test_hermes_health_probe_allows_private_railway_http(self):
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return b'{"status":"ok"}'
+
+        with patch.dict("os.environ", {"HERMES_HEALTH_URL": "http://sutra.railway.internal:8642/health"}):
+            with patch("sutra.server.open_outbound_request", return_value=Response()) as request:
+                self.assertEqual(GatewayProbe.state(), "running")
+        request.assert_called_once()
 
     def test_liveness_stays_ok_while_readiness_reports_missing_database(self):
         old_store = self.app.store

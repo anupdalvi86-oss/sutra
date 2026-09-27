@@ -13,7 +13,7 @@ Sutra is a governed company operations runtime. Supabase holds authoritative com
 
 The SQL workflow stores real work items and approval evidence. It does not fabricate research results. An opt-in GitHub dispatcher claims only a ready Developer task in a founder-approved project, creates or recovers its linked GitHub issue, and audits the handoff. Signed GitHub webhooks can record a matching PR and CI workflow; Developer work completes only after merge and successful CI on the same commit, which releases QA. This does not itself implement code, complete QA/security review, or release the product.
 
-The leased proposal/review/task-artifact worker runs only after a matching database model profile, exact provider/model route, Hermes URL and API key are configured. Before each provider request it reserves the profile's maximum three-iteration cost, waits for approval if required, begins the reservation, passes Hermes a bounded output-token cap and exact route lock, and reconciles observed usage before success. Unknown or out-of-profile usage keeps the full reserve and fails the run. The task-artifact reservation path uses the same central spending-policy RPC and additionally requires the run to belong to the assigned in-progress task of an approved project. CI verifies these request controls. The model profile remains empty and `SUTRA_ENABLE_AGENT_WORKER` remains false until a founder-approved price/route is available. Telegram is live and founder-restricted; GitHub dispatch and webhooks remain opt-in. See [STATUS.md](STATUS.md) for current verification and blockers.
+The leased proposal/review/task-artifact worker runs only after matching database model profiles, exact provider/model routes, Hermes URL and API key are configured. Before each provider request it reserves the profile's maximum three-iteration cost, waits for approval if required, begins the reservation, passes Hermes a bounded output-token cap and exact route lock, and reconciles observed usage before success. Unknown or out-of-profile usage keeps the full reserve and fails the run. The task-artifact reservation path uses the same central spending-policy RPC and additionally requires the run to belong to the assigned in-progress task of an approved project. CI verifies these request controls and role-route validation. The live database has founder-audited price profiles for GPT-6 Luna and Kimi K2.6, plus an €8 monthly AI inference hard stop; Railway provider routing and the live worker still need deployment and end-to-end verification. Telegram is live and founder-restricted; GitHub dispatch and webhooks remain opt-in. See [STATUS.md](STATUS.md) for current verification and blockers.
 
 ## Local verification
 
@@ -49,7 +49,7 @@ See [deployment instructions](docs/DEPLOYMENT.md), [architecture](docs/ARCHITECT
 ## Founder commands
 
 - `CEO, give me company status.`
-- `CEO, show my approvals.` — lists up to ten pending founder requests with the amount and outstanding department reviews; viewing the queue is audit logged and does not change approval state.
+- `CEO, show my approvals.` — lists up to ten pending founder requests with the amount and outstanding department reviews; viewing the queue is audit logged and does not change approval state. Ready requests include private-chat Approve/Reject buttons backed by the same founder-only audited database RPC as the command form.
 - `Investigate an AI QA product. Initial budget maximum €500. Prepare a proposal.`
 - `approve <approval-id> [comment]` or `reject <approval-id> [comment]`
 
