@@ -101,9 +101,9 @@ select is((select payload->>'status' from worker_spend_decision),'requested',
   'model spend above €10 follows the configured approval tier');
 select is((select status from public.agent_runs where id=(select run_id from worker_claims)),'blocked',
   'worker cannot proceed while model spend approval is pending');
-select is((select max_output_tokens from public.agent_run_spend_reservations where agent_run_id=(select run_id from worker_claims)),2200,
+select is((select (payload->>'max_output_tokens')::integer from worker_spend_decision),2200,
   'reservation snapshots the founder-configured output token ceiling');
-select is((select output_eur_per_million_tokens from public.agent_run_spend_reservations where agent_run_id=(select run_id from worker_claims)),5000::numeric,
+select is((select (payload->>'output_eur_per_million_tokens')::numeric from worker_spend_decision),5000::numeric,
   'reservation snapshots database pricing instead of trusting the worker quote');
 select is((select project_id::text from public.expenses where id=(select (payload->>'expense_id')::uuid from worker_spend_decision)),
   (select project_id::text from public.agent_runs where id=(select run_id from worker_claims)),
