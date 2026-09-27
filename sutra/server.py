@@ -16,6 +16,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from .runtime import FounderCommandRouter, IntegrationError, SupabaseREST, telegram_poll_loop
+from .worker import AgentWorker, HermesAgentClient
 
 
 class GatewayProbe:
@@ -64,10 +65,30 @@ class SutraApplication:
                 self.founder_verified = False
         worker_enabled = os.environ.get("SUTRA_ENABLE_AGENT_WORKER", "false").lower() == "true"
         if worker_enabled:
-            # The database ledger exists, but the worker must not make a provider
-            # call until it uses the reserve/start/reconcile RPCs with a trusted,
-            # bounded provider/model price and exact route.
-            self.agent_worker_status = "blocked_spend_preflight"
+            provider = os.environ.get("SUTRA_HERMES_PROVIDER", "").strip()
+            model = os.environ.get("SUTRA_HERMES_MODEL", "").strip()
+            hermes_url = os.environ.get("HERMES_AGENT_API_URL", "").strip()
+            hermes_key = os.environ.get("HERMES_AGENT_API_KEY", "").strip()
+            if not self.store or not provider or not model or not hermes_url or not hermes_key:
+                self.agent_worker_status = "blocked_runtime_configuration"
+            else:
+                try:
+                    profile = self.store.get_agent_model_spend_profile(provider, model)
+                except IntegrationError:
+                    profile = {"configured": False}
+                    self.agent_worker_status = "blocked_model_profile"
+                if self.agent_worker_status != "blocked_model_profile":
+                    if profile.get("configured") is not True:
+                        self.agent_worker_status = "blocked_model_profile"
+                    elif profile.get("provider") != provider or profile.get("model") != model:
+                        self.agent_worker_status = "blocked_model_profile"
+                    else:
+                        hermes = HermesAgentClient(hermes_url, hermes_key, provider, model)
+                        worker = AgentWorker(self.store, hermes, provider, model)
+                        self.agent_worker_thread = threading.Thread(
+                            target=worker.run, args=(self.telegram_stop,), daemon=True, name="sutra-agent-worker")
+                        self.agent_worker_thread.start()
+                        self.agent_worker_status = "running"
         if self.store and self.router and self.telegram_token and self.founder_verified and os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
             self.telegram_thread = threading.Thread(
                 target=telegram_poll_loop,

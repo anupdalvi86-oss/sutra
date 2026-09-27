@@ -23,6 +23,9 @@ class FakeStore:
     def request(self, *_args, **_kwargs):
         return []
 
+    def get_agent_model_spend_profile(self, *_args):
+        return {"configured": False}
+
 
 class InternalEndpointTests(unittest.TestCase):
     @classmethod
@@ -114,12 +117,27 @@ class InternalEndpointTests(unittest.TestCase):
         self.assertEqual(name, "sutra_update_task")
         self.assertEqual(rpc_payload["p_actor_agent_id"], AGENT_ID)
 
-    def test_agent_worker_cannot_start_without_database_spend_preflight(self):
+    def test_agent_worker_cannot_start_without_database_route_or_credential(self):
         with patch.dict("os.environ", {"SUTRA_ENABLE_AGENT_WORKER": "true"}, clear=False):
             app = SutraApplication()
             app.store = FakeStore()
             app.start()
-        self.assertEqual(app.agent_worker_status, "blocked_spend_preflight")
+        self.assertEqual(app.agent_worker_status, "blocked_runtime_configuration")
+        self.assertIsNone(app.agent_worker_thread)
+
+    def test_agent_worker_stays_disabled_until_database_has_an_active_price_profile(self):
+        env = {
+            "SUTRA_ENABLE_AGENT_WORKER": "true",
+            "SUTRA_HERMES_PROVIDER": "openai",
+            "SUTRA_HERMES_MODEL": "gpt-4o-mini",
+            "HERMES_AGENT_API_URL": "https://hermes.example",
+            "HERMES_AGENT_API_KEY": "unit-test-key",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+        self.assertEqual(app.agent_worker_status, "blocked_model_profile")
         self.assertIsNone(app.agent_worker_thread)
 
 

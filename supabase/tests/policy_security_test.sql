@@ -7,14 +7,20 @@ on conflict(key) do update set value=excluded.value;
 
 set local role service_role;
 
-select lives_ok($$select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-4o-mini',0,5000,10000,2200,true)$$,
+select lives_ok($$select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-4o-mini',0,1666.666,10000,2200,true)$$,
   'founder configures the test model price and hard token ceiling');
-select lives_ok($$select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-4o-mini-test-cheap',0,4.545,10000,2200,true)$$,
+select lives_ok($$select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-4o-mini-test-cheap',0,1.5,10000,2200,true)$$,
   'founder configures a low-cost fixture route for downstream departments');
+select is((public.sutra_get_agent_model_spend_profile('openai','gpt-4o-mini')->>'configured'),'true',
+  'worker profile lookup returns an active exact route');
+select is((public.sutra_get_agent_model_spend_profile('openai','unconfigured-model')->>'configured'),'false',
+  'unconfigured models fail closed before any worker provider request');
 select throws_ok($$select public.sutra_set_agent_model_spend_profile('agent','openai','gpt-4o-mini',0,1,10000,2200,true)$$,
   '42501',null,'agents cannot configure model price or token authority');
 select throws_ok($$update public.agent_model_spend_profiles set output_eur_per_million_tokens=1 where provider='openai'$$,
   '42501',null,'server role cannot change model price profiles directly');
+select throws_ok($$select * from public.agent_model_spend_profiles$$,
+  '42501',null,'service role uses only the audited model profile RPC');
 
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 10',10,'EUR')->>'status'),'approved','€10 is automatic');
 select is((public.sutra_authorize_spend('system','test',null,null,null,'ai_api',null,'test 10.01',10.01,'EUR')->'required_approvers')::text,'["department_head"]','above €10 requires department head');
@@ -67,6 +73,11 @@ select is((public.sutra_decide_role_approval((select id from public.approvals wh
 reset role;
 set local role anon;
 select throws_ok($$select * from public.spending_policies$$,'42501',null,'anon role cannot read spending policies');
+select throws_ok($$select * from public.agent_model_spend_profiles$$,'42501',null,'anon role cannot read model pricing profiles');
+select throws_ok($$select public.sutra_get_agent_model_spend_profile('openai','gpt-4o-mini')$$,
+  '42501',null,'anon role cannot inspect model route or pricing');
+select throws_ok($$select public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',gen_random_uuid(),gen_random_uuid(),'openai','gpt-4o-mini')$$,
+  '42501',null,'anon role cannot create a paid model reservation');
 reset role;
 set local role service_role;
 select throws_ok($$select public.sutra_authorize_spend('system','test',null,(select id from public.projects order by created_at desc limit 1),null,'ai_api',null,'premature spend',5,'EUR')$$,
@@ -88,8 +99,8 @@ begin
   if reservation->>'status' <> 'approved' then raise exception 'test reservation unexpectedly needs approval'; end if;
   reservation_id := (reservation->>'reservation_id')::uuid;
   perform public.sutra_begin_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id);
-  reconciliation := public.sutra_reconcile_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id,
-    'openai',model_name,0.01,1,1,'{"source":"test_usage"}'::jsonb,true);
+  reconciliation := public.sutra_reconcile_agent_run_spend_from_usage('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id,
+    'openai',model_name,1,1,'{"source":"test_usage"}'::jsonb,true);
   return reservation || jsonb_build_object('reconciliation',reconciliation);
 end;
 $$;
@@ -109,7 +120,9 @@ select is((select status from public.agent_runs where id=(select run_id from wor
   'worker cannot proceed while model spend approval is pending');
 select is((select (payload->>'max_output_tokens')::integer from worker_spend_decision),2200,
   'reservation snapshots the founder-configured output token ceiling');
-select is((select (payload->>'output_eur_per_million_tokens')::numeric from worker_spend_decision),5000::numeric,
+select is((select (payload->>'max_model_iterations')::integer from worker_spend_decision),3,
+  'reservation uses the image-enforced maximum model iterations');
+select is((select (payload->>'output_eur_per_million_tokens')::numeric from worker_spend_decision),1666.666::numeric,
   'reservation snapshots database pricing instead of trusting the worker quote');
 select is((select project_id::text from public.expenses where id=(select (payload->>'expense_id')::uuid from worker_spend_decision)),
   (select project_id::text from public.agent_runs where id=(select run_id from worker_claims)),
