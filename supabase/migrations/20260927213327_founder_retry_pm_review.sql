@@ -9,6 +9,7 @@ declare
   approval_row public.approvals%rowtype;
   role_slug text;
   prior_review_count integer;
+  unknown_reservation_count integer;
   prior_error text;
   prior_detail text;
 begin
@@ -60,6 +61,9 @@ begin
     raise exception 'PM retry requires CEO, Product, CTO, and CFO reviews to remain complete' using errcode = '42501';
   end if;
 
+  select count(*) into unknown_reservation_count from public.agent_run_spend_reservations s
+    where s.agent_run_id=run_row.id and s.status='unknown';
+
   update public.agent_runs set status='queued', finished_at=null, lease_token=null, lease_expires_at=null,
       output=jsonb_build_object('founder_retry','requested')
     where id=run_row.id;
@@ -69,7 +73,8 @@ begin
         'previous_error_code',prior_error,'previous_failure_detail_code',prior_detail,
         'unknown_reservations_preserved',true,'new_project_spending_authorized',false));
   return jsonb_build_object('run_id',run_row.id,'status','queued',
-    'attempts_remaining',3-run_row.attempt_count,'project_spend_authorized',false);
+    'attempts_remaining',3-run_row.attempt_count,'project_spend_authorized',false,
+    'preserved_unknown_reservations',unknown_reservation_count);
 end;
 $$;
 

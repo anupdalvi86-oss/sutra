@@ -281,10 +281,12 @@ select throws_ok($$select public.sutra_founder_retry_pm_review('99999999',(selec
   '42501',null,'nonfounder cannot retry a failed PM review');
 select throws_ok($$select public.sutra_founder_retry_pm_review('12345678',null)$$,
   '22023',null,'malformed retry request is rejected');
-select is((public.sutra_founder_retry_pm_review('12345678',(select run_id from worker_claims))->>'status'),
+create temporary table retry_request_result(payload jsonb) on commit drop;
+insert into retry_request_result
+select public.sutra_founder_retry_pm_review('12345678',(select run_id from worker_claims));
+select is((select payload->>'status' from retry_request_result),
   'queued','founder can queue a bounded PM retry while the project approval is pending');
-select is((select status from public.agent_run_spend_reservations
-  where agent_run_id=(select run_id from worker_claims) and attempt=1),'unknown',
+select is((select (payload->>'preserved_unknown_reservations')::integer from retry_request_result),1,
   'founder retry preserves the earlier unknown spend reservation');
 select ok(exists(select 1 from public.audit_log where action='founder.pm_review_retry_requested'
   and resource_id=(select run_id::text from worker_claims)),
@@ -295,11 +297,15 @@ insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_i
 select is((select role from worker_claims),'product_manager','founder retry reclaims the same PM stage');
 select is((select attempt_count from public.agent_runs where id=(select run_id from worker_claims)),2,
   'retry increments the bounded PM run attempt counter');
-select is((select count(*)::integer from public.agent_run_spend_reservations
-  where agent_run_id=(select run_id from worker_claims)),2,
-  'retry creates a distinct spend reservation for attempt two');
-select is((pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
-  (select lease_token from worker_claims))->>'status'),'approved','retry uses a new centrally reserved attempt');
+create temporary table retry_attempt_two_reservation(payload jsonb) on commit drop;
+insert into retry_attempt_two_reservation
+select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims));
+select is((select payload->>'status' from retry_attempt_two_reservation),'approved',
+  'retry uses a new centrally reserved attempt');
+select ok((select payload->>'reservation_id' from retry_attempt_two_reservation)
+  <> (select payload->>'reservation_id' from retry_attempt_reservation),
+  'retry creates a distinct spend reservation without rewriting the prior attempt');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long PM summary","recommendation":"Founder review is ready","evidence":[],"milestones":["Discovery"]}'::jsonb)$$,
