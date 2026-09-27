@@ -155,7 +155,16 @@ class SutraApplication:
                 try:
                     bot = telegram_call(self.telegram_token, "getMe", {}, timeout=8)
                 except IntegrationError:
-                    self.telegram_status = "unreachable"
+                    # A transient startup/network error must not permanently disable polling.
+                    # getUpdates performs the same token/auth check and retries with backoff.
+                    self.telegram_status = "starting"
+                    self.telegram_thread = threading.Thread(
+                        target=telegram_poll_loop,
+                        args=(self.telegram_token, self.router, self.telegram_stop, self._set_telegram_status),
+                        daemon=True,
+                        name="telegram-founder-interface",
+                    )
+                    self.telegram_thread.start()
                 else:
                     if (not isinstance(bot, dict) or bot.get("is_bot") is not True
                             or isinstance(bot.get("id"), bool) or not isinstance(bot.get("id"), int)):
