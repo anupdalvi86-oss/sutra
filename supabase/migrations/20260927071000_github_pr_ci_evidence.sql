@@ -43,7 +43,7 @@ create function public.sutra_record_github_webhook_event(
   p_worker_id text,p_delivery_id uuid,p_repository text,p_event_name text,p_event jsonb
 ) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare inserted_id uuid; task_uuid uuid; dispatch_row public.github_task_dispatches%rowtype;
-  pr_number integer; issue_number integer; pr_url text; head_sha text; merged boolean;
+  pr_number integer; parsed_issue_number integer; pr_url text; head_sha text; merged boolean;
   workflow_name text; conclusion text; run_url text; pr_numbers jsonb; prior_ci_event jsonb; completed_count integer:=0;
   task_row public.tasks%rowtype; project_status text;
 begin
@@ -64,11 +64,11 @@ begin
     begin
       task_uuid:=(p_event->>'task_id')::uuid;
       pr_number:=(p_event->>'pull_request_number')::integer;
-      issue_number:=(p_event->>'issue_number')::integer;
+      parsed_issue_number:=(p_event->>'issue_number')::integer;
     exception when others then raise exception 'malformed GitHub pull request identifiers' using errcode='22023'; end;
     pr_url:=p_event->>'pull_request_url'; head_sha:=p_event->>'head_sha';
     merged:=p_event->>'merged'='true';
-    if task_uuid is null or pr_number is null or issue_number is null or pr_number<1 or issue_number<1
+    if task_uuid is null or pr_number is null or parsed_issue_number is null or pr_number<1 or parsed_issue_number<1
       or p_event->>'action' is null or p_event->>'action' not in ('opened','edited','synchronize','reopened','closed')
       or p_event->>'base_ref' is distinct from 'main'
       or p_event->'merged' is null or jsonb_typeof(p_event->'merged') is distinct from 'boolean'
@@ -80,7 +80,7 @@ begin
       raise exception 'GitHub pull request is not a valid Sutra task handoff' using errcode='22023';
     end if;
     select * into dispatch_row from public.github_task_dispatches d
-      where d.task_id=task_uuid and d.status='created' and d.issue_number=issue_number
+      where d.task_id=task_uuid and d.status='created' and d.issue_number=parsed_issue_number
         and d.issue_url is not null for update;
     if not found then
       update public.github_webhook_deliveries set result=jsonb_build_object('ignored','unlinked_task') where delivery_id=p_delivery_id;
