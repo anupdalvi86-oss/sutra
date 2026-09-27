@@ -19,6 +19,14 @@ def artifact(role="ceo"):
             "url": "https://example.com/docs",
             "claim": "The product describes its target workflow.",
         }]
+    if role == "product_manager":
+        result["evidence"] = [{
+            "source": "Primary product documentation",
+            "url": "https://example.com/docs",
+            "claim": "The existing workflow supports the proposed product scope.",
+        }]
+        result["milestones"] = ["Validate buyer problem", "Define prototype scope"]
+        result["acceptance_criteria"] = ["Buyer evidence is documented", "Prototype outcomes are measurable"]
     if role == "cfo":
         result.update(decision="approve", decision_rationale="The requested budget is reviewable under current policy.")
     return result
@@ -171,6 +179,16 @@ class AgentArtifactTests(unittest.TestCase):
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cpo", invalid)
 
+    def test_product_manager_plan_requires_evidence_milestones_and_acceptance_criteria(self):
+        plan = validate_agent_artifact("product_manager", artifact("product_manager"))
+        self.assertEqual(len(plan["milestones"]), 2)
+        self.assertEqual(len(plan["acceptance_criteria"]), 2)
+        for field in ("evidence", "milestones", "acceptance_criteria"):
+            invalid = artifact("product_manager")
+            invalid[field] = []
+            with self.subTest(field=field), self.assertRaises(AgentOutputError):
+                validate_agent_artifact("product_manager", invalid)
+
     def test_product_research_cannot_succeed_without_sources(self):
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cpo", artifact())
@@ -230,6 +248,37 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertNotIn("tools", request_body)
         self.assertEqual(request.call_args.kwargs["timeout"], 180.0)
 
+    def test_model_call_accepts_whitespace_around_a_fenced_json_object(self):
+        content = "  \n```json\n" + json.dumps(artifact()) + "\n```  \n"
+        payload = {"choices": [{"message": {"content": content}}],
+                   "usage": {"prompt_tokens": 30, "completion_tokens": 40}}
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response):
+            result, usage = HermesAgentClient(
+                "https://hermes.example", "hermes-key", "openai", "gpt-4o-mini"
+            ).review(claimed_run(), max_output_tokens=500)
+        self.assertEqual(result["summary"], artifact()["summary"])
+        self.assertEqual(usage["completion_tokens"], 40)
+
+    def test_malformed_fenced_json_is_rejected_with_a_safe_detail_code(self):
+        payload = {"choices": [{"message": {"content": "```json\n{}\n``` trailing text"}}],
+                   "usage": {"prompt_tokens": 30, "completion_tokens": 40}}
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response):
+            with self.assertRaises(AgentOutputError) as raised:
+                HermesAgentClient(
+                    "https://hermes.example", "hermes-key", "openai", "gpt-4o-mini"
+                ).review(claimed_run(), max_output_tokens=500)
+        self.assertEqual(raised.exception.failure_category, "invalid_hermes_response")
+        self.assertEqual(raised.exception.failure_detail_code, "malformed_json")
+        self.assertEqual(raised.exception.usage["completion_tokens"], 40)
+
     def test_model_request_over_input_ceiling_never_reaches_hermes(self):
         client = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-4o-mini")
         with patch("sutra.worker.urllib.request.urlopen") as request:
@@ -262,6 +311,7 @@ class AgentArtifactTests(unittest.TestCase):
             {
                 "summary": "Hermes artifact failed validation and usage could not be verified",
                 "failure_category": "invalid_agent_artifact",
+                "failure_detail_code": "invalid_agent_output",
                 "usage_state": "unverified",
             }, "unknown_or_overrun_spend",
         )
@@ -275,6 +325,7 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertEqual(worker.run_once(), "failed_unknown_spend")
         output = store.complete_agent_run.call_args.args[3]
         self.assertEqual(output["failure_category"], "invalid_hermes_response")
+        self.assertEqual(output["failure_detail_code"], "malformed_json")
         self.assertEqual(output["usage_state"], "unverified")
         self.assertNotIn("untrusted response", str(output))
 
