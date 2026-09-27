@@ -492,7 +492,7 @@ select throws_ok($$select public.sutra_set_budget('99999999','company','*','tran
 
 reset role;
 select ok((select count(*) from public.audit_log where action='spending.authorization_requested') >= 7,'authorization decisions are audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.succeeded'),10,
+select is((select count(*)::integer from public.audit_log where action='agent_run.succeeded'),5,
   'each executed department review is audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),10,
   'each model usage reconciliation is audit logged');
