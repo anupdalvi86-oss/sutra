@@ -621,10 +621,10 @@ begin
     insert into public.decisions(project_id,agent_id,decision_type,summary,rationale,evidence)
       values(project_id,ceo_id,'workflow_handoff',stage,'Queued for the responsible role; no unsupported research or technical findings are asserted.','[]'::jsonb);
   end loop;
-  insert into public.tasks(project_id,objective_id,title,description,acceptance_criteria,task_type,status,owner_agent_id)
+  insert into public.tasks(project_id,objective_id,title,description,acceptance_criteria,task_type,status,owner_agent_id,assigned_agent_id)
     values(project_id,objective_id,'Research AI QA product opportunity','Collect competitor, buyer, workflow and pricing evidence before making a product recommendation.',
       '["Cite primary sources","Separate evidence from assumptions","Estimate market and product risks"]'::jsonb,'research','blocked',
-      (select id from public.agents where slug='cpo'));
+      (select id from public.agents where slug='cpo'),(select id from public.agents where slug='cpo'));
   insert into public.budgets(scope,scope_key,period,currency,limit_amount,warning_percent,hard_stop)
     values('project',project_id::text,'lifetime',p_currency,p_requested_budget,80,true)
     on conflict (scope,scope_key,period,currency) do update set limit_amount = excluded.limit_amount;
@@ -692,10 +692,10 @@ begin
       select id into objective_id from public.objectives where project_id = project_row.id and status = 'proposed' order by created_at limit 1;
       update public.objectives set status = 'active' where id = objective_id;
       select id into pm_id from public.agents where slug = 'product_manager';
-      insert into public.tasks(project_id,objective_id,title,description,acceptance_criteria,task_type,status,owner_agent_id)
+      insert into public.tasks(project_id,objective_id,title,description,acceptance_criteria,task_type,status,owner_agent_id,assigned_agent_id)
         values(project_row.id,objective_id,'Create approved product requirements and implementation plan',
           'Convert the approved proposal into a reviewed specification and engineering backlog.',
-          '["Founder-approved budget is preserved","Requirements and acceptance criteria are recorded","Engineering work is split into reviewable tasks"]'::jsonb,'product','ready',pm_id)
+          '["Founder-approved budget is preserved","Requirements and acceptance criteria are recorded","Engineering work is split into reviewable tasks"]'::jsonb,'product','ready',pm_id,pm_id)
         returning id into first_task_id;
       previous_task_id := first_task_id;
       for stage in select * from (values
@@ -708,9 +708,9 @@ begin
           ('Prepare sales handoff','Create internal lead qualification and sales materials.','["Lead criteria and materials are recorded","No external outreach is sent"]'::jsonb,'sales')
       ) as stage(title,description,acceptance_criteria,owner_slug)
       loop
-        insert into public.tasks(project_id,objective_id,parent_task_id,title,description,acceptance_criteria,task_type,status,owner_agent_id)
+        insert into public.tasks(project_id,objective_id,parent_task_id,title,description,acceptance_criteria,task_type,status,owner_agent_id,assigned_agent_id)
           select project_row.id,objective_id,previous_task_id,stage.title,stage.description,
-            stage.acceptance_criteria,'engineering','backlog',a.id
+            stage.acceptance_criteria,'engineering','backlog',a.id,a.id
           from public.agents a where a.slug=stage.owner_slug returning id into previous_task_id;
       end loop;
       insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)

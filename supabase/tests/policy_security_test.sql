@@ -1,5 +1,5 @@
 begin;
-select plan(46);
+select plan(47);
 
 insert into public.company_settings(key,value,governance_sensitive,updated_by)
 values('founder_telegram_user_id','"12345678"'::jsonb,true,'test')
@@ -67,6 +67,8 @@ select lives_ok($$select public.sutra_founder_decide_approval('12345678',
   (select id from public.approvals where approval_type='project_budget' limit 1),'approve','Proceed')$$,
   'founder can approve only after CFO review');
 select is((select status from public.projects order by created_at desc limit 1),'approved','founder approval activates the proposal');
+select ok(exists(select 1 from public.tasks where task_type='product' and owner_agent_id=assigned_agent_id),
+  'new tasks populate both current and legacy assignee columns');
 select is((select status from public.tasks where task_type='research' order by created_at limit 1),'ready','research becomes executable after approval');
 select is((select count(*)::integer from public.tasks where task_type='engineering' and status='backlog'),7,'engineering through sales handoff tasks are queued');
 select lives_ok($$select public.sutra_update_task((select id from public.agents where slug='product_manager'),
