@@ -342,7 +342,26 @@ class InternalEndpointTests(unittest.TestCase):
         telegram_call.assert_not_called()
 
     def test_github_dispatcher_is_opt_in_and_fails_closed_without_repo_token(self):
-        with patch.dict("os.environ", {"SUTRA_ENABLE_GITHUB_DISPATCHER": "true", "GITHUB_TOKEN": "", "GITHUB_REPOSITORY": ""}, clear=False):
+        with patch.dict("os.environ", {
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "true",
+            "GITHUB_TOKEN": "",
+            "GITHUB_REPOSITORY": "",
+            "GITHUB_WEBHOOK_SECRET": "",
+        }, clear=False):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+        self.assertEqual(app.github_dispatcher_status, "blocked_runtime_configuration")
+        self.assertIsNone(app.github_dispatcher_thread)
+
+    def test_github_dispatcher_requires_task_signing_secret(self):
+        env = {
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "true",
+            "GITHUB_TOKEN": "unit-test-token",
+            "GITHUB_REPOSITORY": "acme/sutra",
+            "GITHUB_WEBHOOK_SECRET": "too-short",
+        }
+        with patch.dict("os.environ", env, clear=False):
             app = SutraApplication()
             app.store = FakeStore()
             app.start()
@@ -362,6 +381,7 @@ class InternalEndpointTests(unittest.TestCase):
             "SUTRA_ENABLE_GITHUB_DISPATCHER": "true",
             "GITHUB_TOKEN": "unit-test-token",
             "GITHUB_REPOSITORY": "acme/sutra",
+            "GITHUB_WEBHOOK_SECRET": "test-only-github-webhook-secret-long-enough",
         }
         with patch.dict("os.environ", env, clear=False), patch("sutra.server.GitHubTaskDispatcher", IdleDispatcher):
             app = SutraApplication()

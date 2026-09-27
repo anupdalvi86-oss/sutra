@@ -3,6 +3,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+from sutra.codex_dispatch import seal_codex_issue_body
 from sutra.github_dispatch import GitHubAPIError, GitHubIssues, GitHubTaskDispatcher
 from sutra.runtime import IntegrationError
 
@@ -17,6 +18,7 @@ TASK = {
     "acceptance_criteria": ["Changes have tests", "No secret is committed"],
     "project_id": "01942c8a-68b1-7c29-bf9b-63f02e973591",
 }
+SIGNING_SECRET = "test-only-github-webhook-secret-long-enough"
 
 
 class Response:
@@ -34,7 +36,7 @@ class Response:
 
 
 class GitHubIssueTests(unittest.TestCase):
-    def test_task_issue_is_created_with_stable_marker_and_no_mentions(self):
+    def test_task_issue_is_created_then_bound_to_signed_issue_number(self):
         calls = []
 
         def fake_urlopen(request, timeout):
@@ -42,41 +44,91 @@ class GitHubIssueTests(unittest.TestCase):
             if request.get_method() == "GET":
                 return Response({"items": []})
             body = json.loads(request.data)
-            self.assertEqual(body["title"], "Sutra: Implement approved API change")
-            self.assertIn(f"<!-- sutra-task-id:{TASK_ID} -->", body["body"])
-            self.assertIn("@\u200brandom-user", body["body"])
-            return Response({"number": 41, "html_url": "https://github.com/acme/sutra/issues/41"})
+            if request.get_method() == "POST":
+                self.assertEqual(body["title"], "Sutra: Implement approved API change")
+                self.assertIn(f"<!-- sutra-task-id:{TASK_ID} -->", body["body"])
+                self.assertIn("@\u200brandom-user", body["body"])
+                self.assertNotIn("sutra-codex-dispatch", body["body"])
+                self.assertIn("/issues", request.full_url)
+                return Response({"number": 41, "html_url": "https://github.com/acme/sutra/issues/41"})
+            self.assertEqual(request.get_method(), "PATCH")
+            signature = f"<!-- sutra-codex-dispatch:v1 task={TASK_ID} number=41 signature="
+            self.assertIn(signature, body["body"])
+            return Response({
+                "number": 41,
+                "html_url": "https://github.com/acme/sutra/issues/41",
+                "title": body["title"] if "title" in body else "Sutra: Implement approved API change",
+                "body": body["body"],
+            })
 
-        client = GitHubIssues("never-logged-token", "acme/sutra")
+        client = GitHubIssues("never-logged-token", "acme/sutra", SIGNING_SECRET)
         with patch("sutra.github_dispatch.urllib.request.urlopen", side_effect=fake_urlopen):
             result = client.create_or_find_issue(TASK)
         self.assertEqual(result, {"number": 41, "url": "https://github.com/acme/sutra/issues/41"})
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertEqual(calls[0].get_header("Authorization"), "Bearer never-logged-token")
         self.assertNotIn("never-logged-token", calls[0].full_url)
 
-    def test_existing_issue_is_reused_after_worker_lease_recovery(self):
+    def test_existing_unsigned_issue_is_sealed_after_worker_lease_recovery(self):
         calls = []
+        client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)
+        unsigned_body = client._issue_body(TASK, TASK_ID)
 
         def fake_urlopen(request, timeout):
             calls.append(request)
-            return Response({"items": [{
+            if request.get_method() == "GET":
+                return Response({"items": [{
+                    "number": 41,
+                    "html_url": "https://github.com/acme/sutra/issues/41",
+                    "title": "Sutra: Implement approved API change",
+                    "body": unsigned_body,
+                }]})
+            self.assertEqual(request.get_method(), "PATCH")
+            body = json.loads(request.data)["body"]
+            self.assertIn("<!-- sutra-codex-dispatch:v1", body)
+            return Response({
                 "number": 41,
                 "html_url": "https://github.com/acme/sutra/issues/41",
-                "body": f"<!-- sutra-task-id:{TASK_ID} -->\nexisting issue",
-            }]})
+                "title": "Sutra: Implement approved API change",
+                "body": body,
+            })
 
         with patch("sutra.github_dispatch.urllib.request.urlopen", side_effect=fake_urlopen):
-            result = GitHubIssues("token", "acme/sutra").create_or_find_issue(TASK)
+            result = client.create_or_find_issue(TASK)
         self.assertEqual(result["number"], 41)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
+
+    def test_existing_signed_issue_is_reused_and_modified_issue_is_rejected(self):
+        client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)
+        unsigned_body = client._issue_body(TASK, TASK_ID)
+        signed_body = seal_codex_issue_body(
+            "acme/sutra", TASK_ID, 41, "Sutra: Implement approved API change", unsigned_body, SIGNING_SECRET
+        )
+        existing = {
+            "number": 41,
+            "html_url": "https://github.com/acme/sutra/issues/41",
+            "title": "Sutra: Implement approved API change",
+            "body": signed_body,
+        }
+        with patch("sutra.github_dispatch.urllib.request.urlopen", return_value=Response({"items": [existing]})) as request:
+            result = client.create_or_find_issue(TASK)
+        self.assertEqual(result["number"], 41)
+        request.assert_called_once()
+
+        existing["body"] += "\nchanged"
+        with patch("sutra.github_dispatch.urllib.request.urlopen", return_value=Response({"items": [existing]})):
+            with self.assertRaises(GitHubAPIError) as caught:
+                client.create_or_find_issue(TASK)
+        self.assertEqual(caught.exception.code, "malformed_github_response")
 
     def test_invalid_repo_and_malformed_issue_response_fail_closed(self):
         with self.assertRaises(ValueError):
-            GitHubIssues("token", "https://github.com/acme/sutra")
+            GitHubIssues("token", "https://github.com/acme/sutra", SIGNING_SECRET)
+        with self.assertRaises(ValueError):
+            GitHubIssues("token", "acme/sutra", "short")
         with patch("sutra.github_dispatch.urllib.request.urlopen", return_value=Response({"items": []})):
             with self.assertRaises(GitHubAPIError):
-                GitHubIssues("token", "acme/sutra").create_or_find_issue({**TASK, "title": ""})
+                GitHubIssues("token", "acme/sutra", SIGNING_SECRET).create_or_find_issue({**TASK, "title": ""})
 
 
 class FakeStore:
