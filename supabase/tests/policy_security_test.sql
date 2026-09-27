@@ -69,7 +69,7 @@ select is((select role from worker_claims),'ceo','CEO receives the first leased 
 select is(public.sutra_claim_agent_run('sutra-worker-abcdefgh')::text,null::text,
   'later department work stays unclaimable until the prior review completes');
 select throws_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
-  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
+  (select run_id from worker_claims),'00000000-0000-4000-8000-000000000099'::uuid,'succeeded',
   '{"summary":"A sufficiently long CEO summary","recommendation":"Proceed","evidence":[]}'::jsonb)$$,
   '42501',null,'a different lease token cannot complete a review');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
