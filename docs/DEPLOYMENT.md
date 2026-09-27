@@ -16,12 +16,12 @@ The current Railway deployment is Hermes-only and remains connected to `praveen-
 
 | Service | Config | Volume | Allowed secrets |
 | --- | --- | --- | --- |
-| Hermes Agent | Root `railway.json`, `Dockerfile` | `/opt/data` | Model provider credentials only |
-| Sutra API | `railway.api.json`, `Dockerfile.api` | None | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_FOUNDER_USER_ID`, `SUTRA_INTERNAL_TOKEN`, `HERMES_HEALTH_URL` |
+| Hermes Agent | Root `railway.json`, `Dockerfile` | `/opt/data` | Model provider credentials; `API_SERVER_KEY` only if its optional API is enabled |
+| Sutra API | `railway.api.json`, `Dockerfile.api` | None | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_FOUNDER_USER_ID`, `SUTRA_INTERNAL_TOKEN`, `HERMES_HEALTH_URL`, `HERMES_AGENT_API_URL`, `HERMES_AGENT_API_KEY` |
 
 Set a random independent `SUTRA_INTERNAL_TOKEN` on the API service. The token protects the narrow private API endpoints; do not give it to the language model. The API must not share the Supabase service-role key with Hermes. Set `SUTRA_ENABLE_TELEGRAM=true` only after the database founder identity matches the intended founder.
 
-The Hermes image pins the inspected upstream digest, preserves the root s6 entrypoint so it can prepare the volume and drop privileges, and starts `gateway run`. Its optional API server stays disabled. Attach the persistent volume to `/opt/data`; restart-on-failure is configured. The Sutra API exposes `/health`, which separately reports database, Telegram, and Hermes integration state. Keep `SUTRA_ENABLE_AGENT_WORKER=false`: the experimental worker does not yet reserve and reconcile each provider call through the database spending policy.
+The Hermes image pins the inspected upstream digest, preserves the root s6 entrypoint so it can prepare the volume and drop privileges, and starts `gateway run`. Its optional API server stays disabled. Attach the persistent volume to `/opt/data`; restart-on-failure is configured. The Sutra API exposes `/health`, which separately reports database, Telegram, and Hermes integration state. Keep `SUTRA_ENABLE_AGENT_WORKER=false`: the experimental worker does not yet reserve and reconcile each provider call through the database spending policy. If enabled later, set `API_SERVER_ENABLED=true` and `API_SERVER_KEY` only on Hermes, then set the matching `HERMES_AGENT_API_KEY` and private `HERMES_AGENT_API_URL` on Sutra API.
 
 For the API Railway service, configure `/health` as the deployment health check. The Hermes container uses the upstream runtime and may not expose a public health endpoint; do not route public traffic to its unauthenticated internal API. Check its Railway logs and upstream gateway status directly.
 
