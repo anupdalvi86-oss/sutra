@@ -4,7 +4,7 @@
 
 1. Install the Supabase CLI and Docker.
 2. For local development, run `supabase start`, `supabase db reset`, `supabase test db`, and `supabase db lint --local --level error`.
-3. Hosted migration history includes the operational foundation (`20260927012437`), agent worker (`20260927025955`), spend ledger (`20260927025959`), founder-controlled model costs (`20260927061227`), spend-gated Hermes worker (`20260927063326`), and GitHub approved-task dispatch (`20260927065915`). The migrations were applied through the authenticated Supabase connector after CI passed. The Supabase CLI is not linked on this workstation; authenticate and compare versions before using `supabase db push` to avoid reapplying them. The project service credential must stay in server-side Railway variables.
+3. Hosted migration history includes the operational foundation (`20260927012437`), agent worker (`20260927025955`), spend ledger (`20260927025959`), founder-controlled model costs (`20260927061227`), spend-gated Hermes worker (`20260927063326`), GitHub approved-task dispatch (`20260927065915`), and signed PR/CI evidence (`20260927072312`). The migrations were applied through the authenticated Supabase connector after CI passed. The Supabase CLI is not linked on this workstation; authenticate and compare versions before using `supabase db push` to avoid reapplying them. The project service credential must stay in server-side Railway variables.
 4. The Supabase organization is on the free plan and the dashboard displays a grace-period warning; no backup/recovery point was visible during rollout. Establish and test a recovery path before future production schema changes.
 5. Confirm the founder Telegram ID, review default policies, and only then enable Telegram founder commands.
 
@@ -12,7 +12,7 @@ Every public company table has RLS enabled. `anon` and `authenticated` have no t
 
 ## Railway services
 
-The current Railway deployment is Hermes-only and remains connected to `praveen-ks-2001/hermes-agent-template`, not this repository. Railway must be granted access to the private Sutra repository in its GitHub integration before it can deploy Sutra. The last observed plan panel was near its `$5` included usage credit (`$1.54` current, `$4.81` estimated); recheck usage and plan before creating a second service:
+The current Railway deployment is Hermes-only and remains connected to `praveen-ks-2001/hermes-agent-template`, not this repository. Railway must be granted access to the private Sutra repository in its GitHub integration before it can deploy Sutra. The latest observed usage is `$1.56` current and `$4.76` estimated against `$5` included usage; do not create another service until no-cost headroom is confirmed:
 
 | Service | Config | Volume | Allowed secrets |
 | --- | --- | --- | --- |
