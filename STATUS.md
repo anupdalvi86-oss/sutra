@@ -32,21 +32,21 @@ Updated: 2026-09-28 (Europe/Stockholm)
 ## Remaining blockers
 
 1. The live Codex/GitHub execution path is not enabled. The private Railway `sutra-api` does not have `OPENAI_API_KEY`, `GITHUB_TOKEN`, or `GITHUB_WEBHOOK_SECRET`; `SUTRA_ENABLE_CODEX_RUNNER` remains false. The user-provided OpenAI key was authorized for the separate Hermes service only, not for transfer to `sutra-api`.
-2. A repo-scoped GitHub token is needed for the runner to read approved issues, push task branches and create PRs. It should have only Metadata read, Contents read/write, Issues read, and Pull requests read/write for this repository.
-3. The GitHub webhook evidence path is not configured. To receive PR and CI events directly, the API would need authenticated HTTPS ingress and a webhook secret; otherwise a private polling integration must be implemented.
+2. A repo-scoped GitHub token is needed for the runner to read approved issues, push task branches, create PRs and poll CI. It should have only Metadata read, Contents read/write, Issues read, Pull requests read/write, and Actions read for this repository.
+3. PR/CI evidence polling is implemented in the current follow-up change but is not active in production until that change is merged and the runner is configured. This keeps the API private; direct webhook ingress is optional.
 4. The current local machine did not have enough Docker disk space for a local Supabase container test. Hosted Supabase pgTAP passed in CI.
 
 ## Credentials / integrations still required
 
 - Authorization to copy the already supplied OpenAI key from Railway service `sutra` to Railway service `sutra-api`, or a separate limited key entered directly into Railway for that service.
 - A fine-grained GitHub token with the repository-only permissions above. Do not reuse or expose the local `gh` credential.
-- A random `GITHUB_WEBHOOK_SECRET` if direct webhook delivery is selected, plus approval to expose the API through HTTPS. A private polling alternative avoids public ingress but still needs the GitHub token.
+- A random `GITHUB_WEBHOOK_SECRET` for signing founder-approved task issues. Direct webhook delivery is optional; the private poller is preferred and needs no public ingress.
 - Keep the Telegram, Supabase and model credentials private. Rotate the keys previously pasted into chat after verification is complete.
 
 ## Recommended next steps
 
 1. Provide/authorize the `sutra-api` OpenAI credential and repository-scoped GitHub token.
-2. Choose direct GitHub webhooks with HTTPS ingress or keep the API private and implement polling for PR/CI evidence.
+2. Merge the private PR/CI polling change and keep the API private.
 3. Set the exact model pricing profile and monthly cap in Supabase, then enable the runner only after its health/readiness checks pass.
 4. Submit one low-cost founder-approved test task, verify the cost reservation and audit trail, and review the resulting PR before any merge.
 5. Verify the full QA/security evidence handoff and release readiness. Keep the €500 product proposal pending founder review; it is separate from engineering execution.

@@ -79,6 +79,28 @@ class GitHubIssues:
                 and isinstance(issue.get("title"), str)
                 and issue["title"].startswith("Sutra: ")]
 
+    def recent_pull_requests(self) -> list[dict[str, Any]]:
+        """Read a bounded window of PR evidence for the private poller."""
+        result = self._request(
+            f"/repos/{self.repository}/pulls?state=all&per_page=100&sort=updated&direction=desc"
+        )
+        if not isinstance(result, list) or len(result) > 100:
+            raise GitHubAPIError("malformed_github_response")
+        return [item for item in result if isinstance(item, dict)]
+
+    def recent_completed_workflows(self) -> list[dict[str, Any]]:
+        """Read only completed CI workflows needed to reconcile PR evidence."""
+        result = self._request(
+            f"/repos/{self.repository}/actions/runs?status=completed&per_page=100"
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("workflow_runs"), list):
+            raise GitHubAPIError("malformed_github_response")
+        runs = result["workflow_runs"]
+        if len(runs) > 100:
+            raise GitHubAPIError("malformed_github_response")
+        return [item for item in runs if isinstance(item, dict)
+                and item.get("name") == "CI" and item.get("status") == "completed"]
+
     def create_pull_request(self, title: str, body: str, head: str,
                             base: str = "main") -> dict[str, Any]:
         if (not isinstance(title, str) or not title.startswith("Sutra: ") or len(title) > 300
