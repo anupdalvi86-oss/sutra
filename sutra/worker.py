@@ -27,6 +27,30 @@ class AgentOutputError(ValueError):
             if message.startswith(("Hermes returned", "Hermes response"))
             else "invalid_agent_artifact"
         )
+        self.failure_detail_code = _safe_failure_detail_code(message)
+
+
+def _safe_failure_detail_code(message: str) -> str:
+    """Map internal validation messages to a small, code-owned diagnostic enum."""
+    if message.startswith("Hermes returned malformed JSON"):
+        return "malformed_json"
+    if message.startswith("Hermes returned no bounded artifact"):
+        return "invalid_response_content"
+    if message.startswith("Hermes response exceeded"):
+        return "response_too_large"
+    if "summary" in message.lower():
+        return "invalid_summary"
+    if "recommendation" in message.lower():
+        return "invalid_recommendation"
+    if "evidence" in message.lower() or "source" in message.lower():
+        return "invalid_evidence"
+    if "acceptance" in message.lower():
+        return "invalid_acceptance_criteria"
+    if "decision" in message.lower():
+        return "invalid_decision"
+    if "artifact" in message.lower() or "contract" in message.lower():
+        return "invalid_artifact_schema"
+    return "invalid_agent_output"
 
 
 ROLE_GUIDANCE = {
@@ -185,6 +209,15 @@ class HermesAgentClient:
                 "Use the exact supplied Developer SHA and direct GitHub PR/Actions links. Passing requires all "
                 "criteria/checks to pass, zero release blockers, and no open high or critical findings."
             )
+        elif role == "product_manager":
+            role_output = (
+                "Return JSON fields summary (the bounded product scope), recommendation, evidence "
+                "(an array of source/url/claim objects), assumptions, risks, milestones, and "
+                "acceptance_criteria. For this role, evidence, milestones, and acceptance_criteria "
+                "are required non-empty arrays of 1-10 concise items. Carry forward the CPO's cited "
+                "sources for material customer and market claims; do not invent findings or treat "
+                "a proposed budget as approved spending."
+            )
         else:
             role_output = (
                 "Return one JSON object with string fields summary and recommendation, an array field "
@@ -244,8 +277,12 @@ class HermesAgentClient:
             content = envelope["choices"][0]["message"]["content"]
             if not isinstance(content, str) or len(content.encode()) > 24_000:
                 raise AgentOutputError("Hermes returned no bounded artifact")
+            content = content.strip()
             if content.startswith("```"):
-                content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE)
+                fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n?(.*?)\r?\n?```", content, flags=re.IGNORECASE | re.DOTALL)
+                if not fenced:
+                    raise AgentOutputError("Hermes returned malformed JSON fencing", usage)
+                content = fenced.group(1).strip()
             result = json.loads(content)
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             raise AgentOutputError("Hermes returned malformed JSON", usage) from exc
@@ -272,8 +309,8 @@ def validate_agent_artifact(role: str, value: Any, run: dict[str, Any] | None = 
         raise AgentOutputError("Artifact recommendation must contain 2 to 5000 characters")
     if not isinstance(evidence, list) or len(evidence) > 10:
         raise AgentOutputError("Artifact evidence must be a bounded list")
-    if role == "cpo" and not evidence:
-        raise AgentOutputError("Product research requires at least one cited evidence item")
+    if role in {"cpo", "product_manager"} and not evidence:
+        raise AgentOutputError("Product planning requires at least one cited evidence item")
     bounded: dict[str, Any] = {"summary": summary.strip(), "recommendation": recommendation.strip(), "evidence": []}
     for item in evidence:
         if not isinstance(item, dict):
@@ -288,9 +325,12 @@ def validate_agent_artifact(role: str, value: Any, run: dict[str, Any] | None = 
         bounded["evidence"].append({"source": source.strip(), "url": url, "claim": claim.strip()})
     for field in ("assumptions", "risks", "milestones", "acceptance_criteria"):
         item = value.get(field, [])
-        if not isinstance(item, list) or len(item) > 20 or any(not isinstance(x, str) or len(x) > 1000 for x in item):
+        if (not isinstance(item, list) or len(item) > 20
+                or any(not isinstance(x, str) or len(x.strip()) > 1000 for x in item)):
             raise AgentOutputError(f"Artifact {field} must be a bounded string list")
-        bounded[field] = item
+        bounded[field] = [entry.strip() for entry in item]
+    if role == "product_manager" and any(not bounded[field] for field in ("milestones", "acceptance_criteria")):
+        raise AgentOutputError("Product plan requires milestones and acceptance criteria")
     if role == "cfo":
         decision = value.get("decision")
         rationale = value.get("decision_rationale")
@@ -531,12 +571,14 @@ class AgentWorker:
                     {
                         "summary": "Hermes artifact failed validation and usage could not be verified",
                         "failure_category": exc.failure_category,
+                        "failure_detail_code": exc.failure_detail_code,
                         "usage_state": "unverified",
                     }, "unknown_or_overrun_spend")
                 return "failed_unknown_spend"
             self.store.complete_agent_run(self.worker_id, run, "retry", {
                 "summary": "Agent output failed schema or evidence validation",
                 "failure_category": exc.failure_category,
+                "failure_detail_code": exc.failure_detail_code,
                 "usage_state": "reconciled",
             }, "invalid_agent_output")
             return "retry"
