@@ -98,7 +98,27 @@ begin
   return jsonb_build_object('updated',true,'provider',p_provider,'model',p_model);
 end $$;
 
+-- The worker calls this profile-derived entry point. Keep the legacy quote RPC
+-- for compatibility, but never let the application choose the reserve amount.
+create function public.sutra_reserve_agent_run_spend_from_profile(
+  p_worker_id text,p_run_id uuid,p_lease_token uuid,p_provider text,p_model text
+) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
+declare profile public.agent_model_spend_profiles%rowtype; reserve_amount numeric(14,2); result jsonb;
+begin
+  select * into profile from public.agent_model_spend_profiles p
+    where p.provider=p_provider and p.model=p_model and p.active;
+  if not found then raise exception 'no active founder-configured price profile for Hermes route' using errcode='23514'; end if;
+  reserve_amount := greatest(0.01,ceil((profile.max_input_tokens*profile.input_eur_per_million_tokens
+    + profile.max_output_tokens*profile.output_eur_per_million_tokens)/10000)/100);
+  result := public.sutra_reserve_agent_run_spend(p_worker_id,p_run_id,p_lease_token,p_provider,p_model,reserve_amount);
+  return result || jsonb_build_object('max_input_tokens',profile.max_input_tokens,
+    'max_output_tokens',profile.max_output_tokens,'input_eur_per_million_tokens',profile.input_eur_per_million_tokens,
+    'output_eur_per_million_tokens',profile.output_eur_per_million_tokens);
+end $$;
+
 revoke all on function public.sutra_snapshot_agent_model_spend_profile() from public,anon,authenticated,service_role;
 revoke all on function public.sutra_validate_agent_model_reconciliation() from public,anon,authenticated,service_role;
 revoke all on function public.sutra_set_agent_model_spend_profile(text,text,text,numeric,numeric,integer,integer,boolean) from public,anon,authenticated;
+revoke all on function public.sutra_reserve_agent_run_spend_from_profile(text,uuid,uuid,text,text) from public,anon,authenticated;
 grant execute on function public.sutra_set_agent_model_spend_profile(text,text,text,numeric,numeric,integer,integer,boolean) to service_role;
+grant execute on function public.sutra_reserve_agent_run_spend_from_profile(text,uuid,uuid,text,text) to service_role;

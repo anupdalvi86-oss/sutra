@@ -77,8 +77,8 @@ create function pg_temp.prepare_agent_run_spend(p_run_id uuid,p_lease_token uuid
 language plpgsql as $$
 declare reservation jsonb; reservation_id uuid; reconciliation jsonb;
 begin
-  reservation := public.sutra_reserve_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,
-    'openai','gpt-4o-mini',11);
+  reservation := public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',p_run_id,p_lease_token,
+    'openai','gpt-4o-mini');
   if reservation->>'status' <> 'approved' then raise exception 'test reservation unexpectedly needs approval'; end if;
   reservation_id := (reservation->>'reservation_id')::uuid;
   perform public.sutra_begin_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id);
@@ -89,11 +89,14 @@ end;
 $$;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+select throws_ok($$select public.sutra_reserve_agent_run_spend('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini',0.01)$$,
+  '42501',null,'worker cannot underquote the database-calculated maximum model cost');
 select is((select role from worker_claims),'ceo','CEO receives the first leased review run');
 select is(public.sutra_claim_agent_run('sutra-worker-abcdefgh')::text,null::text,
   'later department work stays unclaimable until the prior review completes');
-insert into worker_spend_decision select public.sutra_reserve_agent_run_spend('sutra-worker-12345678',
-  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini',11);
+insert into worker_spend_decision select public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini');
 select is((select payload->>'status' from worker_spend_decision),'requested',
   'model spend above €10 follows the configured approval tier');
 select is((select status from public.agent_runs where id=(select run_id from worker_claims)),'blocked',
