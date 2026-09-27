@@ -58,8 +58,8 @@ select ok(exists(select 1 from founder_approval_queue_test
   'founder approval queue includes a bounded summary');
 select ok(exists(select 1 from founder_approval_queue_test where (item->>'amount')::numeric=500 and item->>'currency'='EUR'),
   'founder approval queue shows the requested amount and currency');
-select ok(exists(select 1 from founder_approval_queue_test where item->'pending_roles'='["cfo"]'::jsonb),
-  'founder approval queue reports the outstanding CFO review');
+select ok(exists(select 1 from founder_approval_queue_test where item->'pending_roles'='["cfo","product_manager"]'::jsonb),
+  'founder approval queue reports CFO and PM reviews still outstanding');
 select ok(exists(select 1 from founder_approval_queue_test where item->>'ready'='false'),
   'founder approval queue marks the request as not ready for founder approval');
 select ok(exists(select 1 from public.audit_log where actor_type='founder' and actor_id='12345678'
@@ -252,6 +252,9 @@ select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678'
   'CFO artifact records role approval without resolving founder approval');
 select is((select status from public.approvals where approval_type='project_budget' limit 1),'pending',
   'CFO approval leaves founder approval pending');
+select ok(exists(select 1 from jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') item
+  where item->>'ready'='false' and item->'pending_roles'='["product_manager"]'::jsonb),
+  'founder queue remains blocked until the product manager plan succeeds');
 select throws_ok($$select public.sutra_founder_decide_approval('12345678',
   (select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
   '42501',null,'founder approval also waits for the PM review');
@@ -310,6 +313,9 @@ select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678'
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long PM summary","recommendation":"Founder review is ready","evidence":[],"milestones":["Discovery"]}'::jsonb)$$,
   'second PM attempt stores its artifact after spend reconciliation');
+select ok(exists(select 1 from jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') item
+  where item->>'ready'='true' and item->'pending_roles'='[]'::jsonb),
+  'founder queue becomes ready after all department and PM reviews succeed');
 select lives_ok($$select public.sutra_founder_decide_approval('12345678',
   (select id from public.approvals where approval_type='project_budget' limit 1),'approve','Proceed')$$,
   'founder can approve only after CEO, Product, CTO, CFO, and PM reviews');
