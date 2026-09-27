@@ -140,7 +140,7 @@ begin
           or not coalesce(entry.value->>'status'=any(array['open','mitigated','accepted']::text[]),false)
           or length(trim(coalesce(entry.value->>'summary',''))) not between 1 and 1000
           or length(trim(coalesce(entry.value->>'owner',''))) not between 1 and 200
-          or length(trim(coalesce(entry.value->>'remediation',''))) not between 1 and 1000)) then
+          or length(trim(coalesce(entry.value->>'remediation',''))) not between 1 and 1000) then
       raise exception 'Security evidence requires bounded checks, findings, owners, and remediation' using errcode='22023';
     end if;
     if p_evidence->>'result'='pass' and (
