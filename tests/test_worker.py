@@ -259,8 +259,24 @@ class AgentArtifactTests(unittest.TestCase):
             "sutra-worker-12345678", claimed_run("cpo"), "reservation-1", "openai", "gpt-4o-mini", None)
         store.complete_agent_run.assert_called_once_with(
             "sutra-worker-12345678", claimed_run("cpo"), "failed",
-            {"summary": "Hermes artifact was invalid and usage could not be verified"}, "unknown_or_overrun_spend",
+            {
+                "summary": "Hermes artifact failed validation and usage could not be verified",
+                "failure_category": "invalid_agent_artifact",
+                "usage_state": "unverified",
+            }, "unknown_or_overrun_spend",
         )
+
+    def test_invalid_hermes_response_records_only_a_safe_failure_category(self):
+        store = self.approved_store("cpo")
+        hermes = Mock()
+        hermes.review.side_effect = AgentOutputError("Hermes returned malformed JSON including untrusted response")
+        worker = AgentWorker(store, hermes, "openai", "gpt-4o-mini", worker_id="sutra-worker-12345678")
+
+        self.assertEqual(worker.run_once(), "failed_unknown_spend")
+        output = store.complete_agent_run.call_args.args[3]
+        self.assertEqual(output["failure_category"], "invalid_hermes_response")
+        self.assertEqual(output["usage_state"], "unverified")
+        self.assertNotIn("untrusted response", str(output))
 
     def test_unavailable_hermes_retains_reserve_and_fails_run(self):
         store = self.approved_store()
