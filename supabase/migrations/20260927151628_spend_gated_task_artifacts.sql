@@ -345,17 +345,17 @@ begin
     raise exception 'task acceptance criteria and evidence must be arrays' using errcode='22023';
   end if;
   if jsonb_array_length(p_output->'task_acceptance')<>jsonb_array_length(task_row.acceptance_criteria)
-    or exists(select 1 from jsonb_array_elements(p_output->'task_acceptance') entries(item)
-      where jsonb_typeof(item)<>'object' or jsonb_typeof(item->'criterion') is distinct from 'string'
-        or jsonb_typeof(item->'evidence') is distinct from 'string'
-        or length(trim(item->>'evidence')) not between 8 and 1000
+    or exists(select 1 from jsonb_array_elements(p_output->'task_acceptance') as entries(entry)
+      where jsonb_typeof(entries.entry)<>'object' or jsonb_typeof(entries.entry->'criterion') is distinct from 'string'
+        or jsonb_typeof(entries.entry->'evidence') is distinct from 'string'
+        or length(trim(entries.entry->>'evidence')) not between 8 and 1000
         or not exists(select 1 from jsonb_array_elements_text(task_row.acceptance_criteria) expected(value)
-          where expected.value=item->>'criterion'))
-    or exists(select item->>'criterion' from jsonb_array_elements(p_output->'task_acceptance') entries(item)
-      group by item->>'criterion' having count(*)>1)
+          where expected.value=entries.entry->>'criterion'))
+    or exists(select entries.entry->>'criterion' from jsonb_array_elements(p_output->'task_acceptance') as entries(entry)
+      group by entries.entry->>'criterion' having count(*)>1)
     or exists(select value from jsonb_array_elements_text(task_row.acceptance_criteria) expected(value)
-      where not exists(select 1 from jsonb_array_elements(p_output->'task_acceptance') entries(item)
-        where item->>'criterion'=expected.value)) then
+      where not exists(select 1 from jsonb_array_elements(p_output->'task_acceptance') as entries(entry)
+        where entries.entry->>'criterion'=expected.value)) then
     raise exception 'task artifact must address every assigned acceptance criterion exactly once' using errcode='22023';
   end if;
   if not public.sutra_validate_task_artifact(agent_row.slug,p_output->'artifact') then
