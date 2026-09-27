@@ -33,7 +33,7 @@ select is((public.sutra_submit_proposal('12345678','AI QA opportunity','Investig
   'pending_founder_approval','valid founder proposal is persisted with approvals');
 select ok(exists(select 1 from public.agent_runs where trigger_type='founder_proposal' and status='queued'),'workflow roles receive durable queued runs');
 select ok(exists(select 1 from public.tasks where task_type='research' and status='blocked'),'execution work stays blocked before founder approval');
-select throws_ok($$select public.sutra_founder_decide_approval('12345678',(select id from public.approvals order by created_at desc limit 1),'approve','')$$,
+select throws_ok($$select public.sutra_founder_decide_approval('12345678',(select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
   '42501',null,'founder approval cannot skip the required CFO decision');
 
 select throws_ok($$update public.spending_policies set required_approvers='{}' where name='founder_200_and_over'$$,
@@ -60,11 +60,11 @@ reset role;
 set local role service_role;
 select throws_ok($$select public.sutra_authorize_spend('system','test',null,(select id from public.projects order by created_at desc limit 1),null,'ai_api',null,'premature spend',5,'EUR')$$,
   '42501',null,'spending against a proposed project is blocked');
-select lives_ok($$select public.sutra_decide_role_approval((select id from public.approvals order by created_at desc limit 1),
+select lives_ok($$select public.sutra_decide_role_approval((select id from public.approvals where approval_type='project_budget' limit 1),
   (select id::text from public.agents where slug='cfo'),'cfo','approve','Budget reviewed')$$,
   'CFO can record the required budget review');
 select lives_ok($$select public.sutra_founder_decide_approval('12345678',
-  (select id from public.approvals order by created_at desc limit 1),'approve','Proceed')$$,
+  (select id from public.approvals where approval_type='project_budget' limit 1),'approve','Proceed')$$,
   'founder can approve only after CFO review');
 select is((select status from public.projects order by created_at desc limit 1),'approved','founder approval activates the proposal');
 select is((select status from public.tasks where task_type='research' order by created_at limit 1),'ready','research becomes executable after approval');
