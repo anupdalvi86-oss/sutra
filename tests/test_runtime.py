@@ -9,6 +9,7 @@ from sutra.runtime import (
     SupabaseREST,
     parse_founder_command,
     proposal_name,
+    render_status_brief,
     telegram_poll_loop,
     validate_outbound_request,
 )
@@ -28,8 +29,9 @@ def status_fixture():
         "approvals": [{"id": APPROVAL, "project_id": "project-1", "summary": "Approval waiting for CFO",
                         "amount": 500, "currency": "EUR", "status": "pending",
                         "required_roles": ["cfo", "founder"], "decisions": {"cfo": {"decision": "approve"}}}],
-        "agent_runs": [{"task_id": "task-1", "status": "failed",
-                        "output": {"error_code": "unknown_or_overrun_spend", "failure_detail_code": "invalid_evidence"}}],
+        "agent_runs": [{"task_id": "task-1", "status": "blocked", "output": {}},
+                        {"task_id": "task-1", "status": "failed",
+                         "output": {"error_code": "unknown_or_overrun_spend", "failure_detail_code": "invalid_evidence"}}],
         "agents": [{"id": "ceo-id", "slug": "ceo", "display_name": "Chief Executive", "department_id": "executive-dept"},
                    {"id": "cfo-id", "slug": "cfo", "display_name": "Chief Financial Officer", "department_id": "finance-dept"},
                    {"id": "pm-id", "slug": "product_manager", "display_name": "Product Manager", "department_id": "product-dept"}],
@@ -51,7 +53,7 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("CEO operating brief — board update", reply)
         self.assertIn("AI QA opportunity — approved", reply)
         self.assertIn("1 tasks — 0 backlog, 0 ready, 0 in progress, 0 in review, 1 blocked", reply)
-        self.assertIn("latest run: unknown_or_overrun_spend / invalid_evidence", reply)
+        self.assertIn("model usage could not be verified within its reservation", reply)
         self.assertIn("Approval waiting for CFO", reply)
         self.assertIn("company / * / monthly: EUR 8.0", reply)
         self.store.company_status.assert_called_once_with()
@@ -68,6 +70,13 @@ class FounderCommandTests(unittest.TestCase):
                                ("QA", "qa"), ("CMO", "cmo"), ("Governance", "governance")):
             with self.subTest(role=role):
                 self.assertEqual(parse_founder_command(f"{role}, give me status").status_role, expected)
+
+    def test_blocker_without_any_run_is_reported_as_missing_execution_evidence(self):
+        snapshot = status_fixture()
+        snapshot["tasks"].append({"id": "task-without-run", "title": "Unstarted review", "status": "blocked",
+                                  "project_id": "project-1", "owner_agent_id": "cpo-id"})
+        reply = render_status_brief(snapshot)
+        self.assertIn("no execution run is linked to this task", reply)
 
     def test_status_database_failure_returns_a_clear_fail_closed_reply(self):
         self.store.company_status.side_effect = IntegrationError("unavailable")

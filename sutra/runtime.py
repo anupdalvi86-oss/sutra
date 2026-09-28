@@ -515,8 +515,17 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     runs_by_task: dict[str, dict[str, Any]] = {}
     for run in snapshot["agent_runs"]:
         task_id = run.get("task_id")
-        if task_id and str(task_id) not in runs_by_task:
-            runs_by_task[str(task_id)] = run
+        if not task_id:
+            continue
+        run_key = str(task_id)
+        output = run.get("output") if isinstance(run.get("output"), dict) else {}
+        has_failure_detail = bool(output.get("error_code") or output.get("failure_detail_code"))
+        current_output = runs_by_task.get(run_key, {}).get("output")
+        current_has_failure_detail = isinstance(current_output, dict) and bool(
+            current_output.get("error_code") or current_output.get("failure_detail_code")
+        )
+        if run_key not in runs_by_task or (has_failure_detail and not current_has_failure_detail):
+            runs_by_task[run_key] = run
     agents = {str(row.get("id")): row for row in snapshot["agents"]}
     departments = {str(row.get("id")): row for row in snapshot["departments"]}
     target_agent = next((row for row in agents.values() if row.get("slug") == agent_slug), None)
@@ -576,7 +585,19 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         detail_code = output.get("failure_detail_code")
         cause_parts = [str(code)[:48] for code in (error_code, detail_code)
                        if isinstance(code, str) and re.fullmatch(r"[a-z0-9_:-]{1,48}", code)]
-        cause = f"; latest run: {' / '.join(cause_parts)}" if cause_parts else "; blocker detail is not recorded in the latest run"
+        if "unknown_or_overrun_spend" in cause_parts or "unknown_spend" in cause_parts:
+            explanation = "model usage could not be verified within its reservation, so the run stopped under the spend controls"
+        elif "invalid_evidence" in cause_parts:
+            explanation = "the agent output failed evidence validation; research claims need source, URL and claim evidence"
+        elif "invalid_artifact_schema" in cause_parts or "invalid_agent_output" in cause_parts:
+            explanation = "the agent output did not match the required artifact schema"
+        elif cause_parts:
+            explanation = "latest failed run recorded " + " / ".join(cause_parts)
+        elif run:
+            explanation = "the task is blocked, but its run did not persist a specific failure reason"
+        else:
+            explanation = "no execution run is linked to this task, so there is no recorded completion or blocker evidence"
+        cause = "; " + explanation
         lines.append(f"• {title} — owned by {owner}{cause}.")
     lines.extend(["", "Approvals requiring attention"])
     if not scoped_approvals:
