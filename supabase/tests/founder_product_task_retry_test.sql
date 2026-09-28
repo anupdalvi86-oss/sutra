@@ -49,6 +49,7 @@ begin
 end;
 $$;
 
+grant select on retry_fixture to service_role;
 set local role service_role;
 select throws_ok($$select public.sutra_founder_retry_product_task_artifact('99999999',(select task_id from retry_fixture))$$,
   '42501',null,'nonfounder cannot retry an approved product task');
