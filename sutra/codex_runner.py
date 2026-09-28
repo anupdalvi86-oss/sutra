@@ -189,6 +189,29 @@ class CodexTaskRunner:
         })
         return env
 
+    @staticmethod
+    def _write_metered_provider_config(codex_home: str, proxy_url: str) -> None:
+        """Pin Codex to Sutra's local Responses proxy instead of the public API."""
+        match = re.fullmatch(
+            r"http://(?:127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})/v1", proxy_url
+        ) if isinstance(proxy_url, str) else None
+        if not match or int(match.group(1)) > 65535:
+            raise ValueError("Codex metering proxy URL must be loopback-only")
+        config_path = Path(codex_home) / "config.toml"
+        config_path.write_text(
+            'model_provider = "sutra_metered"\n'
+            '[model_providers.sutra_metered]\n'
+            'name = "Sutra metered Responses proxy"\n'
+            f'base_url = {json.dumps(proxy_url)}\n'
+            'env_key = "OPENAI_API_KEY"\n'
+            'wire_api = "responses"\n'
+            'supports_websockets = false\n'
+            'request_max_retries = 0\n'
+            'stream_max_retries = 0\n',
+            encoding="utf-8",
+        )
+        os.chmod(config_path, 0o600)
+
     def _execute(self, issue: dict[str, Any], authorized: dict[str, Any]) -> None:
         required = ("run_id", "lease_token", "max_input_tokens", "max_output_tokens")
         if any(key not in authorized for key in required):
@@ -235,6 +258,7 @@ class CodexTaskRunner:
                 self.store, self.worker_id, run_id, lease_token, self.model,
                 input_limit, output_limit, self.openai_api_key,
             ) as proxy:
+                self._write_metered_provider_config(codex_home, proxy.base_url)
                 codex_env["OPENAI_BASE_URL"] = proxy.base_url
                 command = [self.codex_binary, "exec", "--json", "--ephemeral",
                            "--sandbox", "workspace-write", "-c", 'approval_policy="never"',
