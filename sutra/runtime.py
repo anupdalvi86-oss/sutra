@@ -704,15 +704,24 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         amount = project.get("requested_budget")
         currency = str(project.get("currency") or "EUR")[:3]
         budget = f"; requested ceiling {currency} {amount}" if isinstance(amount, (int, float)) else ""
-        lines.append(f"• {name} — {status_text}{budget}")
-    lines.extend(["", "Task execution"])
-    visible_tasks = [t for t in scoped_tasks if t.get("status") in {"ready", "in_progress", "review", "blocked"}]
+        owner = agents.get(str(project.get("owner_agent_id")), {}).get("display_name", "Unassigned")
+        lines.append(f"• {name} — {status_text}; owner {owner}{budget}")
+    if len(scoped_projects) > 8:
+        lines.append(f"• {len(scoped_projects) - 8} more projects omitted; see the Supabase project list.")
+    lines.extend(["", "Open tasks"])
+    status_order = {"blocked": 0, "in_progress": 1, "review": 2, "ready": 3, "backlog": 4}
+    visible_tasks = sorted(
+        (task for task in scoped_tasks if task.get("status") in status_order),
+        key=lambda task: (status_order.get(task.get("status"), 5), str(task.get("updated_at") or "")),
+    )
     if not visible_tasks:
-        lines.append("• No execution-stage tasks recorded.")
-    for task in visible_tasks[:8]:
+        lines.append("• No open tasks recorded in this scope.")
+    for task in visible_tasks[:12]:
         owner = agents.get(str(task.get("owner_agent_id")), {}).get("display_name", "Unassigned")
-        title = re.sub(r"\s+", " ", str(task.get("title") or "Untitled task"))[:100]
+        title = re.sub(r"\s+", " ", str(task.get("title") or "Untitled task"))[:84]
         lines.append(f"• [{task.get('status', 'unknown')}] {title} — {owner}")
+    if len(visible_tasks) > 12:
+        lines.append(f"• {len(visible_tasks) - 12} more open tasks omitted; see the Supabase task list.")
     failed_codex_tasks = []
     for task in scoped_tasks:
         run = runs_by_task.get(str(task.get("id")), {})
