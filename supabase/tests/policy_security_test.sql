@@ -463,6 +463,18 @@ select ok(exists(select 1 from public.audit_log where action='developer.scope.ap
   'founder scope decision is audit logged against the task');
 select throws_ok($$select public.sutra_claim_github_task('bad-worker')$$,
   '22023',null,'GitHub task dispatch requires a bounded worker identity');
+select ok(position('github_permission_denied' in pg_get_constraintdef(
+  (select oid from pg_constraint where conname='github_task_dispatches_last_error_check'
+    and conrelid='public.github_task_dispatches'::regclass))) > 0,
+  'GitHub permission failures are persisted only as an allowlisted error category');
+select ok(position('github_permission_denied' in pg_get_functiondef(
+  'public.sutra_fail_github_task_dispatch(text,uuid,uuid,text)'::regprocedure)) > 0,
+  'dispatch failure RPC accepts the safe GitHub permission category');
+select ok(has_function_privilege('service_role','public.sutra_company_github_dispatch_status()','execute'),
+  'the company status API can read safe dispatch health through its RPC');
+select ok(not has_function_privilege('anon','public.sutra_company_github_dispatch_status()','execute')
+  and not has_function_privilege('authenticated','public.sutra_company_github_dispatch_status()','execute'),
+  'dispatch health is not exposed to client database roles');
 select throws_ok($$select * from public.github_task_dispatches$$,
   '42501',null,'service role cannot read GitHub issue state outside audited RPCs');
 select throws_ok($$select * from public.task_agent_artifacts$$,

@@ -19,6 +19,7 @@ from .runtime import IntegrationError, open_outbound_request
 logger = logging.getLogger(__name__)
 _PERSISTABLE_GITHUB_ERROR_CODES = frozenset({
     "github_api_error",
+    "github_permission_denied",
     "github_network_error",
     "github_rate_limited",
     "malformed_github_response",
