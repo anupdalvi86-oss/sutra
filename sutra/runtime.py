@@ -281,6 +281,7 @@ AGENT_REVIEW_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+agent\s+review\
 PRODUCT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 ARCHITECT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+architect\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 GITHUB_DISPATCH_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+github\s+dispatch\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
+CODEX_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+codex\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 STATUS_ROLE_RE = re.compile(r"^\s*(ceo|cto|cpo|cfo|coo|product manager|pm|architect|developer|qa|security|devops|cmo|marketing|sales|governance|audit)[, :]\s*(?:give me|show me|provide)?\s*(?:the\s+)?(?:company\s+)?(?:department\s+)?status(?:\s+report)?\s*[?.!]*\s*$", re.IGNORECASE)
 STATUS_ROLES = {
     "ceo": ("CEO", None), "cto": ("CTO", "cto"), "cpo": ("CPO", "cpo"),
@@ -334,6 +335,13 @@ def parse_founder_command(text: str) -> FounderCommand:
         except ValueError as exc:
             raise ValueError("GitHub dispatch retry needs a valid task ID") from exc
         return FounderCommand("retry_github_dispatch", text.strip(), task_id=task_id)
+    match = CODEX_TASK_RETRY_RE.fullmatch(text)
+    if match:
+        try:
+            task_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Codex retry needs a valid task ID") from exc
+        return FounderCommand("retry_codex_task", text.strip(), task_id=task_id)
     lowered = text.lower()
     if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
         return FounderCommand("approvals", text.strip())
@@ -526,6 +534,23 @@ class FounderCommandRouter:
                 f"GitHub issue dispatch queued (founder retry {retry_number}/3). The existing founder-approved task scope is unchanged; "
                 "this grants no spending, merge, or release authority."
             )
+        if command.kind == "retry_codex_task":
+            try:
+                result = self.store.rpc("sutra_founder_retry_codex_task_execution", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_task_id": command.task_id,
+                })
+            except IntegrationError:
+                return FounderResponse(
+                    "Codex was not retried. The founder retry requires the same approved Developer task and scope, no open PR, zero model requests/usage, an unknown prior reservation, and retry capacity."
+                )
+            if result.get("status") == "awaiting_approval":
+                return FounderResponse(
+                    f"Codex retry is waiting for model-spend approval: {result.get('approval_id')}. The old unknown reservation remains preserved."
+                )
+            return FounderResponse(
+                f"Codex retry queued (attempt {result.get('retry_number')}). The previous unknown reservation remains preserved; a fresh capped reservation was requested. No project spending, merge, or release authority was added."
+            )
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
@@ -534,6 +559,7 @@ class FounderCommandRouter:
             "Use: retry PM task <task-id> for a bounded failed product-plan task.\n"
             "Use: retry Architect task <task-id> for a bounded failed architecture task.\n"
             "Use: retry GitHub dispatch <task-id> after fixing a GitHub permission failure.\n"
+            "Use: retry Codex task <task-id> after a verified no-request runner failure.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
