@@ -17,6 +17,12 @@ from .codex_dispatch import seal_codex_issue_body
 from .runtime import IntegrationError, open_outbound_request
 
 logger = logging.getLogger(__name__)
+_PERSISTABLE_GITHUB_ERROR_CODES = frozenset({
+    "github_api_error",
+    "github_network_error",
+    "github_rate_limited",
+    "malformed_github_response",
+})
 
 
 class GitHubAPIError(IntegrationError):
@@ -218,7 +224,12 @@ class GitHubIssues:
         safe_title = self._safe_markdown(title.strip())
         issue_title = f"Sutra: {safe_title}"
         unsigned_body = self._issue_body(task, task_id)
+        logger.warning("github_task_issue_lookup_started task_id=%s", task_id)
         existing = self._existing_issue(task_id)
+        logger.warning(
+            "github_task_issue_lookup_completed task_id=%s issue_number=%s",
+            task_id, existing["number"] if existing else "none",
+        )
         if existing:
             existing_signed_body = seal_codex_issue_body(
                 self.repository, task_id, existing["number"], issue_title,
@@ -230,6 +241,7 @@ class GitHubIssues:
                 raise GitHubAPIError("malformed_github_response")
             result = existing
         else:
+            logger.warning("github_task_issue_create_started task_id=%s", task_id)
             result = self._request(
                 f"/repos/{self.repository}/issues",
                 "POST",
@@ -247,7 +259,9 @@ class GitHubIssues:
             self.repository, task_id, number, issue_title, unsigned_body, self.task_signing_secret
         )
         if existing and existing["body"] == signed_body:
+            logger.warning("github_task_issue_already_signed task_id=%s issue_number=%s", task_id, number)
             return {"number": number, "url": url}
+        logger.warning("github_task_issue_sign_started task_id=%s issue_number=%s", task_id, number)
         updated = self._request(
             f"/repos/{self.repository}/issues/{number}", "PATCH", {"body": signed_body}
         )
@@ -255,6 +269,7 @@ class GitHubIssues:
                 or updated.get("title") != issue_title or updated.get("body") != signed_body
                 or updated.get("html_url") != url):
             raise GitHubAPIError("malformed_github_response")
+        logger.warning("github_task_issue_sign_completed task_id=%s issue_number=%s", task_id, number)
         return {"number": number, "url": url}
 
 
@@ -276,25 +291,29 @@ class GitHubTaskDispatcher:
         if not isinstance(task_id, str) or not isinstance(lease_token, str):
             raise IntegrationError("Supabase returned a malformed GitHub task lease")
         started = time.monotonic()
-        logger.info("github_task_dispatch_started task_id=%s", task_id)
+        logger.warning("github_task_dispatch_started task_id=%s", task_id)
         try:
             issue = self.issues.create_or_find_issue(task)
-            logger.info(
+            logger.warning(
                 "github_task_issue_ready task_id=%s issue_number=%s elapsed_ms=%d",
                 task_id, issue["number"], int((time.monotonic() - started) * 1000),
             )
+            logger.warning("github_task_completion_record_started task_id=%s", task_id)
             self.store.complete_github_task(self.worker_id, task_id, lease_token, issue["number"], issue["url"])
-            logger.info(
+            logger.warning(
                 "github_task_dispatch_completed task_id=%s issue_number=%s elapsed_ms=%d",
                 task_id, issue["number"], int((time.monotonic() - started) * 1000),
             )
         except GitHubAPIError as exc:
+            persisted_error_code = (
+                exc.code if exc.code in _PERSISTABLE_GITHUB_ERROR_CODES else "github_api_error"
+            )
             logger.warning(
-                "github_task_dispatch_github_failed task_id=%s error_code=%s elapsed_ms=%d",
-                task_id, exc.code, int((time.monotonic() - started) * 1000),
+                "github_task_dispatch_github_failed task_id=%s error_code=%s persisted_error_code=%s elapsed_ms=%d",
+                task_id, exc.code, persisted_error_code, int((time.monotonic() - started) * 1000),
             )
             try:
-                self.store.fail_github_task(self.worker_id, task_id, lease_token, exc.code)
+                self.store.fail_github_task(self.worker_id, task_id, lease_token, persisted_error_code)
             except IntegrationError as store_error:
                 logger.warning(
                     "github_task_dispatch_failure_record_failed task_id=%s error_type=%s",
