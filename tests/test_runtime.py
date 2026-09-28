@@ -257,6 +257,41 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("GitHub dispatch was not retried", reply)
         self.store.rpc.assert_called_once()
 
+    def test_founder_can_request_verified_no_request_codex_retry(self):
+        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "queued", "retry_number": 1}
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry Codex task {APPROVAL}").text
+        self.assertIn("Codex retry queued (attempt 1)", reply)
+        self.assertIn("previous unknown reservation remains preserved", reply)
+        self.assertIn("No project spending, merge, or release authority", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_retry_codex_task_execution", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_task_id": APPROVAL,
+        })
+
+    def test_codex_retry_approval_is_reported_without_launching(self):
+        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "awaiting_approval", "approval_id": APPROVAL}
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry Codex task {APPROVAL}").text
+        self.assertIn(f"waiting for model-spend approval: {APPROVAL}", reply)
+        self.store.rpc.assert_called_once()
+
+    def test_codex_retry_rejects_wrong_founder_or_group_chat(self):
+        for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):
+            with self.subTest(user_id=user_id, chat_id=chat_id):
+                reply = self.router.handle(user_id, chat_id, f"retry Codex task {APPROVAL}").text
+                self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+    def test_codex_retry_rejects_malformed_task_id(self):
+        self.assertEqual(parse_founder_command("retry Codex task not-a-uuid").kind, "unsupported")
+        self.router.handle(FOUNDER, FOUNDER, "retry Codex task 00000000-0000-4000-8000-00000000000z")
+        self.store.rpc.assert_not_called()
+
+    def test_codex_retry_database_rejection_is_fail_closed(self):
+        self.store.rpc.side_effect = IntegrationError("not eligible")
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry Codex task {APPROVAL}").text
+        self.assertIn("Codex was not retried", reply)
+        self.store.rpc.assert_called_once()
+
     def test_founder_can_request_bounded_early_review_retry(self):
         self.store.rpc.return_value = {"run_id": APPROVAL, "status": "queued", "review_role": "cpo"}
         reply = self.router.handle(FOUNDER, FOUNDER, f"retry agent review {APPROVAL}").text
