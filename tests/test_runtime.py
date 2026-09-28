@@ -70,6 +70,20 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("GitHub rejected the issue write using the configured repository token; verify its Issues write permission is active", reply)
         self.assertIn("attempt 3/3", reply)
 
+    def test_company_status_surfaces_metered_codex_process_failure(self):
+        snapshot = status_fixture()
+        snapshot["tasks"].append({"id": "codex-task", "title": "Implement approved task",
+                                  "status": "in_progress", "project_id": "project-1",
+                                  "owner_agent_id": "pm-id"})
+        snapshot["agent_runs"].append({"task_id": "codex-task", "status": "failed",
+                                       "output": {"error_code": "codex_process_failed",
+                                                  "process_exit_code": 1,
+                                                  "codex_execution_status": "reconciled"}})
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("Codex execution failed (Codex exit code 1)", reply)
+        self.assertIn("usage was reconciled and no PR was produced", reply)
+        self.assertIn("No automatic retry is queued", reply)
+
     def test_delivery_health_is_scoped_to_company_and_engineering_roles(self):
         snapshot = status_fixture()
         snapshot["github_dispatches"] = [{
@@ -546,7 +560,7 @@ class TaskReviewStoreTests(unittest.TestCase):
         worker_id, run_id, lease = "sutra-worker-12345678", "run-id", "lease-id"
         store.codex_start_request(worker_id, run_id, lease, "gpt-6-luna", 500, 128)
         store.codex_record_usage(worker_id, run_id, lease, 120, 40)
-        store.codex_finish_run(worker_id, run_id, lease, True)
+        store.codex_finish_run(worker_id, run_id, lease, True, True, 0)
         store.claim_codex_execution(worker_id, run_id, lease)
         self.assertEqual(store.rpc.call_args_list[0].args, ("sutra_codex_start_request", {
             "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,
@@ -558,7 +572,7 @@ class TaskReviewStoreTests(unittest.TestCase):
         }))
         self.assertEqual(store.rpc.call_args_list[2].args, ("sutra_codex_finish_run", {
             "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,
-            "p_success": True,
+            "p_usage_trusted": True, "p_process_succeeded": True, "p_process_exit_code": 0,
         }))
         self.assertEqual(store.rpc.call_args_list[3].args, ("sutra_claim_codex_execution", {
             "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,

@@ -265,6 +265,8 @@ class CodexTaskRunner:
                            "--model", self.model, "--cd", worktree, self._task_prompt(issue)]
                 stdout_path = os.path.join(temp_dir, "codex-events.jsonl")
                 stderr_path = os.path.join(temp_dir, "codex-errors.log")
+                process_exit_code = None
+                codex_succeeded = False
                 try:
                     with open(stdout_path, "wb") as stdout_file, open(stderr_path, "wb") as stderr_file:
                         process = subprocess.run(
@@ -273,6 +275,7 @@ class CodexTaskRunner:
                             check=False,
                         )
                     codex_succeeded = process.returncode == 0 and proxy.saw_usage and not proxy.uncertain
+                    process_exit_code = process.returncode
                     if not codex_succeeded:
                         logger.warning(
                             "codex_process_incomplete return_code=%s usage_recorded=%s usage_uncertain=%s",
@@ -282,12 +285,12 @@ class CodexTaskRunner:
                     logger.warning("codex_process_unavailable error_type=%s", type(exc).__name__)
                     codex_succeeded = False
                 finally:
-                    if proxy.saw_usage and not proxy.uncertain:
-                        self.store.codex_finish_run(self.worker_id, run_id, lease_token, True)
-                        finished = True
-                    else:
-                        self.store.codex_finish_run(self.worker_id, run_id, lease_token, False)
-                        finished = True
+                    usage_trusted = proxy.saw_usage and not proxy.uncertain
+                    self.store.codex_finish_run(
+                        self.worker_id, run_id, lease_token, usage_trusted,
+                        codex_succeeded, process_exit_code,
+                    )
+                    finished = True
             if not finished or not codex_succeeded:
                 return
 
