@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 from sutra.codex_dispatch import seal_codex_issue_body
 from sutra.codex_runner import CodexTaskRunner
-from sutra.github_dispatch import GitHubIssues
+from sutra.github_dispatch import GitHubAPIError, GitHubIssues
 
 
 REPOSITORY = "anupdalvi86-oss/sutra"
@@ -80,6 +80,15 @@ class CodexRunnerIssueTests(unittest.TestCase):
         self.assertEqual(len(captured.records), 1)
         self.assertEqual(captured.records[0].getMessage(),
                          f"codex_task_authorization_not_ready task_id={TASK_ID} status=awaiting_approval")
+
+    def test_runner_logs_github_poll_stage_and_sanitized_error_code(self):
+        runner = CodexTaskRunner(Mock(), self.github, "test-openai-key", codex_binary=sys.executable)
+        runner.evidence_poller.poll_once = Mock(side_effect=GitHubAPIError("github_forbidden"))
+        with self.assertLogs("sutra.codex_runner", level="WARNING") as captured:
+            with self.assertRaises(GitHubAPIError):
+                runner.run_once()
+        self.assertEqual(captured.records[0].getMessage(),
+                         "codex_github_poll_failed stage=evidence error_code=github_forbidden")
 
 
 if __name__ == "__main__":

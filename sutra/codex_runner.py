@@ -55,8 +55,18 @@ class CodexTaskRunner:
         self._lock = threading.Lock()
 
     def run_once(self) -> bool:
-        self.evidence_poller.poll_once()
-        issues = self.github.open_task_issues()
+        try:
+            self.evidence_poller.poll_once()
+        except GitHubAPIError as exc:
+            # GitHubAPIError.code is a bounded, sanitized category. Keep the
+            # failing integration stage visible without logging response text.
+            logger.warning("codex_github_poll_failed stage=evidence error_code=%s", exc.code)
+            raise
+        try:
+            issues = self.github.open_task_issues()
+        except GitHubAPIError as exc:
+            logger.warning("codex_github_poll_failed stage=task_issues error_code=%s", exc.code)
+            raise
         if not issues:
             logger.info("codex_runner_poll_complete signed_issue_candidates=0")
         for issue in issues:
