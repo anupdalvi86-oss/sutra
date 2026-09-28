@@ -400,7 +400,9 @@ class FounderCommandRouter:
                 scope = item.get("scope_review")
                 if item.get("approval_type") == "developer_scope" and isinstance(scope, dict) and not scope_context_shown:
                     scope_context_shown = True
-                    design = re.sub(r"\s+", " ", str(scope.get("design") or ""))[:1400]
+                    design = re.sub(r"\s+", " ", str(scope.get("design") or ""))
+                    if len(design) > 1400:
+                        design = design[:1399].rstrip() + "…"
                     risks = scope.get("security_risks")
                     if design:
                         lines.append(f"  Proposed implementation design: {design}")
