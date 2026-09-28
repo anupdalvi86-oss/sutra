@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import math
 import os
 import sys
@@ -491,6 +492,8 @@ class SutraHandler(BaseHTTPRequestHandler):
 
 
 def serve() -> None:
+    log_level = getattr(logging, os.environ.get("SUTRA_LOG_LEVEL", "INFO").upper(), logging.INFO)
+    logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     app = SutraApplication()
     app.start()
     # Railway's private health check connects through the container interface.

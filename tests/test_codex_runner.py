@@ -1,5 +1,6 @@
 import unittest
 import sys
+from unittest.mock import Mock
 
 from sutra.codex_dispatch import seal_codex_issue_body
 from sutra.codex_runner import CodexTaskRunner
@@ -67,6 +68,18 @@ class CodexRunnerIssueTests(unittest.TestCase):
         self.assertEqual(env["OPENAI_BASE_URL"], "http://127.0.0.1:12345/v1")
         self.assertFalse({"GITHUB_TOKEN", "SUPABASE_SERVICE_ROLE_KEY", "TELEGRAM_BOT_TOKEN",
                           "SUTRA_INTERNAL_TOKEN"} & env.keys())
+
+    def test_runner_logs_authorization_wait_without_provider_or_database_details(self):
+        store = Mock()
+        store.authorize_codex_task.return_value = {"status": "awaiting_approval"}
+        runner = CodexTaskRunner(store, self.github, "test-openai-key", codex_binary=sys.executable)
+        runner.evidence_poller.poll_once = Mock()
+        runner.github.open_task_issues = Mock(return_value=[self.issue])
+        with self.assertLogs("sutra.codex_runner", level="WARNING") as captured:
+            self.assertFalse(runner.run_once())
+        self.assertEqual(len(captured.records), 1)
+        self.assertEqual(captured.records[0].getMessage(),
+                         f"codex_task_authorization_not_ready task_id={TASK_ID} status=awaiting_approval")
 
 
 if __name__ == "__main__":
