@@ -391,6 +391,36 @@ select is((select payload->>'status' from artifact_submit),'succeeded','PM task 
 reset role;
 select is((select count(*)::integer from public.task_agent_artifacts where artifact_type='product_plan'),1,
   'PM product plan artifact is durably stored');
+set local role service_role;
+create temporary table retry_queue_fixture(task_id uuid, queued_run_id uuid) on commit drop;
+do $$
+declare task_id uuid; pm_id uuid; project_id uuid; queued_run_id uuid;
+begin
+  select id into pm_id from public.agents where slug='product_manager' and active;
+  select id into project_id from public.projects where status='approved' order by created_at desc limit 1;
+  insert into public.tasks(project_id,title,description,acceptance_criteria,task_type,status,owner_agent_id,assigned_agent_id)
+    values(project_id,'Retry-race fixture','A fixture for bounded retry recovery.','["The output is recorded"]'::jsonb,
+      'planning','in_progress',pm_id,pm_id) returning id into task_id;
+  insert into public.agent_runs(agent_id,project_id,task_id,trigger_type,status,input,output,started_at,finished_at,attempt_count)
+    values(pm_id,project_id,task_id,'task_artifact','failed','{}'::jsonb,
+      '{"error_code":"invalid_agent_output","failure_detail_code":"invalid_acceptance_criteria"}'::jsonb,
+      now()-interval '2 minutes',now()-interval '2 minutes',1);
+  insert into public.agent_runs(agent_id,project_id,task_id,trigger_type,status,input,output,started_at,attempt_count)
+    values(pm_id,project_id,task_id,'task_artifact','queued','{}'::jsonb,'{}'::jsonb,
+      now()-interval '1 minute',1) returning id into queued_run_id;
+  insert into retry_queue_fixture values(task_id,queued_run_id);
+end;
+$$;
+create temporary table retry_queue_claim(payload jsonb) on commit drop;
+insert into retry_queue_claim select public.sutra_claim_task_agent_run('sutra-worker-12345678');
+select is((select payload->>'run_id' from retry_queue_claim),(select queued_run_id::text from retry_queue_fixture),
+  'a queued bounded retry is claimed before an earlier failure can block its task');
+select is((select status from public.agent_runs where id=(select queued_run_id from retry_queue_fixture)),'running',
+  'claiming the retry moves its run to running');
+select is((select attempt_count from public.agent_runs where id=(select queued_run_id from retry_queue_fixture)),2,
+  'retry attempt count increments on claim');
+select is((select status from public.tasks where id=(select task_id from retry_queue_fixture)),'in_progress',
+  'queued retry keeps its task in progress');
 select ok(to_regclass('public.task_agent_artifacts_agent_id_idx') is not null,
   'task artifact agent foreign key has a covering index');
 set local role service_role;
