@@ -63,6 +63,7 @@ create temporary table retry_policy_snapshot on commit drop as
   select name,min_amount,max_amount,required_approvers,active from public.spending_policies;
 create temporary table run_count_before_limit_change on commit drop as
   select count(*)::integer as count from public.agent_runs;
+grant select on run_count_before_limit_change to service_role;
 
 set local role service_role;
 select throws_ok($$select public.sutra_founder_retry_codex_task_execution('99999999',(select task_id from codex_retry_fixture))$$,
