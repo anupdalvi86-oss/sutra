@@ -5,7 +5,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 ## What is working
 
 - Railway production `sutra-api` is online and the latest `/ready` check returned `ready: true`. The service stays private; there is no public application URL. [Open the Railway service](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce).
-- `/ready` reports Supabase reachable, Telegram running, and the agent worker running. The GitHub dispatcher and Codex runner are disabled.
+- Post-PR #79 `/ready` returned HTTP 200 with `ready: true`: Supabase reachable, Telegram running, and the agent worker running. The GitHub dispatcher and Codex runner are disabled; webhook signing is configured.
 - A fresh founder-account message to `@sutra86bot` received the expected company-status reply: 3 projects, 3 open tasks, and 2 pending approvals. Telegram `getMe` also confirmed the configured bot identity.
 - Private Railway `sutra-api` variables include the repository token, webhook secret, and the same OpenAI key used by Hermes. GitHub confirms the configured fine-grained token has access to zero repositories, which explains the service-side HTTP 404. A grant limited to this repository is staged in GitHub and awaits founder confirmation before it can be saved. Secret values are not stored in this repository or this status file.
 - Supabase project `smqsrigsugjuvuombetq` is reachable. The runner claim column and restricted RPC exist, and migration `20260927224724_claim_codex_runner_lease` is recorded as applied.
@@ -20,13 +20,14 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - Hermes service: `sutra` online with its persistent volume; its API remains private.
 - Telegram: founder-only bot responds to the configured founder account.
 - Supabase: migrations through `20260927234945_founder_pm_approval_readiness` are applied.
-- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#77 merged. PR #73 tightened PM artifact validation diagnostics. PRs #75–#76 expanded pgTAP coverage for scoped budget limits, accumulated spend, warning/soft-stop behavior, founder-only financial changes, audit logging, and agent self-escalation denial. Python, database/pgTAP, container build, secret-scan, and Python security-analysis checks passed.
+- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#79 merged. PR #73 tightened PM artifact validation diagnostics; PR #79 gives non-object model output a more specific safe diagnostic. PRs #75–#76 expanded pgTAP coverage for scoped budget limits, accumulated spend, warning/soft-stop behavior, founder-only financial changes, audit logging, and agent self-escalation denial. Python, database/pgTAP, container build, secret-scan, and Python security-analysis checks passed.
 
 ## Checks performed
 
-- Local Python suite after PM artifact diagnostics: `python3 -m pytest -q` — 106 passed.
+- Local Python suite after PM root-shape diagnostics: `python3 -m pytest -q` — 107 passed.
 - GitHub CI on PRs #67 and #68: Python, database/pgTAP, container build and secret scan all passed.
 - GitHub CI on PRs #75 and #76: all checks passed, including hosted PostgreSQL migration/test runs and Python security analysis. SQL tests cover company/project/department/agent/category/vendor budgets; transaction/daily/monthly/lifetime periods; accumulated spend; hard and soft stops; warnings; and founder-only authority changes.
+- GitHub CI on PR #79: Python, hosted database, container build and secret scan all passed. Railway deployed commit `ebd0c58` successfully; a fresh in-container `/ready` probe returned HTTP 200 and `ready: true`.
 - `python3 -m bandit -q -r sutra`: no medium or high findings; four low-severity notices relate to subprocess use in the opt-in task runner.
 - Python compile check and `git diff --check` passed.
 - Live read-only Supabase checks verified connectivity, core tables, the one-time runner claim RPC, no direct `anon`/`authenticated` access, project/task counts, and pending approvals. `customers.status='lead'` represents leads in the same lifecycle table.
