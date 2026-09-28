@@ -32,3 +32,5 @@ Catalog permissions describe intended capabilities, not a tool allowlist. Persis
 5. Product/operations/release/campaign/sales/governance task artifacts are available only for approved, assigned tasks and are stored as private artifacts. Marketing and sales handoffs remain internal drafts.
 
 The metadata graph is checked by `supabase/tests/agent_delegation_test.sql`; `can_delegate_to` is not a generic runtime delegation API. The actual workflow transitions are server-owned and database-gated, which prevents an agent from self-assigning work or widening its authority by editing role metadata.
+
+The founder may use `retry agent review <run-id>` to recover a terminal, recognized failure in CEO/CPO/CTO/CFO when all earlier stages succeeded. This requeues the same run within its existing three-attempt ceiling, preserves every prior reservation (including unknown usage), and writes an audit event. It cannot retry task runs, PM runs, nonterminal runs, or failures outside the recognized recoverable set. PM retains the separate CFO-complete retry gate.
