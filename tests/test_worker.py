@@ -492,6 +492,27 @@ class AgentArtifactTests(unittest.TestCase):
             "status": "unknown" if _args[-1] is None else "reconciled"}
         return store
 
+    def test_worker_contention_never_claims_or_spends(self):
+        store = self.approved_store()
+        store.acquire_agent_worker_execution_lease.return_value = False
+        hermes = Mock()
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna", worker_id="sutra-worker-12345678")
+
+        self.assertEqual(worker.run_once(), "worker_busy")
+        store.claim_agent_run.assert_not_called()
+        store.reserve_agent_run_spend.assert_not_called()
+        hermes.review.assert_not_called()
+        store.release_agent_worker_execution_lease.assert_not_called()
+
+    def test_worker_releases_distributed_lease_after_idle_claim(self):
+        store = self.approved_store()
+        store.claim_agent_run.return_value = None
+        worker = AgentWorker(store, Mock(), "openai", "gpt-6-luna", worker_id="sutra-worker-12345678")
+
+        self.assertEqual(worker.run_once(), "idle")
+        store.acquire_agent_worker_execution_lease.assert_called_once_with("sutra-worker-12345678")
+        store.release_agent_worker_execution_lease.assert_called_once_with("sutra-worker-12345678")
+
     def test_invalid_model_artifact_is_retried_and_not_marked_succeeded(self):
         store = self.approved_store("cpo")
         hermes = Mock()

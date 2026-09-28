@@ -685,6 +685,24 @@ class AgentWorker:
         return settled.get("status", "unknown")
 
     def run_once(self) -> str:
+        try:
+            acquired = self.store.acquire_agent_worker_execution_lease(self.worker_id)
+        except IntegrationError:
+            return "worker_lease_unavailable"
+        if not acquired:
+            return "worker_busy"
+        try:
+            return self._run_once_with_lease()
+        finally:
+            try:
+                if not self.store.release_agent_worker_execution_lease(self.worker_id):
+                    logger.error("agent_worker_execution_lease_release_not_owned")
+            except IntegrationError:
+                # The 10-minute database lease expires on its own. Do not hide a
+                # completed run or rewrite its spend outcome because release failed.
+                logger.warning("agent_worker_execution_lease_release_unavailable")
+
+    def _run_once_with_lease(self) -> str:
         run = self.store.claim_agent_run(self.worker_id)
         if run is None:
             return "idle"
@@ -788,7 +806,10 @@ class AgentWorker:
         while not stop.is_set():
             try:
                 outcome = self.run_once()
-                delay = retry_seconds if outcome in {"retry", "completion_pending", "task_review_pending", "task_artifact_pending"} else idle_seconds if outcome == "idle" else 0.1
+                delay = retry_seconds if outcome in {
+                    "retry", "completion_pending", "task_review_pending", "task_artifact_pending",
+                    "worker_lease_unavailable",
+                } else idle_seconds if outcome in {"idle", "worker_busy"} else 0.1
                 if wait:
                     wait(delay)
                 else:
