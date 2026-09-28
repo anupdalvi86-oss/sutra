@@ -203,6 +203,12 @@ class AgentArtifactTests(unittest.TestCase):
             "missing_product_plan_sections",
         )
 
+    def test_top_level_non_object_model_output_has_safe_specific_diagnostic(self):
+        with self.assertRaises(AgentOutputError) as raised:
+            validate_agent_artifact("product_manager", [{"summary": "not the contract"}], claimed_run("product_manager"))
+        self.assertEqual(raised.exception.failure_detail_code, "invalid_top_level_json_object")
+        self.assertNotIn("not the contract", str(raised.exception))
+
     def test_product_research_cannot_succeed_without_sources(self):
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cpo", artifact())
