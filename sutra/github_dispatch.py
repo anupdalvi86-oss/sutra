@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -14,6 +15,8 @@ from typing import Any
 
 from .codex_dispatch import seal_codex_issue_body
 from .runtime import IntegrationError, open_outbound_request
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubAPIError(IntegrationError):
@@ -272,15 +275,45 @@ class GitHubTaskDispatcher:
         task_id, lease_token = task.get("task_id"), task.get("lease_token")
         if not isinstance(task_id, str) or not isinstance(lease_token, str):
             raise IntegrationError("Supabase returned a malformed GitHub task lease")
+        started = time.monotonic()
+        logger.info("github_task_dispatch_started task_id=%s", task_id)
         try:
             issue = self.issues.create_or_find_issue(task)
+            logger.info(
+                "github_task_issue_ready task_id=%s issue_number=%s elapsed_ms=%d",
+                task_id, issue["number"], int((time.monotonic() - started) * 1000),
+            )
             self.store.complete_github_task(self.worker_id, task_id, lease_token, issue["number"], issue["url"])
+            logger.info(
+                "github_task_dispatch_completed task_id=%s issue_number=%s elapsed_ms=%d",
+                task_id, issue["number"], int((time.monotonic() - started) * 1000),
+            )
         except GitHubAPIError as exc:
-            self.store.fail_github_task(self.worker_id, task_id, lease_token, exc.code)
-        except IntegrationError:
+            logger.warning(
+                "github_task_dispatch_github_failed task_id=%s error_code=%s elapsed_ms=%d",
+                task_id, exc.code, int((time.monotonic() - started) * 1000),
+            )
+            try:
+                self.store.fail_github_task(self.worker_id, task_id, lease_token, exc.code)
+            except IntegrationError as store_error:
+                logger.warning(
+                    "github_task_dispatch_failure_record_failed task_id=%s error_type=%s",
+                    task_id, type(store_error).__name__,
+                )
+        except IntegrationError as exc:
             # Unknown post-create failures are recoverable through the stable
             # GitHub issue marker when Supabase reclaims the expired lease.
-            self.store.fail_github_task(self.worker_id, task_id, lease_token, "dispatch_unknown")
+            logger.warning(
+                "github_task_dispatch_integration_failed task_id=%s error_type=%s elapsed_ms=%d",
+                task_id, type(exc).__name__, int((time.monotonic() - started) * 1000),
+            )
+            try:
+                self.store.fail_github_task(self.worker_id, task_id, lease_token, "dispatch_unknown")
+            except IntegrationError as store_error:
+                logger.warning(
+                    "github_task_dispatch_failure_record_failed task_id=%s error_type=%s",
+                    task_id, type(store_error).__name__,
+                )
         return True
 
     def run(self, stop: threading.Event, idle_seconds: float = 8.0) -> None:
