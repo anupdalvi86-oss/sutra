@@ -13,9 +13,14 @@ select public.sutra_set_agent_model_spend_profile(
 
 create temporary table retry_fixture(task_id uuid,run_id uuid,project_id uuid) on commit drop;
 do $$
-declare project_id uuid; task_id uuid; run_id uuid; pm_id uuid; expense_id uuid;
+declare project_id uuid; task_id uuid; run_id uuid; pm_id uuid; expense_id uuid; reserve_amount numeric(14,2);
 begin
   select id into pm_id from public.agents where slug='product_manager' and active;
+  select greatest(0.01,ceil((max_input_tokens*input_eur_per_million_tokens
+      + max_output_tokens*output_eur_per_million_tokens)/10000)/100)
+    into reserve_amount from public.agent_model_spend_profiles
+    where provider='openai' and model='gpt-6-luna' and active;
+  if reserve_amount is null then raise exception 'fixture model price profile was not configured'; end if;
   insert into public.projects(slug,name,description,status,requested_budget,currency,created_by)
     values('retry-product-plan-'||gen_random_uuid(),'Retry fixture','Fixture for founder-only task recovery.',
       'approved',500,'EUR','test') returning id into project_id;
@@ -35,11 +40,11 @@ begin
       '{"error_code":"unknown_or_overrun_spend","failure_detail_code":"invalid_evidence"}'::jsonb,
       now(),now(),1) returning id into run_id;
   insert into public.expenses(category,description,amount,currency,status,requested_by,approved_at)
-    values('ai_inference','Unknown-usage fixture reserve',0.03,'EUR','approved','test',now())
+    values('ai_inference','Unknown-usage fixture reserve',reserve_amount,'EUR','approved','test',now())
     returning id into expense_id;
   insert into public.agent_run_spend_reservations(agent_run_id,attempt,expense_id,provider,model,
       reserved_amount,usage,status,settled_at)
-    values(run_id,1,expense_id,'openai','gpt-6-luna',0.03,'{}'::jsonb,'unknown',now());
+    values(run_id,1,expense_id,'openai','gpt-6-luna',reserve_amount,'{}'::jsonb,'unknown',now());
   insert into retry_fixture values(task_id,run_id,project_id);
 end;
 $$;
