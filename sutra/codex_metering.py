@@ -8,6 +8,7 @@ mark the reservation unknown and retain its reserve.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import urllib.error
 import urllib.request
@@ -16,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from .runtime import IntegrationError, open_outbound_request
+
+logger = logging.getLogger(__name__)
 
 
 class CodexRequestError(ValueError):
@@ -279,20 +282,25 @@ class MeteredResponsesProxy:
             # Provider error details may include task material. Do not persist or
             # relay those details into logs or GitHub output.
             self.uncertain = True
+            logger.warning("codex_model_request_failed reason=provider_http_error status=%s", exc.code)
             self._json_error(handler, 502, "model_provider_rejected_request")
             return
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             self.uncertain = True
+            logger.warning("codex_model_request_failed reason=provider_unreachable error_type=%s",
+                           type(exc).__name__)
             self._json_error(handler, 502, "model_provider_unreachable")
             return
         if status < 200 or status >= 300:
             response.close()
             self.uncertain = True
+            logger.warning("codex_model_request_failed reason=provider_status status=%s", status)
             self._json_error(handler, 502, "model_provider_request_failed")
             return
         if "text/event-stream" not in content_type.lower():
             response.close()
             self.uncertain = True
+            logger.warning("codex_model_request_failed reason=response_not_streamed")
             self._json_error(handler, 502, "model_response_not_streamed")
             return
 

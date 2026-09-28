@@ -149,6 +149,33 @@ class CodexMeteringTests(unittest.TestCase):
                 urllib.request.urlopen(request, timeout=2)
         self.assertEqual(result.exception.code, 400)
 
+    def test_proxy_logs_only_provider_status_when_key_is_rejected(self):
+        from sutra.codex_metering import MeteredResponsesProxy
+
+        class Store:
+            def codex_start_request(self, *args):
+                return {"authorized": True}
+
+        proxy = MeteredResponsesProxy(
+            Store(), "sutra-worker-abcdefgh", "run-id", "lease-id", self.MODEL,
+            1000, 500, "test-provider-key",
+        )
+        provider_error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/responses", 401, "unauthorized", {}, None
+        )
+        with patch("sutra.codex_metering.open_outbound_request", side_effect=provider_error):
+            with proxy, self.assertLogs("sutra.codex_metering", level="WARNING") as captured:
+                request = urllib.request.Request(
+                    proxy.base_url + "/responses",
+                    data=json.dumps({"model": self.MODEL, "input": "task", "stream": True}).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as result:
+                    urllib.request.urlopen(request, timeout=2)
+        self.assertEqual(result.exception.code, 502)
+        self.assertEqual(captured.records[0].getMessage(),
+                         "codex_model_request_failed reason=provider_http_error status=401")
+
 
 if __name__ == "__main__":
     unittest.main()
