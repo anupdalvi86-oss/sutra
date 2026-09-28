@@ -81,6 +81,7 @@ def task_review_artifact(role="qa"):
 
 def task_artifact_run(role="product_manager"):
     artifact_types = {
+        "cpo": "market_research",
         "product_manager": "product_plan", "architect": "technical_design", "coo": "operations_plan",
         "devops": "release_plan", "cmo": "campaign_draft", "sales": "sales_handoff",
         "governance_audit": "governance_review",
@@ -101,6 +102,11 @@ def task_artifact_run(role="product_manager"):
 
 def task_artifact_output(role="product_manager"):
     role_artifacts = {
+        "cpo": {"customer_segments": ["Quality-focused software teams"],
+                "competitors": ["Example QA provider with published product documentation"],
+                "buyer_workflows": ["Teams review release evidence before shipping"],
+                "market_gaps": ["Public sources do not establish willingness to pay"],
+                "pricing_signals": ["A provider publishes a free tier and paid plans"]},
         "product_manager": {"scope": "A bounded product scope for the approved proposal.", "milestones": ["Discovery"], "acceptance_criteria": ["Buyer need documented"]},
         "architect": {"design": "A clear component and interface design.", "components": ["API service"], "security_risks": ["Protect service credentials"]},
         "coo": {"operational_dependencies": ["On-call owner"], "readiness_checklist": ["Recovery procedure"], "incident_plan": "Route incidents to the service owner."},
@@ -119,7 +125,7 @@ def task_artifact_output(role="product_manager"):
         ],
         "artifact": role_artifacts[role],
     }
-    if role == "cmo":
+    if role in {"cpo", "cmo"}:
         result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the campaign claim."}]
     if role == "product_manager":
         result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the product planning assumption."}]
@@ -128,7 +134,7 @@ def task_artifact_output(role="product_manager"):
 
 class AgentArtifactTests(unittest.TestCase):
     def test_task_artifact_contracts_cover_internal_role_handoffs(self):
-        roles = ("product_manager", "architect", "coo", "devops", "cmo", "sales", "governance_audit")
+        roles = ("cpo", "product_manager", "architect", "coo", "devops", "cmo", "sales", "governance_audit")
         for role in roles:
             with self.subTest(role=role):
                 result = validate_agent_artifact(role, task_artifact_output(role), task_artifact_run(role))
@@ -145,6 +151,16 @@ class AgentArtifactTests(unittest.TestCase):
         campaign["evidence"] = []
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cmo", campaign, task_artifact_run("cmo"))
+
+    def test_cpo_market_research_requires_cited_evidence(self):
+        result = task_artifact_output("cpo")
+        self.assertEqual(
+            validate_agent_artifact("cpo", result, task_artifact_run("cpo"))["artifact"]["competitors"],
+            result["artifact"]["competitors"],
+        )
+        result["evidence"] = []
+        with self.assertRaisesRegex(AgentOutputError, "CPO research"):
+            validate_agent_artifact("cpo", result, task_artifact_run("cpo"))
 
     def test_product_plan_task_requires_at_least_one_direct_https_source(self):
         result = task_artifact_output("product_manager")

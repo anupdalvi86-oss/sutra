@@ -205,6 +205,7 @@ ROLE_GUIDANCE = {
 }
 
 TASK_ARTIFACT_CONTRACTS = {
+    "cpo": {"market_research": ("customer_segments", "competitors", "buyer_workflows", "market_gaps", "pricing_signals")},
     "product_manager": {"product_plan": ("scope", "milestones", "acceptance_criteria")},
     "architect": {"technical_design": ("design", "components", "security_risks")},
     "coo": {"operations_plan": ("operational_dependencies", "readiness_checklist", "incident_plan")},
@@ -217,6 +218,7 @@ TASK_ARTIFACT_ARRAY_FIELDS = {
     "milestones", "acceptance_criteria", "components", "security_risks", "operational_dependencies",
     "readiness_checklist", "deployment_steps", "health_checks", "rollback_steps", "claims",
     "success_metrics", "lead_criteria", "qualification_questions", "controls_checked", "findings",
+    "customer_segments", "competitors", "buyer_workflows", "market_gaps", "pricing_signals",
 }
 
 
@@ -308,6 +310,14 @@ class HermesAgentClient:
                     "\"task_acceptance\":[{\"criterion\":\"exact assigned text\",\"evidence\":\"specific proof\"}],"
                     "\"artifact\":{\"scope\":\"...\",\"milestones\":[\"...\"],"
                     "\"acceptance_criteria\":[\"...\"]}}."
+                )
+            elif role == "cpo":
+                role_output += (
+                    " For market research, evidence must contain 1-10 objects with exactly source, url, and claim; "
+                    "each URL must be a direct HTTPS source you actually consulted. Distinguish sourced facts from "
+                    "assumptions, avoid unsupported market-size claims, and include evidence for competitor and "
+                    "pricing statements. Return exactly the contract fields and assigned task_acceptance items. "
+                    "This is internal research only; do not contact customers, create leads, publish, or spend."
                 )
         elif role == "qa":
             role_output = (
@@ -511,8 +521,8 @@ def validate_task_agent_artifact(role: str, value: dict[str, Any], context: dict
                 or not isinstance(claim, str) or not 1 <= len(claim.strip()) <= 1000):
             raise AgentOutputError("Task artifact evidence requires a bounded source, HTTPS URL and claim")
         bounded_evidence.append({"source": source.strip(), "url": url, "claim": claim.strip()})
-    if role == "cmo" and not bounded_evidence:
-        raise AgentOutputError("Campaign factual claims require at least one cited HTTPS source")
+    if role in {"cpo", "cmo"} and not bounded_evidence:
+        raise AgentOutputError("CPO research and campaign claims require at least one cited HTTPS source")
     if role == "product_manager" and not bounded_evidence:
         raise AgentOutputError("Product plans require at least one cited HTTPS source")
     expected_criteria = context.get("acceptance_criteria")
