@@ -28,7 +28,7 @@ Catalog permissions describe intended capabilities, not a tool allowlist. Persis
 1. Founder-only Telegram identity submits a bounded proposal.
 2. Durable reviews run CEO → CPO (research) → CTO → CFO → Product Manager. A failed/invalid artifact blocks the next stage; retries are bounded and metered.
 3. Founder approval is available only after all reviews complete and policy requirements are satisfied. Approval is a budget ceiling, not permission to spend outside the central spending layer.
-4. Approved project tasks flow through Architect/Developer. GitHub PR plus matching successful CI evidence releases QA; passing QA releases Security; passing Security releases DevOps/release readiness.
+4. Approved project tasks flow through Architect/Developer. The PR must have matching successful CI evidence. Founder direction currently defers the QA and Security role handoffs; they will be added later. This does not authorize merging, deployment, release, external outreach, or production operation.
 5. Product/operations/release/campaign/sales/governance task artifacts are available only for approved, assigned tasks and are stored as private artifacts. Marketing and sales handoffs remain internal drafts.
 
 The metadata graph is checked by `supabase/tests/agent_delegation_test.sql`; `can_delegate_to` is not a generic runtime delegation API. The actual workflow transitions are server-owned and database-gated, which prevents an agent from self-assigning work or widening its authority by editing role metadata.
