@@ -1,5 +1,13 @@
 -- Track metering trust separately from whether Codex produced a successful result.
-drop function public.sutra_codex_finish_run(text,uuid,uuid,boolean);
+-- Keep the old signature fail-closed during rolling deployment so stale runners
+-- cannot mark a nonzero process successful using the old conflated flag.
+create or replace function public.sutra_codex_finish_run(
+  p_worker_id text,p_run_id uuid,p_lease_token uuid,p_success boolean
+) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
+begin
+  raise exception 'Codex runner upgrade required for separate process and usage results' using errcode='55000';
+end;
+$$;
 
 create function public.sutra_codex_finish_run(
   p_worker_id text,
