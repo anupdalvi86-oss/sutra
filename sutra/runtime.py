@@ -280,6 +280,7 @@ PM_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+review\s+([0-9a-f-]{
 AGENT_REVIEW_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+agent\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 PRODUCT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 ARCHITECT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+architect\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
+GITHUB_DISPATCH_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+github\s+dispatch\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 STATUS_ROLE_RE = re.compile(r"^\s*(ceo|cto|cpo|cfo|coo|product manager|pm|architect|developer|qa|security|devops|cmo|marketing|sales|governance|audit)[, :]\s*(?:give me|show me|provide)?\s*(?:the\s+)?(?:company\s+)?(?:department\s+)?status(?:\s+report)?\s*[?.!]*\s*$", re.IGNORECASE)
 STATUS_ROLES = {
     "ceo": ("CEO", None), "cto": ("CTO", "cto"), "cpo": ("CPO", "cpo"),
@@ -326,6 +327,13 @@ def parse_founder_command(text: str) -> FounderCommand:
         except ValueError as exc:
             raise ValueError("Architect task retry needs a valid task ID") from exc
         return FounderCommand("retry_architect_task", text.strip(), task_id=task_id)
+    match = GITHUB_DISPATCH_RETRY_RE.fullmatch(text)
+    if match:
+        try:
+            task_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("GitHub dispatch retry needs a valid task ID") from exc
+        return FounderCommand("retry_github_dispatch", text.strip(), task_id=task_id)
     lowered = text.lower()
     if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
         return FounderCommand("approvals", text.strip())
@@ -503,6 +511,21 @@ class FounderCommandRouter:
                 f"Architect task queued: {result.get('task_id')}. A new run uses the normal spend reservation and monthly hard cap. "
                 "Unknown earlier usage remains reserved; project approval and spending authority are unchanged."
             )
+        if command.kind == "retry_github_dispatch":
+            try:
+                result = self.store.rpc("sutra_founder_retry_github_task_dispatch", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_task_id": command.task_id,
+                })
+            except IntegrationError:
+                return FounderResponse(
+                    "GitHub dispatch was not retried. Only a failed permission-denied dispatch for the same approved Developer task can be retried; confirm GitHub access is fixed first."
+                )
+            retry_number = result.get("founder_retry_number")
+            return FounderResponse(
+                f"GitHub issue dispatch queued (founder retry {retry_number}/3). The existing founder-approved task scope is unchanged; "
+                "this grants no spending, merge, or release authority."
+            )
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
@@ -510,6 +533,7 @@ class FounderCommandRouter:
             "Use: retry PM review <run-id>.\n"
             "Use: retry PM task <task-id> for a bounded failed product-plan task.\n"
             "Use: retry Architect task <task-id> for a bounded failed architecture task.\n"
+            "Use: retry GitHub dispatch <task-id> after fixing a GitHub permission failure.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
