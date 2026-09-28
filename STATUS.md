@@ -1,12 +1,14 @@
 # Sutra status
 
-Updated: 2026-09-29 00:03 Europe/Stockholm
+Updated: 2026-09-29 00:28 Europe/Stockholm
 
 ## Codex process failure correction (live)
 
 PRs #133 and #134 merged the runner/status fix and rolling-deploy guard. Migration `20260928213518` is applied to Supabase project `smqsrigsugjuvuombetq`; production exposes the six-argument completion RPC only to `service_role`, while the legacy call fails closed. The live API and Hermes services restarted after the merged code; Railway logs show the API health probe returned HTTP 200 and Hermes gateway supervision started. The confirmed attempt 3 record was corrected with an audit event: the run/execution are failed, while the €0.01 spend reservation remains reconciled. CEO status can now identify this as an execution blocker and state that no automatic retry is queued. No project-spend, merge, or release authority was added.
 
 PR #137 (`f203f32`) adds safe, allowlisted Codex failure categories without persisting provider response text. Its migration is applied in Supabase as `20260928215517`; production function grants remain restricted to `service_role`. Railway logs show the post-merge API `/health` check returned HTTP 200 and Hermes restarted under supervision. The checked-in migration filename matches production history.
+
+PR #141 (`bdfded6`) makes terminal Codex authorization return a safe no-op status instead of raising on every poll. Supabase production migration history records it as `20260928222047`; the production function returns `terminal` for the failed task and retains the persisted `failed` status. Railway logs after the merged main build show the API health check returned HTTP 200 and the poller now reports the terminal execution as not ready, without the prior authorization-unavailable exception. PR #142 aligns the checked-in migration filename with production history.
 
 ## Working
 
@@ -46,6 +48,7 @@ Latest live Supabase query:
 - Supabase production project was queried for setting value, RPC grants, task state, three attempts, reservations and the corresponding audit records. Railway showed `sutra-api` and Hermes online; the Telegram founder chat verified the read/set commands and the 3/3 retry response. The CEO board status command was also rechecked.
 - Production Supabase verified both completion RPC signatures: the six-argument RPC grants execute only to `service_role`, and anon/authenticated have no execute grant. Verified the failed Codex run/execution, unchanged reconciled reservation, and exactly one backfill audit row. Railway Chrome logs show Hermes restart/recovery and API `/health` HTTP 200 after the merged deploy.
 - Railway Chrome logs after PR #137 show API `/health` HTTP 200 and Hermes gateway startup under restart supervision. Supabase confirms the founder retry-limit value remains 3; this setting change does not launch a run. The existing task has already consumed attempt 3 with metered provider requests, so it is ineligible for the narrowly scoped no-request retry path.
+- Production Supabase confirms the Codex retry setting is 3, governance-sensitive and founder-only; anon/authenticated cannot execute its getter or setter RPCs, and only `service_role` can. The configured founder can read the setting. The existing setting was seeded by migration and has not been changed through the audited setter; an unchanged value correctly adds no audit event and starts no retry. The founder command remains `CEO, set Codex no-request retry limit to 3 total attempts.`
 
 ## Remaining work and blockers
 
