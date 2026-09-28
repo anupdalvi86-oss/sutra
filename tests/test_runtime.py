@@ -259,6 +259,20 @@ class FounderCommandTests(unittest.TestCase):
         ]]})
         self.store.rpc.assert_not_called()
 
+    def test_developer_scope_approval_shows_concrete_design_and_security_risks(self):
+        self.store.founder_pending_approvals.return_value = [{
+            "approval_id": APPROVAL, "approval_type": "developer_scope",
+            "summary": "Founder scope review required before engineering",
+            "amount": 0, "currency": "EUR", "pending_roles": [], "ready": True,
+            "scope_review": {"design": "Use a private API with database-backed authorization.",
+                             "security_risks": ["Protect service credentials"]},
+        }]
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show my approvals.")
+        self.assertIn("Proposed implementation design: Use a private API", reply.text)
+        self.assertIn("Security risks to review: Protect service credentials", reply.text)
+        self.assertIn("does not approve spend or release", reply.text)
+        self.assertEqual(reply.reply_markup["inline_keyboard"][0][0]["callback_data"], f"approve:{APPROVAL}")
+
     def test_approval_callback_records_founder_decision_through_database_rpc(self):
         self.store.rpc.return_value = {"status": "approved", "approval_id": APPROVAL}
         reply = self.router.handle_callback(FOUNDER, FOUNDER, f"approve:{APPROVAL}")

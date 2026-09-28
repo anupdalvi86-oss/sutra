@@ -396,6 +396,15 @@ class FounderCommandRouter:
                 reviewer_list = ", ".join(str(role)[:32] for role in missing[:3]) if isinstance(missing, list) and missing else "department review"
                 readiness = "ready for your decision" if item.get("ready") is True else f"waiting for {reviewer_list}"
                 lines.extend((f"• {summary} — {value}; {readiness}", f"  ID: {approval_id}"))
+                scope = item.get("scope_review")
+                if item.get("approval_type") == "developer_scope" and isinstance(scope, dict):
+                    design = re.sub(r"\s+", " ", str(scope.get("design") or ""))[:700]
+                    risks = scope.get("security_risks")
+                    if design:
+                        lines.append(f"  Proposed implementation design: {design}")
+                    if isinstance(risks, list) and risks:
+                        lines.append("  Security risks to review: " + "; ".join(re.sub(r"\s+", " ", str(risk))[:180] for risk in risks[:3]))
+                    lines.append("  This authorizes the Developer to begin this scoped implementation; it does not approve spend or release.")
                 try:
                     approval_id = str(uuid.UUID(str(approval_id)))
                 except (ValueError, TypeError, AttributeError):

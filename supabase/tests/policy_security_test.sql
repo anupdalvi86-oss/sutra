@@ -438,7 +438,21 @@ select is((pg_temp.run_task_artifact('architect',jsonb_build_object('design','A 
   'security_risks',jsonb_build_array('Protect private integration credentials')))->>'status'),
   'succeeded','Architect persists its spend-gated technical design and exact task evidence');
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
-  'ready','architecture completion releases developer task');
+  'blocked','architecture completion holds Developer work for founder scope review');
+select is((select count(*)::integer from public.approvals sa join public.tasks t on t.id::text=sa.action_ref
+  where sa.approval_type='developer_scope' and sa.status='pending' and t.owner_agent_id=(select id from public.agents where slug='developer')),
+  1,'completed technical design creates one durable founder scope approval');
+select is(public.sutra_claim_github_task('sutra-github-worker-abcdefgh')::text,null::text,
+  'GitHub cannot dispatch Developer work before founder approves scope');
+select lives_ok($$select public.sutra_founder_decide_approval('12345678',
+  (select sa.id from public.approvals sa join public.tasks t on t.id::text=sa.action_ref
+    where sa.approval_type='developer_scope' and sa.status='pending' and t.owner_agent_id=(select id from public.agents where slug='developer') order by sa.created_at desc limit 1),
+  'approve','Review concrete product scope')$$,'configured founder can approve the persisted Developer scope');
+select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
+  'ready','founder scope approval releases the Developer task');
+select ok(exists(select 1 from public.audit_log where action='developer.scope.approve'
+  and resource_id=(select id::text from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1)),
+  'founder scope decision is audit logged against the task');
 select throws_ok($$select public.sutra_claim_github_task('bad-worker')$$,
   '22023',null,'GitHub task dispatch requires a bounded worker identity');
 select throws_ok($$select * from public.github_task_dispatches$$,
