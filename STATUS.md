@@ -17,7 +17,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 ## Deployment
 
 - Railway project: `valiant-liberation`, production environment.
-- API service: `sutra-api`, private, online. Railway reports PR #83 deployed successfully at commit `f4e5f73`. The live `/ready` probe returned HTTP 200 and `ready: true` after deployment.
+- API service: `sutra-api`, private, online. Railway reports PR #84 deployed successfully. The live `/ready` probe returned HTTP 200 and `ready: true` after deployment. Founder-provided GitHub token and webhook secret are stored in private variables; the repository permission grant remains unverified.
 - Hermes service: `sutra`, online with persistent volume.
 - Telegram: `@sutra86bot`, founder-only; successful status, retry, and approval-queue messages verified.
 - Supabase: reachable; migrations through `20260928012624_founder_retry_failed_review_stage` are applied.
@@ -29,7 +29,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - `python3 -m compileall -q sutra tests`: passed.
 - `python3 -m bandit -ll -q -r sutra`: passed with no medium/high findings. Four low-severity notices remain in the opt-in Codex runner for bounded subprocess execution; one existing `nosec` annotation is reported as not needed by the current Bandit version.
 - `git diff --check`: passed.
-- GitHub Actions run `36365801462` for PR #83: Python, database/pgTAP/lint, containers and secret scan all passed.
+- GitHub Actions runs for PRs #83 and #84 passed Python, database/pgTAP/lint, containers and secret scanning.
 - Live Supabase checks verified the retry RPC exists, the configured founder identity matches, the retry audit entry exists, all five proposal-review runs succeeded, the €500 approval is still pending, and no project spend was authorized.
 - Live Supabase spending ledger after the workflow: €0.15 reconciled actual usage; €0.31 remains reserved because prior provider usage could not be verified. The €8 monthly hard cap remains active.
 - Supabase security advisor reports 22 informational `rls_enabled_no_policy` findings. The company tables have RLS enabled, no user-facing policies, and direct client grants revoked; writes go through restricted server RPCs. Performance advisor reports unused indexes on lightly used/early-stage tables.
