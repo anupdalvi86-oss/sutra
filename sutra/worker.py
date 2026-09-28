@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import urllib.error
@@ -12,6 +13,58 @@ import uuid
 from typing import Any, Callable
 
 from .runtime import IntegrationError, open_outbound_request
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_usage_route(provider: str, model: str) -> tuple[str, str]:
+    """Return a bounded route label; never emit arbitrary database configuration."""
+    known_routes = {
+        ("openai", "gpt-6-luna"),
+        ("kimi-coding", "kimi-k2.6"),
+    }
+    return (provider, model) if (provider, model) in known_routes else ("other", "other")
+
+
+def _usage_envelope_shape(envelope: Any) -> str:
+    """Describe token-usage field shape without retaining values or response text."""
+    if not isinstance(envelope, dict):
+        return "response_not_object"
+    usage = envelope.get("usage")
+    if "usage" not in envelope:
+        return "usage_missing"
+    if not isinstance(usage, dict):
+        return f"usage_not_object:{type(usage).__name__}"
+
+    field_types = []
+    for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        if field not in usage:
+            field_types.append(f"{field}=missing")
+            continue
+        value = usage[field]
+        if isinstance(value, bool):
+            value_type = "bool"
+        elif isinstance(value, int):
+            value_type = "int"
+        elif isinstance(value, float):
+            value_type = "float"
+        elif isinstance(value, str):
+            value_type = "string"
+        elif value is None:
+            value_type = "null"
+        elif isinstance(value, list):
+            value_type = "array"
+        elif isinstance(value, dict):
+            value_type = "object"
+        else:
+            value_type = "other"
+        field_types.append(f"{field}={value_type}")
+    if all(type(usage.get(field)) is int for field in ("prompt_tokens", "completion_tokens", "total_tokens")):
+        if any(usage[field] < 0 for field in ("prompt_tokens", "completion_tokens", "total_tokens")):
+            return "usage_object:negative_token_count"
+        if usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]:
+            return "usage_object:token_total_inconsistent"
+    return "usage_object:" + ",".join(field_types)
 
 
 class AgentOutputError(ValueError):
@@ -309,6 +362,11 @@ class HermesAgentClient:
             raise IntegrationError("Hermes review request failed") from exc
         usage = envelope.get("usage") if isinstance(envelope, dict) else None
         if not isinstance(usage, dict):
+            safe_provider, safe_model = _safe_usage_route(provider, model)
+            logger.warning(
+                "Hermes usage envelope unavailable provider=%s model=%s shape=%s",
+                safe_provider, safe_model, _usage_envelope_shape(envelope),
+            )
             usage = None
         else:
             usage = {
@@ -316,6 +374,14 @@ class HermesAgentClient:
                 "completion_tokens": usage.get("completion_tokens"),
                 "total_tokens": usage.get("total_tokens"),
             }
+            if (any(not isinstance(usage[field], int) or isinstance(usage[field], bool) or usage[field] < 0
+                    for field in ("prompt_tokens", "completion_tokens", "total_tokens"))
+                    or usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]):
+                safe_provider, safe_model = _safe_usage_route(provider, model)
+                logger.warning(
+                    "Hermes usage envelope unavailable provider=%s model=%s shape=%s",
+                    safe_provider, safe_model, _usage_envelope_shape(envelope),
+                )
         try:
             content = envelope["choices"][0]["message"]["content"]
             if not isinstance(content, str) or len(content.encode()) > 24_000:
