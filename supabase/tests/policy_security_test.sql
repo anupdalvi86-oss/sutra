@@ -720,5 +720,6 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder' and a
   and details->>'scope_key'='developer' and details->>'limit_amount'='3'),
   'founder-authorized budget changes create an audit record with the configured limit');
 
+
 select * from finish();
 rollback;

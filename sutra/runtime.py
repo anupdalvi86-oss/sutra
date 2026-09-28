@@ -261,6 +261,7 @@ MONEY_PATTERNS = (
 )
 APPROVAL_RE = re.compile(r"^\s*(approve|reject)\s+([0-9a-f-]{36})(?:\s+(.*))?\s*$", re.IGNORECASE)
 PM_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
+AGENT_REVIEW_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+agent\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 
 
 def parse_founder_command(text: str) -> FounderCommand:
@@ -276,6 +277,13 @@ def parse_founder_command(text: str) -> FounderCommand:
         except ValueError as exc:
             raise ValueError("PM review retry needs a valid run ID") from exc
         return FounderCommand("retry_pm_review", text.strip(), approval_id=run_id)
+    match = AGENT_REVIEW_RETRY_RE.fullmatch(text)
+    if match:
+        try:
+            run_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Agent review retry needs a valid run ID") from exc
+        return FounderCommand("retry_agent_review", text.strip(), approval_id=run_id)
     lowered = text.lower()
     if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
         return FounderCommand("approvals", text.strip())
@@ -405,11 +413,25 @@ class FounderCommandRouter:
                 f"PM review queued: {result.get('run_id')}. A new attempt uses the normal spend reservation and monthly hard cap. "
                 "Unknown earlier usage remains reserved; project spending is not authorized."
             )
+        if command.kind == "retry_agent_review":
+            try:
+                result = self.store.rpc("sutra_founder_retry_agent_review", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_run_id": command.approval_id,
+                })
+            except IntegrationError:
+                return FounderResponse("Agent review was not retried. It must be a failed, bounded CEO/CPO/CTO/CFO stage with all prior reviews complete and a pending project approval.")
+            role = str(result.get("review_role") or "agent")[:32].upper()
+            return FounderResponse(
+                f"{role} review queued: {result.get('run_id')}. A new attempt uses the normal spend reservation and monthly hard cap. "
+                "Unknown earlier usage remains reserved; project spending is not authorized."
+            )
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
             "Use: CEO, show my approvals.\n"
             "Use: retry PM review <run-id>.\n"
+            "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
         )
