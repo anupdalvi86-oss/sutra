@@ -268,6 +268,23 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertNotIn("tools", request_body)
         self.assertEqual(request.call_args.kwargs["timeout"], 180.0)
 
+    def test_missing_or_malformed_hermes_usage_envelope_is_not_known_usage(self):
+        cases = (("absent", None), ("malformed", []))
+        for label, usage in cases:
+            with self.subTest(label=label):
+                payload = {"choices": [{"message": {"content": json.dumps(artifact())}}]}
+                if label != "absent":
+                    payload["usage"] = usage
+                response = Mock()
+                response.__enter__ = Mock(return_value=response)
+                response.__exit__ = Mock(return_value=False)
+                response.read.return_value = json.dumps(payload).encode()
+                with patch("sutra.worker.urllib.request.urlopen", return_value=response):
+                    _result, observed_usage = HermesAgentClient(
+                        "https://hermes.example", "hermes-key", "kimi-coding", "kimi-k2.6"
+                    ).review(claimed_run(), max_output_tokens=500)
+                self.assertIsNone(observed_usage)
+
     def test_product_manager_requests_json_mode_and_explicit_object_contract(self):
         payload = {"choices": [{"message": {"content": json.dumps(artifact("product_manager"))}}],
                    "usage": {"prompt_tokens": 30, "completion_tokens": 40}}
@@ -376,6 +393,32 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertEqual(store.reconcile_agent_run_spend.call_args.args[-1], None)
         self.assertEqual(store.complete_agent_run.call_args.args[2], "failed")
         self.assertEqual(store.complete_agent_run.call_args.args[4], "unknown_spend")
+
+    def test_incomplete_provider_usage_retries_reconciliation_as_unknown(self):
+        store = self.approved_store("cpo")
+        store.reconcile_agent_run_spend.side_effect = [
+            IntegrationError("database rejected malformed provider usage"),
+            {"status": "unknown"},
+        ]
+        payload = {
+            "choices": [{"message": {"content": json.dumps(artifact("cpo"))}}],
+            "usage": {"prompt_tokens": 20},
+        }
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        hermes = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-6-luna")
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna", worker_id="sutra-worker-12345678")
+
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response):
+            self.assertEqual(worker.run_once(), "failed_unknown_spend")
+
+        calls = store.reconcile_agent_run_spend.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertIsNone(calls[1].args[-1])
+        self.assertEqual(store.complete_agent_run.call_args.args[2], "failed")
+        self.assertEqual(store.complete_agent_run.call_args.args[4], "unknown_or_overrun_spend")
 
     def test_pending_database_spend_approval_never_calls_hermes(self):
         store = self.approved_store()
