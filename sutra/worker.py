@@ -59,6 +59,11 @@ def _usage_envelope_shape(envelope: Any) -> str:
         else:
             value_type = "other"
         field_types.append(f"{field}={value_type}")
+    if all(type(usage.get(field)) is int for field in ("prompt_tokens", "completion_tokens", "total_tokens")):
+        if any(usage[field] < 0 for field in ("prompt_tokens", "completion_tokens", "total_tokens")):
+            return "usage_object:negative_token_count"
+        if usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]:
+            return "usage_object:token_total_inconsistent"
     return "usage_object:" + ",".join(field_types)
 
 

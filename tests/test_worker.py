@@ -346,6 +346,24 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertIn("total_tokens=missing", captured.output[0])
         self.assertNotIn("private-token-count", captured.output[0])
 
+    def test_usage_total_mismatch_is_logged_without_token_values(self):
+        payload = {"choices": [{"message": {"content": json.dumps(artifact())}}],
+                   "usage": {"prompt_tokens": 30, "completion_tokens": 40, "total_tokens": 99}}
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response), \
+             self.assertLogs("sutra.worker", level="WARNING") as captured:
+            _result, observed_usage = HermesAgentClient(
+                "https://hermes.example", "hermes-key", "kimi-coding", "kimi-k2.6"
+            ).review(claimed_run(), max_output_tokens=500)
+        self.assertEqual(observed_usage["total_tokens"], 99)
+        self.assertIn("shape=usage_object:token_total_inconsistent", captured.output[0])
+        self.assertNotIn("30", captured.output[0])
+        self.assertNotIn("40", captured.output[0])
+        self.assertNotIn("99", captured.output[0])
+
     def test_unrecognized_model_route_is_redacted_from_usage_diagnostics(self):
         payload = {"choices": [{"message": {"content": json.dumps(artifact())}}]}
         response = Mock()
