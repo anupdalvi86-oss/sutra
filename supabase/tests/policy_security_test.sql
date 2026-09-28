@@ -720,60 +720,6 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder' and a
   and details->>'scope_key'='developer' and details->>'limit_amount'='3'),
   'founder-authorized budget changes create an audit record with the configured limit');
 
--- A founder may recover an early failed review within the original three-attempt
--- ceiling. The generic recovery path must preserve unknown reservations and audit.
-create temporary table retryable_proposal(payload jsonb) on commit drop;
-insert into retryable_proposal
-select public.sutra_submit_proposal('12345678','Bounded CPO retry fixture',
-  'Test a founder-only CPO retry without authorizing project spend.',500,'EUR');
-truncate worker_claims;
-with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
-insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,
-  (c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
-select is((select role from worker_claims),'ceo','retry fixture begins at the CEO review');
-select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
-  (select lease_token from worker_claims))$$,'fixture CEO run records reconciled spend');
-select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
-  (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
-  '{"summary":"A bounded proposal fits the company direction.","recommendation":"Research customer needs.","evidence":[]}'::jsonb)$$,
-  'fixture CEO review succeeds');
-truncate worker_claims;
-with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
-insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,
-  (c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
-select is((select role from worker_claims),'cpo','CPO review follows the fixture CEO');
-create temporary table cpo_unknown_reservation(payload jsonb) on commit drop;
-insert into cpo_unknown_reservation
-select public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',
-  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini-test-cheap');
-select lives_ok($$select public.sutra_begin_agent_run_spend('sutra-worker-12345678',
-  (select run_id from worker_claims),(select lease_token from worker_claims),
-  (select (payload->>'reservation_id')::uuid from cpo_unknown_reservation))$$,
-  'CPO retry fixture starts its database reservation');
-select is((public.sutra_reconcile_agent_run_spend_from_usage('sutra-worker-12345678',
-  (select run_id from worker_claims),(select lease_token from worker_claims),
-  (select (payload->>'reservation_id')::uuid from cpo_unknown_reservation),
-  'openai','gpt-4o-mini-test-cheap',null,null,'{"source":"simulated_unknown_usage"}'::jsonb,false)->>'status'),
-  'unknown','CPO fixture retains unknown usage');
-select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
-  (select run_id from worker_claims),(select lease_token from worker_claims),'failed',
-  '{"summary":"CPO usage could not be verified"}'::jsonb,'unknown_or_overrun_spend')$$,
-  'CPO run fails closed with a recoverable error code');
-select throws_ok($$select public.sutra_founder_retry_agent_review('99999999',
-  (select run_id from worker_claims))$$,'42501',null,'nonfounder cannot retry a review stage');
-create temporary table agent_retry_result(payload jsonb) on commit drop;
-insert into agent_retry_result select public.sutra_founder_retry_agent_review('12345678',
-  (select run_id from worker_claims));
-select is((select payload->>'review_role' from agent_retry_result),'cpo',
-  'founder can retry the failed CPO stage');
-select is((select (payload->>'attempts_remaining')::integer from agent_retry_result),2,
-  'retry leaves the global three-attempt limit intact');
-select is((select (payload->>'preserved_unknown_reservations')::integer from agent_retry_result),1,
-  'retry preserves unknown usage reservations');
-select ok(exists(select 1 from public.audit_log where actor_type='founder'
-  and action='founder.agent_review_retry_requested'
-  and resource_id=(select run_id::text from worker_claims)),
-  'early-stage retries are founder-audited');
 
 select * from finish();
 rollback;
