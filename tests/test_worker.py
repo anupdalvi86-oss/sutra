@@ -115,6 +115,8 @@ def task_artifact_output(role="product_manager"):
     }
     if role == "cmo":
         result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the campaign claim."}]
+    if role == "product_manager":
+        result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the product planning assumption."}]
     return result
 
 
@@ -137,6 +139,12 @@ class AgentArtifactTests(unittest.TestCase):
         campaign["evidence"] = []
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cmo", campaign, task_artifact_run("cmo"))
+
+    def test_product_plan_task_requires_at_least_one_direct_https_source(self):
+        result = task_artifact_output("product_manager")
+        result["evidence"] = []
+        with self.assertRaisesRegex(AgentOutputError, "at least one cited HTTPS source"):
+            validate_agent_artifact("product_manager", result, task_artifact_run("product_manager"))
 
     def test_task_artifact_prompt_has_no_external_action_authority(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("sales"))}}],

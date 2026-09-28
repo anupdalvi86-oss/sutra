@@ -18,23 +18,79 @@ FOUNDER = "123456789"
 APPROVAL = "00000000-0000-4000-8000-000000000001"
 
 
+def status_fixture():
+    return {
+        "projects": [{"id": "project-1", "name": "AI QA opportunity", "status": "approved",
+                      "requested_budget": 500, "currency": "EUR", "department_id": "finance-dept",
+                      "owner_agent_id": "ceo-id"}],
+        "tasks": [{"id": "task-1", "title": "Review product plan", "status": "blocked",
+                   "project_id": "project-1", "owner_agent_id": "pm-id"}],
+        "approvals": [{"id": APPROVAL, "project_id": "project-1", "summary": "Approval waiting for CFO",
+                        "amount": 500, "currency": "EUR", "status": "pending",
+                        "required_roles": ["cfo", "founder"], "decisions": {"cfo": {"decision": "approve"}}}],
+        "agent_runs": [{"task_id": "task-1", "status": "failed",
+                        "output": {"error_code": "unknown_or_overrun_spend", "failure_detail_code": "invalid_evidence"}}],
+        "agents": [{"id": "ceo-id", "slug": "ceo", "display_name": "Chief Executive", "department_id": "executive-dept"},
+                   {"id": "cfo-id", "slug": "cfo", "display_name": "Chief Financial Officer", "department_id": "finance-dept"},
+                   {"id": "pm-id", "slug": "product_manager", "display_name": "Product Manager", "department_id": "product-dept"}],
+        "departments": [{"id": "finance-dept", "slug": "finance", "name": "Finance"}],
+        "budgets": [{"scope": "company", "scope_key": "*", "period": "monthly", "currency": "EUR",
+                     "limit_amount": 8.0, "warning_percent": 80, "hard_stop": True}],
+        "expenses": [{"amount": 0.15, "currency": "EUR", "status": "paid", "category": "ai_inference"}],
+    }
+
+
 class FounderCommandTests(unittest.TestCase):
     def setUp(self):
         self.store = Mock()
         self.router = FounderCommandRouter(self.store, FOUNDER)
 
     def test_status_reads_authoritative_counts(self):
-        self.store.company_status.return_value = {"projects": 2, "open_tasks": 3, "pending_approvals": 1}
+        self.store.company_status.return_value = status_fixture()
         reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.").text
-        self.assertIn("Projects: 2", reply)
-        self.assertIn("Pending approvals: 1", reply)
+        self.assertIn("CEO operating brief — board update", reply)
+        self.assertIn("AI QA opportunity — approved", reply)
+        self.assertIn("1 tasks — 0 backlog, 0 ready, 0 in progress, 0 in review, 1 blocked", reply)
+        self.assertIn("latest run: unknown_or_overrun_spend / invalid_evidence", reply)
+        self.assertIn("Approval waiting for CFO", reply)
+        self.assertIn("company / * / monthly: EUR 8.0", reply)
         self.store.company_status.assert_called_once_with()
+
+    def test_department_status_is_detailed_and_scoped_to_its_work(self):
+        self.store.company_status.return_value = status_fixture()
+        reply = self.router.handle(FOUNDER, FOUNDER, "CFO, give me department status.").text
+        self.assertIn("CFO operating brief — board update", reply)
+        self.assertIn("Active/approved/paused projects: 1", reply)
+        self.assertIn("AI QA opportunity", reply)
+
+    def test_role_status_commands_cover_operating_roles(self):
+        for role, expected in (("CTO", "cto"), ("Product Manager", "product manager"),
+                               ("QA", "qa"), ("CMO", "cmo"), ("Governance", "governance")):
+            with self.subTest(role=role):
+                self.assertEqual(parse_founder_command(f"{role}, give me status").status_role, expected)
 
     def test_status_database_failure_returns_a_clear_fail_closed_reply(self):
         self.store.company_status.side_effect = IntegrationError("unavailable")
         reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.").text
         self.assertIn("couldn't load company status", reply)
         self.assertIn("No company state was changed", reply)
+
+    def test_status_snapshot_reads_projects_tasks_approvals_and_financial_controls(self):
+        expected = status_fixture()
+        store = SupabaseREST("https://sutra.example", "server-key")
+        store.request = Mock(side_effect=list(expected.values()))
+        self.assertEqual(store.company_status(), expected)
+        requested_paths = [call.args[0] for call in store.request.call_args_list]
+        self.assertTrue(any(path.startswith("projects?") and "requested_budget" in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("tasks?") and "owner_agent_id" in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("approvals?") and "required_roles" in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("budgets?") and "hard_stop" in path for path in requested_paths))
+
+    def test_status_snapshot_rejects_partial_or_malformed_database_responses(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        store.request = Mock(side_effect=[[], [], [], [], [], [], None, []])
+        with self.assertRaises(IntegrationError):
+            store.company_status()
 
     def test_proposal_creates_persisted_approval_request(self):
         self.store.rpc.return_value = {"project_id": "project-1", "approval_id": "approval-1"}
@@ -80,6 +136,35 @@ class FounderCommandTests(unittest.TestCase):
         self.store.rpc.side_effect = IntegrationError("not eligible")
         reply = self.router.handle(FOUNDER, FOUNDER, f"retry PM review {APPROVAL}").text
         self.assertIn("was not retried", reply)
+        self.store.rpc.assert_called_once()
+
+    def test_founder_can_request_bounded_pm_product_task_retry(self):
+        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "ready"}
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry PM task {APPROVAL}").text
+        self.assertIn("PM task queued", reply)
+        self.assertIn("Unknown earlier usage remains reserved", reply)
+        self.assertIn("spending authority are unchanged", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_retry_product_task_artifact", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_task_id": APPROVAL,
+        })
+
+    def test_pm_product_task_retry_rejects_wrong_founder_or_group_chat(self):
+        for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):
+            with self.subTest(user_id=user_id, chat_id=chat_id):
+                reply = self.router.handle(user_id, chat_id, f"retry PM task {APPROVAL}").text
+                self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+    def test_pm_product_task_retry_rejects_malformed_task_id(self):
+        self.assertEqual(parse_founder_command("retry PM task not-a-uuid").kind, "unsupported")
+        self.router.handle(FOUNDER, FOUNDER, "retry PM task 00000000-0000-4000-8000-00000000000z")
+        self.store.rpc.assert_not_called()
+
+    def test_pm_product_task_retry_database_rejection_is_fail_closed(self):
+        self.store.rpc.side_effect = IntegrationError("not eligible")
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry PM task {APPROVAL}").text
+        self.assertIn("task was not retried", reply)
         self.store.rpc.assert_called_once()
 
     def test_founder_can_request_bounded_early_review_retry(self):

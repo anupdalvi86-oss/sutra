@@ -199,6 +199,15 @@ class HermesAgentClient:
                 "Use direct HTTPS sources for evidence. Persist a proposal or draft only. Never send, publish, "
                 "deploy, spend, invent leads, or claim an unverified result."
             )
+            if role == "product_manager":
+                role_output += (
+                    " For this product plan, evidence must contain 1-5 objects, each with exactly the fields "
+                    "source, url, and claim. Use a literal direct URL beginning with https://, no markdown "
+                    "link syntax, no URL in another field, and no fabricated citation. Carry forward at least "
+                    "one valid cited source from the prior CPO assessment. The nested artifact object must "
+                    "contain scope, milestones, and acceptance_criteria; milestones and acceptance_criteria "
+                    "are arrays of concise strings. Keep evidence and task_acceptance as separate top-level arrays."
+                )
         elif role == "qa":
             role_output = (
                 "Return JSON fields summary, recommendation, result (pass or fail), tested_commit_sha, "
@@ -384,6 +393,8 @@ def validate_task_agent_artifact(role: str, value: dict[str, Any], context: dict
         bounded_evidence.append({"source": source.strip(), "url": url, "claim": claim.strip()})
     if role == "cmo" and not bounded_evidence:
         raise AgentOutputError("Campaign factual claims require at least one cited HTTPS source")
+    if role == "product_manager" and not bounded_evidence:
+        raise AgentOutputError("Product plans require at least one cited HTTPS source")
     expected_criteria = context.get("acceptance_criteria")
     reported_criteria = value.get("task_acceptance")
     if (not isinstance(expected_criteria, list) or not 1 <= len(expected_criteria) <= 30
