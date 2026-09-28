@@ -12,15 +12,16 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - Three durable proposals and two pending €500 budget approvals are recorded. The founder queue now correctly shows one proposal waiting for PM review and another waiting for CFO and PM review. The latest PM run exhausted its three bounded attempts on artifact validation; no project approval or spend was authorized.
 - The Supabase model ledger records €0.42 in current-month committed inference expenses: €0.11 reconciled actual and €0.31 retained as unknown-use reservations. The active monthly AI inference hard cap is €8 with an 80% warning threshold.
 - The metered Codex runner is deployed but opt-in. It checks approved routes and budgets, records completed Responses API usage through a loopback proxy, and can open PRs but cannot merge or deploy.
+- PR #81 repaired the live CPO/Sales delegation targets to the active `cmo` agent slug. A post-migration Supabase query found zero missing or inactive delegation targets.
 
 ## Deployment
 
 - Railway project: `valiant-liberation`, production environment.
-- API service: `sutra-api`, private and online; current readiness check passed.
+- API service: `sutra-api`, private and online; Railway reports the PR #81 main-branch deployment successful. The last explicit `/ready` probe returned HTTP 200 with `ready: true` after PR #79.
 - Hermes service: `sutra` online with its persistent volume; its API remains private.
 - Telegram: founder-only bot responds to the configured founder account.
-- Supabase: migrations through `20260927234945_founder_pm_approval_readiness` are applied.
-- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#79 merged. PR #73 tightened PM artifact validation diagnostics; PR #79 gives non-object model output a more specific safe diagnostic. PRs #75–#76 expanded pgTAP coverage for scoped budget limits, accumulated spend, warning/soft-stop behavior, founder-only financial changes, audit logging, and agent self-escalation denial. Python, database/pgTAP, container build, secret-scan, and Python security-analysis checks passed.
+- Supabase: migrations through `20260928010406_repair_agent_delegation_targets` are applied.
+- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#81 merged. PR #73 tightened PM artifact validation diagnostics; PR #79 gives non-object model output a more specific safe diagnostic; PR #81 documents role contracts and repairs live delegation metadata. PRs #75–#76 expanded pgTAP coverage for scoped budget limits, accumulated spend, warning/soft-stop behavior, founder-only financial changes, audit logging, and agent self-escalation denial. Python, database/pgTAP, container build, secret-scan, and Python security-analysis checks passed.
 
 ## Checks performed
 
@@ -28,12 +29,12 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - GitHub CI on PRs #67 and #68: Python, database/pgTAP, container build and secret scan all passed.
 - GitHub CI on PRs #75 and #76: all checks passed, including hosted PostgreSQL migration/test runs and Python security analysis. SQL tests cover company/project/department/agent/category/vendor budgets; transaction/daily/monthly/lifetime periods; accumulated spend; hard and soft stops; warnings; and founder-only authority changes.
 - GitHub CI on PR #79: Python, hosted database, container build and secret scan all passed. Railway deployed commit `ebd0c58` successfully; a fresh in-container `/ready` probe returned HTTP 200 and `ready: true`.
+- GitHub CI on PR #81: Python (107 tests, compile and Bandit), hosted database migration/pgTAP/lint, container images and secret scan all passed. The production data migration applied as version `20260928010406`; the post-apply query confirmed zero invalid delegation targets.
 - `python3 -m bandit -q -r sutra`: no medium or high findings; four low-severity notices relate to subprocess use in the opt-in task runner.
 - Python compile check and `git diff --check` passed.
 - Live read-only Supabase checks verified connectivity, core tables, the one-time runner claim RPC, no direct `anon`/`authenticated` access, project/task counts, and pending approvals. `customers.status='lead'` represents leads in the same lifecycle table.
 - Live GitHub API validation from the Railway service with the configured repository token returned HTTP 404 for the private Sutra repository. The signed-in GitHub settings page confirmed that the token has no repository permissions and selects no repositories. The local GitHub CLI session can see the repository, but that session's credential was not copied into the service.
 - Applied migration `20260927234945_founder_pm_approval_readiness`; Supabase and Telegram now both show the PM review as outstanding and withhold the founder approval action.
-- A live Supabase role-graph audit found two dangling `marketing` targets (CPO and Sales). A data migration now repairs them to the active `cmo` agent slug and a pgTAP check verifies all targets resolve. The migration is on the current engineering branch and has not yet been applied to production.
 - Supabase `agent_run_spend_reservations` shows three attempts on the latest PM run. One attempt's usage is unknown and remains reserved; the other two are reconciled. The system correctly refuses an additional retry after its bounded attempt limit.
 - Supabase security advisor reports 22 informational `rls_enabled_no_policy` findings. Tables intentionally have RLS enabled and no end-user policies; direct client grants are revoked and company writes use restricted server-side RPCs. Recheck if direct client access is introduced.
 
