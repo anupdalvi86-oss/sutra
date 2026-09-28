@@ -305,8 +305,9 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["timeout"], 180.0)
 
     def test_missing_or_malformed_hermes_usage_envelope_is_not_known_usage(self):
-        cases = (("absent", None), ("malformed", []))
-        for label, usage in cases:
+        cases = (("absent", None, "usage_missing"), ("malformed", ["private-response-marker"],
+                  "usage_not_object:list"))
+        for label, usage, expected_shape in cases:
             with self.subTest(label=label):
                 payload = {"choices": [{"message": {"content": json.dumps(artifact())}}]}
                 if label != "absent":
@@ -315,11 +316,50 @@ class AgentArtifactTests(unittest.TestCase):
                 response.__enter__ = Mock(return_value=response)
                 response.__exit__ = Mock(return_value=False)
                 response.read.return_value = json.dumps(payload).encode()
-                with patch("sutra.worker.urllib.request.urlopen", return_value=response):
+                with patch("sutra.worker.urllib.request.urlopen", return_value=response), \
+                     self.assertLogs("sutra.worker", level="WARNING") as captured:
                     _result, observed_usage = HermesAgentClient(
                         "https://hermes.example", "hermes-key", "kimi-coding", "kimi-k2.6"
                     ).review(claimed_run(), max_output_tokens=500)
                 self.assertIsNone(observed_usage)
+                diagnostic = "\n".join(captured.output)
+                self.assertIn("provider=kimi-coding", diagnostic)
+                self.assertIn("model=kimi-k2.6", diagnostic)
+                self.assertIn(f"shape={expected_shape}", diagnostic)
+                self.assertNotIn("private-response-marker", diagnostic)
+
+    def test_malformed_usage_object_logs_only_field_types_not_values(self):
+        payload = {"choices": [{"message": {"content": json.dumps(artifact())}}],
+                   "usage": {"prompt_tokens": "private-token-count", "completion_tokens": 40}}
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response), \
+             self.assertLogs("sutra.worker", level="WARNING") as captured:
+            _result, observed_usage = HermesAgentClient(
+                "https://hermes.example", "hermes-key", "kimi-coding", "kimi-k2.6"
+            ).review(claimed_run(), max_output_tokens=500)
+        self.assertEqual(observed_usage["prompt_tokens"], "private-token-count")
+        self.assertIn("prompt_tokens=string", captured.output[0])
+        self.assertIn("completion_tokens=int", captured.output[0])
+        self.assertIn("total_tokens=missing", captured.output[0])
+        self.assertNotIn("private-token-count", captured.output[0])
+
+    def test_unrecognized_model_route_is_redacted_from_usage_diagnostics(self):
+        payload = {"choices": [{"message": {"content": json.dumps(artifact())}}]}
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        secret_like_model = "sk-production-secret-marker-123456"
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response), \
+             self.assertLogs("sutra.worker", level="WARNING") as captured:
+            HermesAgentClient(
+                "https://hermes.example", "hermes-key", "custom-provider", secret_like_model
+            ).review(claimed_run(), max_output_tokens=500)
+        self.assertIn("provider=other model=other", captured.output[0])
+        self.assertNotIn(secret_like_model, captured.output[0])
 
     def test_product_manager_requests_json_mode_and_explicit_object_contract(self):
         payload = {"choices": [{"message": {"content": json.dumps(artifact("product_manager"))}}],
