@@ -70,7 +70,7 @@ select throws_ok($$select public.sutra_founder_retry_codex_task_execution('99999
   '42501',null,'a nonfounder cannot retry a Codex execution');
 select throws_ok($$select public.sutra_founder_retry_codex_task_execution('12345678',null)$$,
   '22023',null,'malformed Codex retry requests are rejected');
-select throws_ok($$select public.sutra_founder_set_codex_retry_limit('99999999',4)$$,
+select throws_ok($$select public.sutra_founder_set_codex_retry_limit('99999999',2)$$,
   '42501',null,'a nonfounder cannot change the Codex retry limit');
 select throws_ok($$select public.sutra_founder_set_codex_retry_limit('12345678',0)$$,
   '22023',null,'an out-of-range Codex retry limit is rejected');
