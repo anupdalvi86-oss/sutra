@@ -176,6 +176,35 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("task was not retried", reply)
         self.store.rpc.assert_called_once()
 
+    def test_founder_can_request_bounded_architect_task_retry(self):
+        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "ready"}
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry Architect task {APPROVAL}").text
+        self.assertIn("Architect task queued", reply)
+        self.assertIn("Unknown earlier usage remains reserved", reply)
+        self.assertIn("spending authority are unchanged", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_retry_architecture_task_artifact", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_task_id": APPROVAL,
+        })
+
+    def test_architect_task_retry_rejects_wrong_founder_or_group_chat(self):
+        for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):
+            with self.subTest(user_id=user_id, chat_id=chat_id):
+                reply = self.router.handle(user_id, chat_id, f"retry Architect task {APPROVAL}").text
+                self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+    def test_architect_task_retry_rejects_malformed_task_id(self):
+        self.assertEqual(parse_founder_command("retry Architect task not-a-uuid").kind, "unsupported")
+        self.router.handle(FOUNDER, FOUNDER, "retry Architect task 00000000-0000-4000-8000-00000000000z")
+        self.store.rpc.assert_not_called()
+
+    def test_architect_task_retry_database_rejection_is_fail_closed(self):
+        self.store.rpc.side_effect = IntegrationError("not eligible")
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry Architect task {APPROVAL}").text
+        self.assertIn("Architect task was not retried", reply)
+        self.store.rpc.assert_called_once()
+
     def test_founder_can_request_bounded_early_review_retry(self):
         self.store.rpc.return_value = {"run_id": APPROVAL, "status": "queued", "review_role": "cpo"}
         reply = self.router.handle(FOUNDER, FOUNDER, f"retry agent review {APPROVAL}").text
