@@ -71,8 +71,21 @@ class GitHubIssues:
         except urllib.error.HTTPError as exc:
             if exc.code in {403, 429} and exc.headers.get("X-RateLimit-Remaining") == "0":
                 raise GitHubAPIError("github_rate_limited") from exc
-            # Keep a safe status category for durable dispatch diagnostics. Never
-            # persist the response body: GitHub can echo request content there.
+            # Categorize only GitHub's exact generic messages. Never persist or log
+            # the response body: GitHub can echo request content there.
+            if exc.code == 403:
+                try:
+                    payload = json.loads(exc.read(16_384))
+                except (OSError, json.JSONDecodeError):
+                    payload = None
+                message = payload.get("message") if isinstance(payload, dict) else None
+                if message == "Resource not accessible by personal access token":
+                    code = "github_permission_denied"
+                elif message == "Must have admin rights to Repository.":
+                    code = "github_permission_denied"
+                else:
+                    code = "github_forbidden"
+                raise GitHubAPIError(code) from exc
             raise GitHubAPIError(f"github_http_{exc.code}") from exc
         except GitHubAPIError:
             raise

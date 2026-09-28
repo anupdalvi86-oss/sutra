@@ -112,6 +112,31 @@ class GitHubIssueTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "github_http_422")
         self.assertNotIn("private", str(caught.exception))
 
+    def test_github_forbidden_diagnostics_use_only_allowlisted_categories(self):
+        client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)
+        error = urllib.error.HTTPError(
+            "https://api.github.com/repos/acme/sutra/issues/41", 403,
+            "forbidden", {}, io.BytesIO(json.dumps({
+                "message": "Resource not accessible by personal access token",
+                "documentation_url": "https://docs.github.com/",
+            }).encode()),
+        )
+        with patch("sutra.github_dispatch.urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(GitHubAPIError) as caught:
+                client._request("/repos/acme/sutra/issues/41", "PATCH", {"body": "private"})
+        self.assertEqual(caught.exception.code, "github_permission_denied")
+        self.assertNotIn("private", str(caught.exception))
+
+        unexpected = urllib.error.HTTPError(
+            "https://api.github.com/repos/acme/sutra/issues/41", 403,
+            "forbidden", {}, io.BytesIO(json.dumps({"message": "private request text"}).encode()),
+        )
+        with patch("sutra.github_dispatch.urllib.request.urlopen", side_effect=unexpected):
+            with self.assertRaises(GitHubAPIError) as caught:
+                client._request("/repos/acme/sutra/issues/41", "PATCH", {"body": "private"})
+        self.assertEqual(caught.exception.code, "github_forbidden")
+        self.assertNotIn("private request text", str(caught.exception))
+
     def test_existing_unsigned_issue_is_sealed_after_worker_lease_recovery(self):
         calls = []
         client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)
