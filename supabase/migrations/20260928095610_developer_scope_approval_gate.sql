@@ -114,7 +114,7 @@ begin
 end;
 $$;;
 
-create function public.sutra_claim_github_task(p_worker_id text)
+create or replace function public.sutra_claim_github_task(p_worker_id text)
 returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare task_row public.tasks%rowtype; dispatch_id uuid; lease uuid; attempts_now integer;
 begin
@@ -165,7 +165,7 @@ begin
     'objective_id',task_row.objective_id);
 end $$;;
 
-create function public.sutra_complete_github_task_dispatch(
+create or replace function public.sutra_complete_github_task_dispatch(
   p_worker_id text,p_task_id uuid,p_lease_token uuid,p_issue_number integer,p_issue_url text
 ) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare dispatch_row public.github_task_dispatches%rowtype; task_row public.tasks%rowtype;
@@ -200,7 +200,7 @@ begin
   return jsonb_build_object('task_id',p_task_id,'status',task_status,'issue_number',p_issue_number,'issue_url',p_issue_url);
 end $$;;
 
-create function public.sutra_authorize_codex_task(
+create or replace function public.sutra_authorize_codex_task(
   p_worker_id text,p_task_id uuid,p_issue_number integer,p_issue_url text,p_provider text,p_model text
 ) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare task_row public.tasks%rowtype; project_row public.projects%rowtype; developer_id uuid;
