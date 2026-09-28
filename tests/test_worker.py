@@ -328,6 +328,36 @@ class AgentArtifactTests(unittest.TestCase):
                 self.assertIn(f"shape={expected_shape}", diagnostic)
                 self.assertNotIn("private-response-marker", diagnostic)
 
+    def test_missing_usage_diagnostic_reports_only_bounded_completion_metadata(self):
+        payload = {
+            "choices": [{"message": {"content": json.dumps(artifact())},
+                         "finish_reason": "stop"}],
+            "hermes": {"completed": True, "partial": False, "failed": False,
+                       "error": "private-error-marker"},
+            "error": {"message": "private-error-marker"},
+            "usage": None,
+            "private-response-marker": "must-not-be-logged",
+        }
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response), \
+             self.assertLogs("sutra.worker", level="WARNING") as captured:
+            _result, observed_usage = HermesAgentClient(
+                "https://hermes.example", "hermes-key", "kimi-coding", "kimi-k2.6"
+            ).review(claimed_run(), max_output_tokens=500)
+        diagnostic = "\n".join(captured.output)
+        self.assertIsNone(observed_usage)
+        self.assertIn("response=keys=choices,error,hermes,usage", diagnostic)
+        self.assertIn("finish=stop", diagnostic)
+        self.assertIn("hermes_completed=true", diagnostic)
+        self.assertIn("hermes_partial=false", diagnostic)
+        self.assertIn("hermes_failed=false", diagnostic)
+        self.assertNotIn("private-response-marker", diagnostic)
+        self.assertNotIn("private-error-marker", diagnostic)
+        self.assertNotIn("must-not-be-logged", diagnostic)
+
     def test_malformed_usage_object_logs_only_field_types_not_values(self):
         payload = {"choices": [{"message": {"content": json.dumps(artifact())}}],
                    "usage": {"prompt_tokens": "private-token-count", "completion_tokens": 40}}
