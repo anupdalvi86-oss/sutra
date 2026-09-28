@@ -18,17 +18,56 @@ FOUNDER = "123456789"
 APPROVAL = "00000000-0000-4000-8000-000000000001"
 
 
+def status_fixture():
+    return {
+        "projects": [{"id": "project-1", "name": "AI QA opportunity", "status": "approved",
+                      "requested_budget": 500, "currency": "EUR", "department_id": "finance-dept",
+                      "owner_agent_id": "ceo-id"}],
+        "tasks": [{"id": "task-1", "title": "Review product plan", "status": "blocked",
+                   "project_id": "project-1", "owner_agent_id": "pm-id"}],
+        "approvals": [{"id": APPROVAL, "project_id": "project-1", "summary": "Approval waiting for CFO",
+                        "amount": 500, "currency": "EUR", "status": "pending",
+                        "required_roles": ["cfo", "founder"], "decisions": {"cfo": {"decision": "approve"}}}],
+        "agent_runs": [{"task_id": "task-1", "status": "failed",
+                        "output": {"error_code": "unknown_or_overrun_spend", "failure_detail_code": "invalid_evidence"}}],
+        "agents": [{"id": "ceo-id", "slug": "ceo", "display_name": "Chief Executive", "department_id": "executive-dept"},
+                   {"id": "cfo-id", "slug": "cfo", "display_name": "Chief Financial Officer", "department_id": "finance-dept"},
+                   {"id": "pm-id", "slug": "product_manager", "display_name": "Product Manager", "department_id": "product-dept"}],
+        "departments": [{"id": "finance-dept", "slug": "finance", "name": "Finance"}],
+        "budgets": [{"scope": "company", "scope_key": "*", "period": "monthly", "currency": "EUR",
+                     "limit_amount": 8.0, "warning_percent": 80, "hard_stop": True}],
+        "expenses": [{"amount": 0.15, "currency": "EUR", "status": "paid", "category": "ai_inference"}],
+    }
+
+
 class FounderCommandTests(unittest.TestCase):
     def setUp(self):
         self.store = Mock()
         self.router = FounderCommandRouter(self.store, FOUNDER)
 
     def test_status_reads_authoritative_counts(self):
-        self.store.company_status.return_value = {"projects": 2, "open_tasks": 3, "pending_approvals": 1}
+        self.store.company_status.return_value = status_fixture()
         reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.").text
-        self.assertIn("Projects: 2", reply)
-        self.assertIn("Pending approvals: 1", reply)
+        self.assertIn("CEO operating brief — board update", reply)
+        self.assertIn("AI QA opportunity — approved", reply)
+        self.assertIn("1 tasks — 0 backlog, 0 ready, 0 in progress, 0 in review, 1 blocked", reply)
+        self.assertIn("latest run: unknown_or_overrun_spend / invalid_evidence", reply)
+        self.assertIn("Approval waiting for CFO", reply)
+        self.assertIn("company / * / monthly: EUR 8.0", reply)
         self.store.company_status.assert_called_once_with()
+
+    def test_department_status_is_detailed_and_scoped_to_its_work(self):
+        self.store.company_status.return_value = status_fixture()
+        reply = self.router.handle(FOUNDER, FOUNDER, "CFO, give me department status.").text
+        self.assertIn("CFO operating brief — board update", reply)
+        self.assertIn("Active/approved/paused projects: 1", reply)
+        self.assertIn("AI QA opportunity", reply)
+
+    def test_role_status_commands_cover_operating_roles(self):
+        for role, expected in (("CTO", "cto"), ("Product Manager", "product manager"),
+                               ("QA", "qa"), ("CMO", "cmo"), ("Governance", "governance")):
+            with self.subTest(role=role):
+                self.assertEqual(parse_founder_command(f"{role}, give me status").status_role, expected)
 
     def test_status_database_failure_returns_a_clear_fail_closed_reply(self):
         self.store.company_status.side_effect = IntegrationError("unavailable")

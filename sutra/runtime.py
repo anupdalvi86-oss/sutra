@@ -218,13 +218,22 @@ class SupabaseREST:
             "p_lease_token": lease_token, "p_error_code": error_code,
         })
 
-    def company_status(self) -> dict[str, int]:
-        projects = self.request("projects?select=id&status=in.(proposed,approved,active,paused)")
-        tasks = self.request("tasks?select=id&status=in.(backlog,ready,in_progress,blocked,review)")
-        approvals = self.request("approvals?select=id&status=eq.pending")
-        if not all(isinstance(rows, list) for rows in (projects, tasks, approvals)):
+    def company_status(self) -> dict[str, list[dict[str, Any]]]:
+        """Read a bounded, factual operating snapshot from authoritative company state."""
+        paths = {
+            "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
+            "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at&status=in.(backlog,ready,in_progress,blocked,review)&order=updated_at.desc&limit=100",
+            "approvals": "approvals?select=id,project_id,summary,amount,currency,status,required_roles,decisions,created_at&status=eq.pending&order=created_at.desc&limit=50",
+            "agent_runs": "agent_runs?select=task_id,status,output,finished_at&status=in.(failed,blocked)&order=finished_at.desc&limit=200",
+            "agents": "agents?select=id,slug,display_name,department_id,active&active=eq.true&limit=100",
+            "departments": "departments?select=id,slug,name&limit=100",
+            "budgets": "budgets?select=scope,scope_key,period,currency,limit_amount,warning_percent,hard_stop&active=eq.true&limit=100",
+            "expenses": "expenses?select=amount,currency,status,category,project_id,department_id,agent_id&status=in.(approved,paid,requested)&limit=500",
+        }
+        snapshot = {key: self.request(path) for key, path in paths.items()}
+        if not all(isinstance(rows, list) for rows in snapshot.values()):
             raise IntegrationError("Supabase returned an invalid company status response")
-        return {"projects": len(projects), "open_tasks": len(tasks), "pending_approvals": len(approvals)}
+        return snapshot
 
     def founder_pending_approvals(self, founder_telegram_user_id: str) -> list[dict[str, Any]]:
         result = self.rpc("sutra_founder_pending_approvals", {
@@ -248,6 +257,7 @@ class FounderCommand:
     comment: str = ""
     budget: float | None = None
     task_id: str | None = None
+    status_role: str = "company"
 
 
 @dataclass(frozen=True)
@@ -264,6 +274,16 @@ APPROVAL_RE = re.compile(r"^\s*(approve|reject)\s+([0-9a-f-]{36})(?:\s+(.*))?\s*
 PM_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 AGENT_REVIEW_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+agent\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 PRODUCT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
+STATUS_ROLE_RE = re.compile(r"^\s*(ceo|cto|cpo|cfo|coo|product manager|pm|architect|developer|qa|security|devops|cmo|marketing|sales|governance|audit)[, :]\s*(?:give me|show me|provide)?\s*(?:the\s+)?(?:company\s+)?(?:department\s+)?status(?:\s+report)?\s*[?.!]*\s*$", re.IGNORECASE)
+STATUS_ROLES = {
+    "ceo": ("CEO", None), "cto": ("CTO", "cto"), "cpo": ("CPO", "cpo"),
+    "cfo": ("CFO", "cfo"), "coo": ("COO", "coo"), "product manager": ("Product Manager", "product_manager"),
+    "pm": ("Product Manager", "product_manager"), "architect": ("Architect", "architect"),
+    "developer": ("Developer", "developer"), "qa": ("QA", "qa"), "security": ("Security", "security"),
+    "devops": ("DevOps", "devops"), "cmo": ("Marketing", "cmo"), "marketing": ("Marketing", "cmo"),
+    "sales": ("Sales", "sales"), "governance": ("Governance / Audit", "governance"),
+    "audit": ("Governance / Audit", "governance"),
+}
 
 
 def parse_founder_command(text: str) -> FounderCommand:
@@ -296,6 +316,9 @@ def parse_founder_command(text: str) -> FounderCommand:
     lowered = text.lower()
     if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
         return FounderCommand("approvals", text.strip())
+    role_match = STATUS_ROLE_RE.fullmatch(text)
+    if role_match:
+        return FounderCommand("status", text.strip(), status_role=role_match.group(1).lower())
     if any(phrase in lowered for phrase in ("company status", "company update", "status report", "ceo, status")):
         return FounderCommand("status", text.strip())
     amount = None
@@ -344,12 +367,7 @@ class FounderCommandRouter:
                 status = self.store.company_status()
             except IntegrationError:
                 return FounderResponse("I couldn't load company status. No company state was changed; check the database connection and try again.")
-            return FounderResponse(
-                "Sutra company status\n"
-                f"Projects: {status['projects']}\n"
-                f"Open tasks: {status['open_tasks']}\n"
-                f"Pending approvals: {status['pending_approvals']}"
-            )
+            return FounderResponse(render_status_brief(status, command.status_role))
         if command.kind == "approvals":
             try:
                 approvals = self.store.founder_pending_approvals(user_id)
@@ -487,6 +505,116 @@ class FounderCommandRouter:
             return "Approval unchanged. Confirm it is pending and all required department reviews, including CFO, are complete."
         return f"Approval {result.get('status')}: {result.get('approval_id')}"
 
+
+def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_role: str = "company") -> str:
+    """Render a board-style status using only persisted Supabase facts."""
+    label, agent_slug = STATUS_ROLES.get(requested_role, ("Company", None))
+    projects = snapshot["projects"]
+    tasks = snapshot["tasks"]
+    approvals = snapshot["approvals"]
+    runs_by_task: dict[str, dict[str, Any]] = {}
+    for run in snapshot["agent_runs"]:
+        task_id = run.get("task_id")
+        if task_id and str(task_id) not in runs_by_task:
+            runs_by_task[str(task_id)] = run
+    agents = {str(row.get("id")): row for row in snapshot["agents"]}
+    departments = {str(row.get("id")): row for row in snapshot["departments"]}
+    target_agent = next((row for row in agents.values() if row.get("slug") == agent_slug), None)
+    dept_id = target_agent.get("department_id") if target_agent else None
+    is_company_wide = agent_slug is None or requested_role in {"ceo", "cfo", "coo"}
+    if is_company_wide:
+        scoped_projects, scoped_tasks, scoped_approvals = projects, tasks, approvals
+    else:
+        team_agent_ids = {agent_id for agent_id, row in agents.items()
+                          if row.get("slug") == agent_slug or (dept_id and row.get("department_id") == dept_id)}
+        scoped_projects = [row for row in projects if row.get("department_id") == dept_id or row.get("owner_agent_id") in team_agent_ids]
+        scoped_tasks = [row for row in tasks if row.get("owner_agent_id") in team_agent_ids]
+        scoped_project_ids = {row.get("id") for row in scoped_projects}
+        scoped_approvals = [row for row in approvals if row.get("project_id") in scoped_project_ids]
+    task_statuses = ("backlog", "ready", "in_progress", "blocked", "review")
+    counts = {state: sum(1 for task in scoped_tasks if task.get("status") == state) for state in task_statuses}
+    active_projects = [p for p in scoped_projects if p.get("status") in {"approved", "active", "paused"}]
+    blocked_tasks = [t for t in scoped_tasks if t.get("status") == "blocked"]
+    department_label = departments.get(str(dept_id), {}).get("name") if dept_id else None
+    lines = [f"{label} operating brief — board update", ""]
+    if department_label and not is_company_wide:
+        lines.append(f"Scope: {department_label}")
+    lines.extend([
+        "Portfolio",
+        f"• Active/approved/paused projects: {len(active_projects)}; proposals awaiting decisions: {sum(1 for p in scoped_projects if p.get('status') == 'proposed')}",
+        f"• Open work: {sum(counts.values())} tasks — {counts['backlog']} backlog, {counts['ready']} ready, {counts['in_progress']} in progress, {counts['review']} in review, {counts['blocked']} blocked",
+        f"• Pending approvals: {len(scoped_approvals)}",
+        "",
+        "Projects in motion",
+    ])
+    if not scoped_projects:
+        lines.append("• None recorded in this scope.")
+    for project in scoped_projects[:8]:
+        name = re.sub(r"\s+", " ", str(project.get("name") or "Untitled project"))[:90]
+        status_text = str(project.get("status") or "unknown")
+        amount = project.get("requested_budget")
+        currency = str(project.get("currency") or "EUR")[:3]
+        budget = f"; requested ceiling {currency} {amount}" if isinstance(amount, (int, float)) else ""
+        lines.append(f"• {name} — {status_text}{budget}")
+    lines.extend(["", "Task execution"])
+    visible_tasks = [t for t in scoped_tasks if t.get("status") in {"ready", "in_progress", "review", "blocked"}]
+    if not visible_tasks:
+        lines.append("• No execution-stage tasks recorded.")
+    for task in visible_tasks[:8]:
+        owner = agents.get(str(task.get("owner_agent_id")), {}).get("display_name", "Unassigned")
+        title = re.sub(r"\s+", " ", str(task.get("title") or "Untitled task"))[:100]
+        lines.append(f"• [{task.get('status', 'unknown')}] {title} — {owner}")
+    lines.extend(["", "Blockers and risks"])
+    if not blocked_tasks:
+        lines.append("• No tasks currently marked blocked.")
+    for task in blocked_tasks[:6]:
+        title = re.sub(r"\s+", " ", str(task.get("title") or "Untitled task"))[:100]
+        owner = agents.get(str(task.get("owner_agent_id")), {}).get("display_name", "Unassigned")
+        run = runs_by_task.get(str(task.get("id")), {})
+        output = run.get("output") if isinstance(run.get("output"), dict) else {}
+        error_code = output.get("error_code")
+        detail_code = output.get("failure_detail_code")
+        cause_parts = [str(code)[:48] for code in (error_code, detail_code)
+                       if isinstance(code, str) and re.fullmatch(r"[a-z0-9_:-]{1,48}", code)]
+        cause = f"; latest run: {' / '.join(cause_parts)}" if cause_parts else "; blocker detail is not recorded in the latest run"
+        lines.append(f"• {title} — owned by {owner}{cause}.")
+    lines.extend(["", "Approvals requiring attention"])
+    if not scoped_approvals:
+        lines.append("• None pending.")
+    for approval in scoped_approvals[:6]:
+        summary = re.sub(r"\s+", " ", str(approval.get("summary") or "Approval request"))[:100]
+        required = approval.get("required_roles")
+        decisions = approval.get("decisions")
+        decisions = decisions if isinstance(decisions, dict) else {}
+        awaiting = [str(role) for role in required if not isinstance(decisions.get(role), dict)
+                    or decisions[role].get("decision") not in {"approve", "approved"}] if isinstance(required, list) else []
+        amount = approval.get("amount")
+        value = f" — {str(approval.get('currency') or 'EUR')[:3]} {amount}" if isinstance(amount, (int, float)) else ""
+        waiting_text = f"; awaiting {', '.join(awaiting[:4])}" if awaiting else "; ready for founder decision"
+        lines.append(f"• {summary}{value}{waiting_text} (ID {approval.get('id', 'unknown')})")
+    lines.extend(["", "Financial controls"])
+    active_budgets = snapshot["budgets"]
+    if not active_budgets:
+        lines.append("• No active budget controls returned by the database.")
+    else:
+        for budget in active_budgets[:8]:
+            amount = budget.get("limit_amount")
+            amount_text = "no fixed ceiling" if amount is None else f"{budget.get('currency', 'EUR')} {amount}"
+            hard_stop = "hard stop" if budget.get("hard_stop") else "warning only"
+            lines.append(f"• {budget.get('scope')} / {budget.get('scope_key')} / {budget.get('period')}: {amount_text}; warn at {budget.get('warning_percent')}%; {hard_stop}")
+    expenses = snapshot["expenses"]
+    totals: dict[str, float] = {}
+    for expense in expenses:
+        currency = str(expense.get("currency") or "EUR")
+        if isinstance(expense.get("amount"), (int, float)):
+            totals[currency] = totals.get(currency, 0) + float(expense["amount"])
+    if totals:
+        lines.append("• Recorded requested/approved/paid expenses (all time): " + ", ".join(f"{currency} {amount:.2f}" for currency, amount in sorted(totals.items())))
+    lines.extend(["", "Next focus", "• Resolve the listed blocked tasks and outstanding approvals; confirm each project owner’s next milestone."])
+    output = "\n".join(lines)
+    if len(output) > 3800:
+        output = output[:3760].rsplit("\n", 1)[0] + "\n… Brief truncated to fit Telegram; consult Supabase for the full work queue."
+    return output
 
 def telegram_call(token: str, method: str, payload: dict[str, Any], timeout: float = 35.0) -> Any:
     request = urllib.request.Request(

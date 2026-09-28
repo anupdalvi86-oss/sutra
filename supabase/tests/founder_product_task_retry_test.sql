@@ -5,6 +5,12 @@ insert into public.company_settings(key,value,governance_sensitive,updated_by)
 values('founder_telegram_user_id','"12345678"'::jsonb,true,'test')
 on conflict(key) do update set value=excluded.value;
 
+-- The spend-reservation snapshot trigger requires an active founder-configured
+-- model ceiling. This test profile deterministically prices the fixture reserve at €0.03.
+select public.sutra_set_agent_model_spend_profile(
+  '12345678','openai','gpt-6-luna',0.2,0.5,100000,10000,true
+);
+
 create temporary table retry_fixture(task_id uuid,run_id uuid,project_id uuid) on commit drop;
 do $$
 declare project_id uuid; task_id uuid; run_id uuid; pm_id uuid; expense_id uuid;
