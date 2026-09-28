@@ -56,6 +56,7 @@ select throws_ok($$select public.sutra_founder_retry_product_task_artifact('9999
 create temporary table retry_result(payload jsonb) on commit drop;
 insert into retry_result select public.sutra_founder_retry_product_task_artifact(
   '12345678',(select task_id from retry_fixture));
+reset role;
 select is((select payload->>'status' from retry_result),'ready',
   'founder recovery requeues only the blocked PM task');
 select is((select (payload->>'preserved_unknown_reservations')::integer from retry_result),1,
@@ -71,6 +72,7 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder'
   and action='founder.product_task_retry_requested'
   and resource_id=(select task_id::text from retry_fixture)),
   'PM task retry is founder-audited');
+set local role service_role;
 select throws_ok($$select public.sutra_founder_retry_product_task_artifact('12345678',(select task_id from retry_fixture))$$,
   '42501',null,'a requeued task cannot be retried again without another failed run');
 
