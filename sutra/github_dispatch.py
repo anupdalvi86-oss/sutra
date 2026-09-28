@@ -17,6 +17,12 @@ from .codex_dispatch import seal_codex_issue_body
 from .runtime import IntegrationError, open_outbound_request
 
 logger = logging.getLogger(__name__)
+_PERSISTABLE_GITHUB_ERROR_CODES = frozenset({
+    "github_api_error",
+    "github_network_error",
+    "github_rate_limited",
+    "malformed_github_response",
+})
 
 
 class GitHubAPIError(IntegrationError):
@@ -299,12 +305,15 @@ class GitHubTaskDispatcher:
                 task_id, issue["number"], int((time.monotonic() - started) * 1000),
             )
         except GitHubAPIError as exc:
+            persisted_error_code = (
+                exc.code if exc.code in _PERSISTABLE_GITHUB_ERROR_CODES else "github_api_error"
+            )
             logger.warning(
-                "github_task_dispatch_github_failed task_id=%s error_code=%s elapsed_ms=%d",
-                task_id, exc.code, int((time.monotonic() - started) * 1000),
+                "github_task_dispatch_github_failed task_id=%s error_code=%s persisted_error_code=%s elapsed_ms=%d",
+                task_id, exc.code, persisted_error_code, int((time.monotonic() - started) * 1000),
             )
             try:
-                self.store.fail_github_task(self.worker_id, task_id, lease_token, exc.code)
+                self.store.fail_github_task(self.worker_id, task_id, lease_token, persisted_error_code)
             except IntegrationError as store_error:
                 logger.warning(
                     "github_task_dispatch_failure_record_failed task_id=%s error_type=%s",

@@ -245,6 +245,18 @@ class GitHubDispatcherTests(unittest.TestCase):
         self.assertEqual(store.failed[-1], "github_rate_limited")
         self.assertIsNone(store.completed)
 
+    def test_worker_maps_unrecognized_http_status_to_allowed_database_code(self):
+        store = FakeStore()
+
+        class Issues:
+            def create_or_find_issue(self, task):
+                raise GitHubAPIError("github_http_403")
+
+        dispatcher = GitHubTaskDispatcher(store, Issues(), "sutra-github-worker-12345678")
+        self.assertTrue(dispatcher.run_once())
+        self.assertEqual(store.failed[-1], "github_api_error")
+        self.assertIsNone(store.completed)
+
     def test_no_task_claim_is_idle_and_bad_identity_is_rejected(self):
         store = FakeStore(None)
         dispatcher = GitHubTaskDispatcher(store, object(), "sutra-github-worker-12345678")
