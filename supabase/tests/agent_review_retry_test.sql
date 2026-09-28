@@ -23,7 +23,7 @@ begin
   reservation_id := (reservation->>'reservation_id')::uuid;
   perform public.sutra_begin_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id);
   reconciliation := public.sutra_reconcile_agent_run_spend_from_usage('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id,
-    'openai',model_name,1,1,'{"source":"test_usage"}'::jsonb,true);
+    'openai',model_name,1,1,'{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}'::jsonb,true);
   return reservation || jsonb_build_object('reconciliation',reconciliation);
 end;
 $$;

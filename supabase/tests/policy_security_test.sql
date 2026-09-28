@@ -121,6 +121,19 @@ select lives_ok($$select public.sutra_set_company_setting('12345678',
   'founder designates a department head for review-spend approval');
 create temporary table worker_claims(role text,run_id uuid,lease_token uuid,sequence_no integer) on commit drop;
 create temporary table worker_spend_decision(payload jsonb) on commit drop;
+create function pg_temp.model_usage_rejected(
+  p_run_id uuid,p_lease_token uuid,p_reservation_id uuid,p_model text,
+  p_input_tokens bigint,p_output_tokens bigint,p_usage jsonb,p_expected_sqlstate text
+) returns boolean language plpgsql as $$
+begin
+  perform public.sutra_reconcile_agent_run_spend_from_usage('sutra-worker-12345678',p_run_id,p_lease_token,
+    p_reservation_id,'openai',p_model,p_input_tokens,p_output_tokens,p_usage,true);
+  return false;
+exception
+  when sqlstate '22023' then return p_expected_sqlstate='22023';
+  when sqlstate '23514' then return p_expected_sqlstate='23514';
+end;
+$$;
 create function pg_temp.prepare_agent_run_spend(p_run_id uuid,p_lease_token uuid) returns jsonb
 language plpgsql as $$
 declare reservation jsonb; reservation_id uuid; reconciliation jsonb; model_name text;
@@ -132,8 +145,24 @@ begin
   if reservation->>'status' <> 'approved' then raise exception 'test reservation unexpectedly needs approval'; end if;
   reservation_id := (reservation->>'reservation_id')::uuid;
   perform public.sutra_begin_agent_run_spend('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id);
+  if not pg_temp.model_usage_rejected(p_run_id,p_lease_token,reservation_id,model_name,1,1,
+      '{"prompt_tokens":1,"completion_tokens":1}'::jsonb,'22023') then
+    raise exception 'Hermes usage without total_tokens was accepted';
+  end if;
+  if not pg_temp.model_usage_rejected(p_run_id,p_lease_token,reservation_id,model_name,1,1,
+      '{"prompt_tokens":"1","completion_tokens":1,"total_tokens":2}'::jsonb,'22023') then
+    raise exception 'Hermes usage with nonnumeric token data was accepted';
+  end if;
+  if not pg_temp.model_usage_rejected(p_run_id,p_lease_token,reservation_id,model_name,2,1,
+      '{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}'::jsonb,'22023') then
+    raise exception 'Hermes token counts inconsistent with its usage envelope were accepted';
+  end if;
+  if not pg_temp.model_usage_rejected(p_run_id,p_lease_token,reservation_id,model_name,10001,1,
+      '{"prompt_tokens":10001,"completion_tokens":1,"total_tokens":10002}'::jsonb,'23514') then
+    raise exception 'model usage above its database profile was accepted';
+  end if;
   reconciliation := public.sutra_reconcile_agent_run_spend_from_usage('sutra-worker-12345678',p_run_id,p_lease_token,reservation_id,
-    'openai',model_name,1,1,'{"source":"test_usage"}'::jsonb,true);
+    'openai',model_name,1,1,'{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}'::jsonb,true);
   return reservation || jsonb_build_object('reconciliation',reconciliation);
 end;
 $$;
