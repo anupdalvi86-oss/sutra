@@ -566,17 +566,34 @@ select throws_ok($$select public.sutra_codex_start_request('sutra-worker-codex12
   (select (payload->>'run_id')::uuid from codex_run_claim),
   (select (payload->>'lease_token')::uuid from codex_run_claim),'gpt-4o-mini-test-cheap',100,100)$$,
   '42501',null,'Codex cannot exceed the database-configured request count');
+select throws_ok($$select public.sutra_codex_finish_run('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),false,true,0)$$,
+  '22023',null,'a successful process cannot be reported without trusted provider usage');
+select throws_ok($$select public.sutra_codex_finish_run('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),true,false,999)$$,
+  '22023',null,'malformed process exit codes are rejected');
 create temporary table codex_finish(payload jsonb) on commit drop;
 insert into codex_finish
 select public.sutra_codex_finish_run('sutra-worker-codex12345678',
-  (c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,true) from codex_run_claim c;
+  (c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,true,false,1) from codex_run_claim c;
 select is((select payload->>'status' from codex_finish),'reconciled',
-  'Codex aggregate model usage reconciles to the database price profile and expense ledger');
+  'trusted provider usage reconciles to policy even when the Codex process fails');
+select is((select (payload->>'process_succeeded')::boolean from codex_finish),false,
+  'Codex process outcome is returned independently from financial settlement');
 reset role;
+select is((select status from public.agent_runs where id=(select (payload->>'run_id')::uuid from codex_run_claim)),
+  'failed','a nonzero Codex process is persisted as a failed run');
+select is((select status from public.codex_task_executions where agent_run_id=(select (payload->>'run_id')::uuid from codex_run_claim)),
+  'failed','the execution record distinguishes process failure from reconciled spend');
+select is((select status from public.agent_run_spend_reservations where agent_run_id=(select (payload->>'run_id')::uuid from codex_run_claim)),
+  'reconciled','trusted spend remains reconciled instead of being released after process failure');
 select ok((select count(*) from public.audit_log where action in
   ('codex.responses_request_authorized','codex.responses_usage_recorded'))=6
+  and (select count(*) from public.audit_log where action='codex.process_failed')=1
   and (select count(*) from public.audit_log where action='codex.runner_claimed')=1,
-  'Codex runner claim, requests and provider usage are audit logged');
+  'Codex runner claim, requests, provider usage, and process failure are audit logged');
 set local role service_role;
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
   (select (payload->>'task_id')::uuid from github_dispatch_claim),'done','{"pull_request":"draft","ci":"passed"}'::jsonb)$$,
