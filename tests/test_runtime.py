@@ -546,6 +546,25 @@ class OutboundRequestSecurityTests(unittest.TestCase):
 
 
 class TaskReviewStoreTests(unittest.TestCase):
+    def test_worker_execution_lease_rpc_requires_boolean_response(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        store.request = Mock(side_effect=[True, True])
+        worker_id = "sutra-worker-12345678"
+
+        self.assertTrue(store.acquire_agent_worker_execution_lease(worker_id))
+        self.assertTrue(store.release_agent_worker_execution_lease(worker_id))
+        self.assertEqual(store.request.call_args_list[0].args, (
+            "rpc/sutra_acquire_agent_worker_execution_lease", "POST", {"p_worker_id": worker_id},
+        ))
+        self.assertEqual(store.request.call_args_list[1].args, (
+            "rpc/sutra_release_agent_worker_execution_lease", "POST", {"p_worker_id": worker_id},
+        ))
+
+        store.request.side_effect = None
+        store.request.return_value = "true"
+        with self.assertRaises(IntegrationError):
+            store.acquire_agent_worker_execution_lease(worker_id)
+
     def test_worker_claim_falls_back_to_task_queues_only_when_prior_queues_are_idle(self):
         store = SupabaseREST("https://sutra.example", "server-key")
         artifact_run = {"run_id": "artifact-run", "agent": {"slug": "product_manager"}}

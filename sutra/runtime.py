@@ -84,6 +84,20 @@ class SupabaseREST:
             raise IntegrationError("Supabase returned an invalid RPC response")
         return result
 
+    def acquire_agent_worker_execution_lease(self, worker_id: str) -> bool:
+        result = self.request("rpc/sutra_acquire_agent_worker_execution_lease", "POST",
+                              {"p_worker_id": worker_id})
+        if type(result) is not bool:
+            raise IntegrationError("Supabase returned an invalid worker lease response")
+        return result
+
+    def release_agent_worker_execution_lease(self, worker_id: str) -> bool:
+        result = self.request("rpc/sutra_release_agent_worker_execution_lease", "POST",
+                              {"p_worker_id": worker_id})
+        if type(result) is not bool:
+            raise IntegrationError("Supabase returned an invalid worker lease response")
+        return result
+
     def claim_agent_run(self, worker_id: str) -> dict[str, Any] | None:
         result = self.request("rpc/sutra_claim_agent_run", "POST", {"p_worker_id": worker_id})
         if result is None:
