@@ -1,15 +1,15 @@
 # Sutra status
 
-Updated: 2026-09-28 22:18 Europe/Stockholm
+Updated: 2026-09-28 22:41 Europe/Stockholm
 
 ## Working
 
 - **Supabase:** project `smqsrigsugjuvuombetq` is reachable and `ACTIVE_HEALTHY`. Founder-gated Codex retry migration is applied. Supabase remains the source of truth for projects, tasks, approvals, spending rules, reservations and audit events.
-- **Railway:** production project `valiant-liberation` has Hermes `sutra` and API `sutra-api` Online. The latest merged code is `b24230c` (PR #127); the API's `/health` probe returned HTTP 200 after deployment. Both services remain private. Hermes state uses the persistent volume at `/opt/data`.
+- **Railway:** production project `valiant-liberation` has Hermes `sutra` and API `sutra-api` Online. The latest merged code is `39c27f8` (PR #129); Railway shows its deployment active/successful and the API's `/health` probe returned HTTP 200. Both services remain private. Hermes state uses the persistent volume at `/opt/data`.
 - **Telegram:** [@sutra86bot](https://t.me/sutra86bot) is restricted to founder ID `8776723105`. Board-style CEO/department status, proposal intake, approval listing and founder-only retry commands have been exercised in the logged-in founder chat.
 - **Founder command workflow:** an AI QA product proposal completed CEO → CPO → CTO → CFO → PM and persisted role artifacts. One project is approved with a requested ceiling of €500; two separate proposals remain proposed, with one project-budget approval pending. The approved project ceiling does not authorize individual purchases or external outreach.
 - **Financial controls:** database-configured defaults remain automatic through €10, department-head review above €10 through €50, CFO + CEO above €50 through €200, and founder review at/above €200. A monthly €8 AI-inference hard stop has an 80% warning. The €10–50 band fails closed until a department head is assigned. No total company operating budget is configured. Unknown reservations remain held and are never estimated or released.
-- **GitHub:** repository-scoped GitHub access now verifies and signs existing issue [#107](https://github.com/anupdalvi86-oss/sutra/issues/107), and the runner checked out the repository. PR #127 added explicit Codex model-provider routing through the metering proxy; all four CI jobs passed and it was merged. It did not change project scope or financial authority.
+- **GitHub:** repository-scoped GitHub access verifies and signs existing issue [#107](https://github.com/anupdalvi86-oss/sutra/issues/107), and the runner checked out the repository. PR #127 added explicit Codex model-provider routing through the metering proxy. PR [#129](https://github.com/anupdalvi86-oss/sutra/pull/129) adds allowlisted Hermes completion metadata to missing-usage diagnostics; all four CI jobs passed and it was deployed. Neither PR changed project scope or financial authority.
 
 ## Current engineering attempt
 
@@ -29,11 +29,12 @@ Latest live Supabase query:
 
 ## Checks performed
 
-- Full Python suite: `python3 -m unittest discover -s tests` — 155 passed.
+- Full Python suite: `python3 -m unittest discover -s tests` — 156 passed.
 - Python compile check: `python3 -m compileall -q sutra tests` — passed.
 - Bandit: no medium/high findings.
 - Gitleaks 8.30.1: no leaks found.
 - PR #127 GitHub CI run [36477574459](https://github.com/anupdalvi86-oss/sutra/actions/runs/36477574459) passed Python, database/pgTAP/lint, container/runtime, and secret-scan jobs.
+- PR #129 GitHub CI run [36480418155](https://github.com/anupdalvi86-oss/sutra/actions/runs/36480418155) passed Python, database/pgTAP/lint, container/runtime, and secret-scan jobs. Local validation also passed Bandit 1.9.4 (`-ll`) and Gitleaks 8.30.1.
 - Codex CLI 0.157.1 isolated smoke: local test server received the Responses request at `/v1/responses`; the key was a dummy value and no production provider call was made.
 - Railway after PR #127: both services showed Online and `sutra-api` `/health` returned HTTP 200.
 - Supabase production project was queried for task state, the retry execution, reservations and the corresponding audit record.
@@ -43,7 +44,7 @@ Latest live Supabase query:
 1. **Additional founder authorization is required to retry:** the database intentionally permits only one no-request retry, and it has been used. To run the same approved scope again, the founder must authorize a narrowly scoped extension of the founder-only retry gate for one further zero-request attempt. Existing spend limits and project/task approvals must remain unchanged. No more execution should be triggered until that authorization is recorded.
 2. After authorization, add and deploy the audited retry-gate migration, then verify the metering proxy receives the production run before any model response is returned. Continue only under the existing €8 monthly hard cap.
 3. If the task reaches implementation, the runner may create a branch and PR but cannot merge or release. Keep CI evidence attached to the PR. QA and Security role handoffs are deferred by founder direction.
-4. The CPO-only Kimi route has no post-rollout usage-reconciliation evidence; an earlier €0.28 unknown reservation remains held. A separate proposed €500 project-budget approval remains pending.
+4. The CPO-only Kimi route has no post-rollout usage-reconciliation evidence; an earlier €0.28 unknown reservation remains held. PR #129 improves sanitized diagnostics for a future database-reserved reproduction, but does not establish the historical cause. Kimi remains disabled. A separate proposed €500 project-budget approval remains pending.
 5. Rotate credentials previously shared in chat after base-flow verification. The €8 cap covers AI inference only, not all company operations.
 
 ## Deployment and links
