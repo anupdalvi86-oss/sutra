@@ -5,6 +5,8 @@ Founder → CEO → CTO/CPO/CFO/CMO/Sales/COO.
 
 Engineering includes architecture, development, QA, security and DevOps. Governance/Audit is independent and observes all departments.
 
+See [the operating model](OPERATING_MODEL.md) for all role responsibilities, catalog permissions, handoff targets, artifact contracts and the distinction between descriptive delegation metadata and executable workflow transitions.
+
 ## Sources of truth
 - Supabase: projects, tasks, budgets, approvals, decisions, customers, company state and audit log.
 - GitHub: engineering code, issues, pull requests and CI.
