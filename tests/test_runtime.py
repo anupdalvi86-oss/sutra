@@ -260,17 +260,20 @@ class FounderCommandTests(unittest.TestCase):
         self.store.rpc.assert_not_called()
 
     def test_developer_scope_approval_shows_concrete_design_and_security_risks(self):
+        design = "Scoped interface design. " * 100
         self.store.founder_pending_approvals.return_value = [{
             "approval_id": APPROVAL, "approval_type": "developer_scope",
             "summary": "Founder scope review required before engineering",
             "amount": 0, "currency": "EUR", "pending_roles": [], "ready": True,
-            "scope_review": {"design": "Use a private API with database-backed authorization.",
+            "scope_review": {"design": design,
                              "security_risks": ["Protect service credentials"]},
         }]
         reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show my approvals.")
-        self.assertIn("Proposed implementation design: Use a private API", reply.text)
+        self.assertIn("Proposed implementation design: " + design[:1400], reply.text)
+        self.assertNotIn(design[:1401], reply.text)
         self.assertIn("Security risks to review: Protect service credentials", reply.text)
         self.assertIn("does not approve spend or release", reply.text)
+        self.assertLess(len(reply.text), 4096)
         self.assertEqual(reply.reply_markup["inline_keyboard"][0][0]["callback_data"], f"approve:{APPROVAL}")
 
     def test_approval_callback_records_founder_decision_through_database_rpc(self):

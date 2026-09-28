@@ -385,6 +385,7 @@ class FounderCommandRouter:
                 return FounderResponse("No pending founder approval requests.")
             lines = [f"Founder approvals ({len(approvals)} shown):"]
             keyboard: list[list[dict[str, str]]] = []
+            scope_context_shown = False
             for item in approvals:
                 approval_id = item.get("approval_id")
                 summary = re.sub(r"\s+", " ", str(item.get("summary") or "Approval request"))[:180]
@@ -397,8 +398,9 @@ class FounderCommandRouter:
                 readiness = "ready for your decision" if item.get("ready") is True else f"waiting for {reviewer_list}"
                 lines.extend((f"• {summary} — {value}; {readiness}", f"  ID: {approval_id}"))
                 scope = item.get("scope_review")
-                if item.get("approval_type") == "developer_scope" and isinstance(scope, dict):
-                    design = re.sub(r"\s+", " ", str(scope.get("design") or ""))[:700]
+                if item.get("approval_type") == "developer_scope" and isinstance(scope, dict) and not scope_context_shown:
+                    scope_context_shown = True
+                    design = re.sub(r"\s+", " ", str(scope.get("design") or ""))[:1400]
                     risks = scope.get("security_risks")
                     if design:
                         lines.append(f"  Proposed implementation design: {design}")
