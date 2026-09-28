@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from sutra.codex_dispatch import seal_codex_issue_body
-from sutra.codex_runner import CodexTaskRunner
+from sutra.codex_runner import CodexTaskRunner, classify_codex_failure
 from sutra.github_dispatch import GitHubAPIError, GitHubIssues
 
 
@@ -115,6 +115,38 @@ class CodexRunnerIssueTests(unittest.TestCase):
                 runner.run_once()
         self.assertEqual(captured.records[0].getMessage(),
                          "codex_github_poll_failed stage=evidence error_code=github_forbidden")
+
+    def test_failure_classifier_returns_only_allowlisted_categories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stdout_path = Path(directory) / "events.jsonl"
+            stderr_path = Path(directory) / "errors.log"
+            secret_text = "sk-provider-secret-do-not-persist"
+            stdout_path.write_text(
+                '{"type":"turn.failed","error":{"code":"rate_limit_exceeded",'
+                f'"message":"{secret_text}"}}\n', encoding="utf-8",
+            )
+            stderr_path.write_text(f"{secret_text} HTTP 500 internal details", encoding="utf-8")
+            category = classify_codex_failure(str(stdout_path), str(stderr_path), 1)
+            self.assertEqual(category, "provider_server_error")
+            self.assertNotIn(secret_text, category)
+
+    def test_failure_classifier_maps_json_provider_codes_without_returning_raw_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stdout_path = Path(directory) / "events.jsonl"
+            stderr_path = Path(directory) / "errors.log"
+            stdout_path.write_text(
+                '{"type":"turn.failed","error":{"code":"rate_limit_exceeded",'
+                '"message":"temporary details"}}\n', encoding="utf-8",
+            )
+            stderr_path.write_text("", encoding="utf-8")
+            self.assertEqual(classify_codex_failure(str(stdout_path), str(stderr_path), 1),
+                             "provider_rate_limited")
+
+    def test_failure_classifier_handles_timeout_missing_files_and_unknown_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / "missing")
+            self.assertEqual(classify_codex_failure(missing, missing, None), "codex_process_unavailable")
+            self.assertEqual(classify_codex_failure(missing, missing, 1), "codex_process_failed")
 
 
 if __name__ == "__main__":

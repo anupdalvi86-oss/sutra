@@ -475,6 +475,14 @@ select ok(has_function_privilege('service_role','public.sutra_company_github_dis
 select ok(not has_function_privilege('anon','public.sutra_company_github_dispatch_status()','execute')
   and not has_function_privilege('authenticated','public.sutra_company_github_dispatch_status()','execute'),
   'dispatch health is not exposed to client database roles');
+select ok(has_function_privilege('service_role',
+  'public.sutra_codex_finish_run(text,uuid,uuid,boolean,boolean,integer,text)','execute'),
+  'Codex completion with sanitized diagnostics is available to the service runtime');
+select ok(not has_function_privilege('anon',
+  'public.sutra_codex_finish_run(text,uuid,uuid,boolean,boolean,integer,text)','execute')
+  and not has_function_privilege('authenticated',
+  'public.sutra_codex_finish_run(text,uuid,uuid,boolean,boolean,integer,text)','execute'),
+  'Codex usage and diagnostic settlement are not exposed to client roles');
 select throws_ok($$select * from public.github_task_dispatches$$,
   '42501',null,'service role cannot read GitHub issue state outside audited RPCs');
 select throws_ok($$select * from public.task_agent_artifacts$$,
@@ -568,25 +576,33 @@ select throws_ok($$select public.sutra_codex_start_request('sutra-worker-codex12
   '42501',null,'Codex cannot exceed the database-configured request count');
 select throws_ok($$select public.sutra_codex_finish_run('sutra-worker-codex12345678',
   (select (payload->>'run_id')::uuid from codex_run_claim),
-  (select (payload->>'lease_token')::uuid from codex_run_claim),false,true,0)$$,
+  (select (payload->>'lease_token')::uuid from codex_run_claim),false,true,0,null)$$,
   '22023',null,'a successful process cannot be reported without trusted provider usage');
 select throws_ok($$select public.sutra_codex_finish_run('sutra-worker-codex12345678',
   (select (payload->>'run_id')::uuid from codex_run_claim),
-  (select (payload->>'lease_token')::uuid from codex_run_claim),true,false,999)$$,
+  (select (payload->>'lease_token')::uuid from codex_run_claim),true,false,999,'codex_process_failed')$$,
   '22023',null,'malformed process exit codes are rejected');
+select throws_ok($$select public.sutra_codex_finish_run('sutra-worker-codex12345678',
+  (select (payload->>'run_id')::uuid from codex_run_claim),
+  (select (payload->>'lease_token')::uuid from codex_run_claim),true,false,1,'raw-provider-error')$$,
+  '22023',null,'failure detail must be a known sanitized category');
 create temporary table codex_finish(payload jsonb) on commit drop;
 insert into codex_finish
 select public.sutra_codex_finish_run('sutra-worker-codex12345678',
-  (c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,true,false,1) from codex_run_claim c;
+  (c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,true,false,1,'provider_rate_limited') from codex_run_claim c;
 select is((select payload->>'status' from codex_finish),'reconciled',
   'trusted provider usage reconciles to policy even when the Codex process fails');
 select is((select (payload->>'process_succeeded')::boolean from codex_finish),false,
   'Codex process outcome is returned independently from financial settlement');
+select is((select payload->>'failure_detail_code' from codex_finish),'provider_rate_limited',
+  'only the allowlisted diagnostic category is returned and persisted');
 select throws_ok($$select public.sutra_codex_finish_run('sutra-worker-codex12345678',null,null,true)$$,
   '55000',null,'stale runners using the conflated completion call are safely rejected during rollout');
 reset role;
 select is((select status from public.agent_runs where id=(select (payload->>'run_id')::uuid from codex_run_claim)),
   'failed','a nonzero Codex process is persisted as a failed run');
+select is((select output->>'failure_detail_code' from public.agent_runs where id=(select (payload->>'run_id')::uuid from codex_run_claim)),
+  'provider_rate_limited','safe diagnosis is persisted without provider response content');
 select is((select status from public.codex_task_executions where agent_run_id=(select (payload->>'run_id')::uuid from codex_run_claim)),
   'failed','the execution record distinguishes process failure from reconciled spend');
 select is((select status from public.agent_run_spend_reservations where agent_run_id=(select (payload->>'run_id')::uuid from codex_run_claim)),

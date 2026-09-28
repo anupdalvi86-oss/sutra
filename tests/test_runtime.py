@@ -77,12 +77,14 @@ class FounderCommandTests(unittest.TestCase):
                                   "owner_agent_id": "pm-id"})
         snapshot["agent_runs"].append({"task_id": "codex-task", "status": "failed",
                                        "output": {"error_code": "codex_process_failed",
+                                                  "failure_detail_code": "provider_rate_limited",
                                                   "process_exit_code": 1,
                                                   "codex_execution_status": "reconciled"}})
         reply = render_status_brief(snapshot, "ceo")
         self.assertIn("Codex execution failed (Codex exit code 1)", reply)
-        self.assertIn("usage was reconciled and no PR was produced", reply)
-        self.assertIn("No automatic retry is queued", reply)
+        self.assertIn("diagnostic provider_rate_limited", reply)
+        self.assertIn("provider usage was reconciled, no PR was produced", reply)
+        self.assertIn("no automatic retry is queued", reply)
 
     def test_delivery_health_is_scoped_to_company_and_engineering_roles(self):
         snapshot = status_fixture()
@@ -560,7 +562,7 @@ class TaskReviewStoreTests(unittest.TestCase):
         worker_id, run_id, lease = "sutra-worker-12345678", "run-id", "lease-id"
         store.codex_start_request(worker_id, run_id, lease, "gpt-6-luna", 500, 128)
         store.codex_record_usage(worker_id, run_id, lease, 120, 40)
-        store.codex_finish_run(worker_id, run_id, lease, True, True, 0)
+        store.codex_finish_run(worker_id, run_id, lease, True, True, 0, None)
         store.claim_codex_execution(worker_id, run_id, lease)
         self.assertEqual(store.rpc.call_args_list[0].args, ("sutra_codex_start_request", {
             "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,
@@ -573,6 +575,7 @@ class TaskReviewStoreTests(unittest.TestCase):
         self.assertEqual(store.rpc.call_args_list[2].args, ("sutra_codex_finish_run", {
             "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,
             "p_usage_trusted": True, "p_process_succeeded": True, "p_process_exit_code": 0,
+            "p_failure_detail_code": None,
         }))
         self.assertEqual(store.rpc.call_args_list[3].args, ("sutra_claim_codex_execution", {
             "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease,

@@ -191,12 +191,14 @@ class SupabaseREST:
 
     def codex_finish_run(self, worker_id: str, run_id: str, lease_token: str,
                          usage_trusted: bool, process_succeeded: bool,
-                         process_exit_code: int | None) -> dict[str, Any]:
+                         process_exit_code: int | None,
+                         failure_detail_code: str | None) -> dict[str, Any]:
         return self.rpc("sutra_codex_finish_run", {
             "p_worker_id": worker_id, "p_run_id": run_id, "p_lease_token": lease_token,
             "p_usage_trusted": usage_trusted,
             "p_process_succeeded": process_succeeded,
             "p_process_exit_code": process_exit_code,
+            "p_failure_detail_code": failure_detail_code,
         })
 
     def claim_github_task(self, worker_id: str) -> dict[str, Any] | None:
@@ -715,7 +717,9 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     for task in scoped_tasks:
         run = runs_by_task.get(str(task.get("id")), {})
         output = run.get("output") if isinstance(run.get("output"), dict) else {}
-        if task.get("status") == "in_progress" and output.get("error_code") == "codex_process_failed":
+        if task.get("status") == "in_progress" and output.get("error_code") in {
+            "codex_process_failed", "codex_usage_unknown", "codex_usage_settlement_failed",
+        }:
             failed_codex_tasks.append(task)
     lines.extend(["", "Blockers and risks"])
     if not blocked_tasks and not failed_codex_tasks:
@@ -749,7 +753,13 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         output = run.get("output") if isinstance(run.get("output"), dict) else {}
         exit_code = output.get("process_exit_code")
         detail = f" (Codex exit code {exit_code})" if isinstance(exit_code, int) else ""
-        lines.append(f"• {title} — Codex execution failed{detail}; usage was reconciled and no PR was produced. No automatic retry is queued.")
+        detail_code = output.get("failure_detail_code")
+        safe_detail = f"; diagnostic {detail_code}" if isinstance(detail_code, str) and re.fullmatch(r"[a-z0-9_]{1,48}", detail_code) else ""
+        if output.get("error_code") == "codex_process_failed":
+            explanation = "provider usage was reconciled"
+        else:
+            explanation = "usage or its settlement could not be confirmed; the spend reservation remains under database control"
+        lines.append(f"• {title} — Codex execution failed{detail}{safe_detail}; {explanation}, no PR was produced, and no automatic retry is queued.")
     dispatch_rows = snapshot.get("github_dispatches", [])
     include_delivery = is_company_wide or agent_slug in {"cto", "developer", "devops"}
     visible_dispatches = dispatch_rows[:6] if include_delivery else []
