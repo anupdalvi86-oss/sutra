@@ -137,6 +137,36 @@ class InternalEndpointTests(unittest.TestCase):
         body = json.loads(caught.exception.read())
         self.assertEqual(body["blockers"], ["telegram"])
 
+    def test_readiness_requires_hermes_gateway_when_agent_worker_is_enabled(self):
+        old_store, old_status = self.app.store, self.app.agent_worker_status
+        self.addCleanup(setattr, self.app, "store", old_store)
+        self.addCleanup(setattr, self.app, "agent_worker_status", old_status)
+        self.app.store = FakeStore()
+        self.app.agent_worker_status = "running"
+        with patch.dict("os.environ", {
+            "SUTRA_ENABLE_TELEGRAM": "false",
+            "SUTRA_ENABLE_AGENT_WORKER": "true",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+            "SUTRA_ENABLE_CODEX_RUNNER": "false",
+        }, clear=False), patch("sutra.server.GatewayProbe.state", return_value="unreachable"):
+            with self.assertRaises(HTTPError) as caught:
+                self.get("/ready")
+            body = json.loads(caught.exception.read())
+            self.assertEqual(body["blockers"], ["hermes_gateway"])
+            self.assertEqual(body["checks"]["hermes_gateway"], "unreachable")
+
+        with patch.dict("os.environ", {
+            "SUTRA_ENABLE_TELEGRAM": "false",
+            "SUTRA_ENABLE_AGENT_WORKER": "true",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+            "SUTRA_ENABLE_CODEX_RUNNER": "false",
+        }, clear=False), patch("sutra.server.GatewayProbe.state", return_value="running"):
+            with self.get("/ready") as response:
+                body = json.loads(response.read())
+        self.assertEqual(response.status, 200)
+        self.assertTrue(body["ready"])
+        self.assertEqual(body["checks"]["hermes_gateway"], "running")
+
     def test_internal_spend_requires_server_token(self):
         before = len(self.app.store.calls)
         with self.assertRaises(HTTPError) as caught:

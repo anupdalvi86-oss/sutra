@@ -241,6 +241,7 @@ class SutraApplication:
         checks = {
             "database": health["database"],
             "telegram": health["telegram"],
+            "hermes_gateway": health["hermes_gateway"],
             "agent_worker": health["agent_worker"],
             "github_dispatcher": health["github_dispatcher"],
             "codex_runner": health["codex_runner"],
@@ -257,6 +258,8 @@ class SutraApplication:
             blockers.append("telegram")
         if worker_enabled and health["agent_worker"] != "running":
             blockers.append("agent_worker")
+        if worker_enabled and health["hermes_gateway"] != "running":
+            blockers.append("hermes_gateway")
         if dispatcher_enabled:
             if health["github_dispatcher"] != "running":
                 blockers.append("github_dispatcher")
