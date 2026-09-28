@@ -32,12 +32,12 @@ begin
   insert into public.tasks(project_id,title,description,acceptance_criteria,task_type,status,
       owner_agent_id,assigned_agent_id)
     values(project_id,'Create approved product requirements and implementation plan',
-      'Create a bounded product plan.', '["The plan is persisted"]'::jsonb,'planning','blocked',pm_id,pm_id)
+      'Create a bounded product plan.', '["The plan is persisted"]'::jsonb,'planning','in_progress',pm_id,pm_id)
     returning id into task_id;
   insert into public.agent_runs(agent_id,project_id,task_id,trigger_type,status,input,output,
       started_at,finished_at,attempt_count)
     values(pm_id,project_id,task_id,'task_artifact','failed','{}'::jsonb,
-      '{"error_code":"unknown_or_overrun_spend","failure_detail_code":"invalid_evidence"}'::jsonb,
+      '{"error_code":"unknown_spend"}'::jsonb,
       now(),now(),1) returning id into run_id;
   insert into public.expenses(category,description,amount,currency,status,requested_by,approved_at)
     values('ai_inference','Unknown-usage fixture reserve',reserve_amount,'EUR','approved','test',now())
@@ -63,6 +63,8 @@ select is((select (payload->>'preserved_unknown_reservations')::integer from ret
   'retry preserves the unknown usage reservation');
 select is((select (payload->>'project_spending_authorized')::boolean from retry_result),false,
   'retry does not authorize project spending');
+select is((select (payload->>'attempts_remaining')::integer from retry_result),2,
+  'unknown-spend recovery remains bounded by the three-run ceiling');
 select is((select status from public.tasks where id=(select task_id from retry_fixture)),'ready',
   'recovered task becomes claimable');
 select is((select status from public.agent_run_spend_reservations
