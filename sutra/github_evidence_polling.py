@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
 from .github_dispatch import GitHubAPIError, GitHubIssues
 from .github_webhook import normalize_github_event
 from .runtime import IntegrationError
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubEvidencePoller:
@@ -25,7 +28,12 @@ class GitHubEvidencePoller:
     def poll_once(self) -> int:
         recorded = 0
         repository = self.github.repository
-        for pull_request in self.github.recent_pull_requests():
+        try:
+            pull_requests = self.github.recent_pull_requests()
+        except GitHubAPIError as exc:
+            logger.warning("github_evidence_request_failed endpoint=pull_requests error_code=%s", exc.code)
+            raise
+        for pull_request in pull_requests:
             action = "closed" if pull_request.get("state") == "closed" else "synchronize"
             event = {"action": action, "repository": {"full_name": repository},
                      "pull_request": {**pull_request,
@@ -35,7 +43,12 @@ class GitHubEvidencePoller:
                 self._record("pull_request", normalized)
                 recorded += 1
 
-        for workflow_run in self.github.recent_completed_workflows():
+        try:
+            workflow_runs = self.github.recent_completed_workflows()
+        except GitHubAPIError as exc:
+            logger.warning("github_evidence_request_failed endpoint=workflow_runs error_code=%s", exc.code)
+            raise
+        for workflow_run in workflow_runs:
             event = {"action": "completed", "repository": {"full_name": repository},
                      "workflow_run": workflow_run}
             normalized = normalize_github_event("workflow_run", repository, event)

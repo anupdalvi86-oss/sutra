@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from sutra.github_dispatch import GitHubIssues
+from sutra.github_dispatch import GitHubAPIError, GitHubIssues
 from sutra.github_evidence_polling import GitHubEvidencePoller
 
 
@@ -41,6 +41,8 @@ class GitHubEvidencePollingTests(unittest.TestCase):
 
         self.assertEqual(self.poller.poll_once(), 2)
         self.assertEqual(self.github._request.call_count, 2)
+        self.assertIn("per_page=20", self.github._request.call_args_list[0].args[0])
+        self.assertIn("per_page=20", self.github._request.call_args_list[1].args[0])
         self.assertEqual(self.store.rpc.call_count, 2)
         pr_event = self.store.rpc.call_args_list[0].args[1]
         ci_event = self.store.rpc.call_args_list[1].args[1]
@@ -66,6 +68,15 @@ class GitHubEvidencePollingTests(unittest.TestCase):
         ])
         self.assertEqual(self.poller.poll_once(), 0)
         self.store.rpc.assert_not_called()
+
+    def test_poll_logs_only_endpoint_and_sanitized_error_code(self):
+        self.github._request = Mock(side_effect=GitHubAPIError("malformed_github_response"))
+        with self.assertLogs("sutra.github_evidence_polling", level="WARNING") as captured:
+            with self.assertRaises(GitHubAPIError):
+                self.poller.poll_once()
+        self.assertEqual(captured.records[0].getMessage(),
+                         "github_evidence_request_failed endpoint=pull_requests "
+                         "error_code=malformed_github_response")
 
 
 if __name__ == "__main__":
