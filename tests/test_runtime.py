@@ -67,7 +67,7 @@ class FounderCommandTests(unittest.TestCase):
         }]
         reply = render_status_brief(snapshot, "ceo")
         self.assertIn("Engineering delivery", reply)
-        self.assertIn("GitHub denied issue write access; founder token authorization is required", reply)
+        self.assertIn("GitHub rejected the issue write using the configured repository token; verify its Issues write permission is active", reply)
         self.assertIn("attempt 3/3", reply)
 
     def test_delivery_health_is_scoped_to_company_and_engineering_roles(self):
