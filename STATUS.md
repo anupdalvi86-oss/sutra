@@ -20,12 +20,13 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - Hermes service: `sutra` online with its persistent volume; its API remains private.
 - Telegram: founder-only bot responds to the configured founder account.
 - Supabase: migrations through `20260927234308_founder_pm_approval_readiness` are applied.
-- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#73 merged. PR #73 tightened PM artifact validation diagnostics. Python, database/pgTAP, container build and secret-scan CI checks passed on PR #73.
+- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#76 merged. PR #73 tightened PM artifact validation diagnostics. PRs #75–#76 expanded pgTAP coverage for scoped budget limits, accumulated spend, warning/soft-stop behavior, founder-only financial changes, audit logging, and agent self-escalation denial. Python, database/pgTAP, container build, and secret-scan checks passed.
 
 ## Checks performed
 
 - Local Python suite after PM artifact diagnostics: `python3 -m pytest -q` — 106 passed.
 - GitHub CI on PRs #67 and #68: Python, database/pgTAP, container build and secret scan all passed.
+- GitHub CI on PRs #75 and #76: all checks passed, including hosted PostgreSQL migration/test runs and Python security analysis. SQL tests cover company/project/department/agent/category/vendor budgets; transaction/daily/monthly/lifetime periods; accumulated spend; hard and soft stops; warnings; and founder-only authority changes.
 - `python3 -m bandit -q -r sutra`: no medium or high findings; four low-severity notices relate to subprocess use in the opt-in task runner.
 - Python compile check and `git diff --check` passed.
 - Live read-only Supabase checks verified connectivity, core tables, the one-time runner claim RPC, no direct `anon`/`authenticated` access, project/task counts, and pending approvals. `customers.status='lead'` represents leads in the same lifecycle table.
