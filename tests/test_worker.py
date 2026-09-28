@@ -37,7 +37,9 @@ def claimed_run(role="ceo"):
         "run_id": "00000000-0000-4000-8000-000000000001",
         "lease_token": "00000000-0000-4000-8000-000000000002",
         "agent": {"id": "00000000-0000-4000-8000-000000000003", "slug": role, "responsibilities": ["review"]},
-        "project": {"name": "AI QA product opportunity", "description": "Investigate product demand.", "requested_budget": 500, "currency": "EUR"},
+        "project": {"name": "AI QA product opportunity", "description": "Investigate product demand.",
+                    "status": "approved", "founder_project_budget_approved": True,
+                    "requested_budget": 500, "currency": "EUR"},
         "input": {"request": "Founder proposal."},
         "spending_policies": [{"name": "Founder tier", "min_amount": 200}],
         "applicable_budgets": [],
@@ -90,6 +92,10 @@ def task_artifact_run(role="product_manager"):
         "description": "Create a specific, reviewable output for the approved project.",
         "acceptance_criteria": ["The output is recorded", "The handoff is actionable"],
     }
+    run["prior_results"] = [{
+        "role": "cpo", "stage": "founder_proposal",
+        "evidence": [{"source": "CPO source", "url": "https://example.com/cpo", "claim": "CPO claim."}],
+    }]
     return run
 
 
@@ -175,8 +181,12 @@ class AgentArtifactTests(unittest.TestCase):
         task_context = messages[1]["content"]
         self.assertIn('"criterion":"COPY THE ASSIGNED CRITERION VERBATIM"', prompt)
         self.assertIn('"evidence":"Explain where the persisted deliverable satisfies it"', prompt)
+        self.assertIn("Do not claim project approval is missing when the supplied flag is true", prompt)
         self.assertIn("The output is recorded", task_context)
         self.assertIn("The handoff is actionable", task_context)
+        self.assertIn('"status":"approved"', task_context)
+        self.assertIn('"founder_project_budget_approved":true', task_context)
+        self.assertIn("https://example.com/cpo", task_context)
 
     def test_qa_and_security_artifacts_are_bound_to_database_claim_and_have_complete_evidence(self):
         for role in ("qa", "security"):
