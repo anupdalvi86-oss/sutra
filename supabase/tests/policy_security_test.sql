@@ -439,6 +439,14 @@ select is((pg_temp.run_task_artifact('architect',jsonb_build_object('design','A 
   'succeeded','Architect persists its spend-gated technical design and exact task evidence');
 select is((select status from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),
   'blocked','architecture completion holds Developer work for founder scope review');
+select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
+  (select id from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1),'ready','{}'::jsonb)$$,
+  '42501',null,'Developer cannot self-release a blocked task');
+select is((select item->'scope_review'->>'design'
+  from jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') item
+  where item->>'approval_type'='developer_scope'
+    and item->>'action_ref'=(select id::text from public.tasks where owner_agent_id=(select id from public.agents where slug='developer') order by created_at desc limit 1)),
+  'A component design with bounded interfaces and data flow.','founder scope queue contains the exact persisted technical design');
 select is((select count(*)::integer from public.approvals sa join public.tasks t on t.id::text=sa.action_ref
   where sa.approval_type='developer_scope' and sa.status='pending' and t.owner_agent_id=(select id from public.agents where slug='developer')),
   1,'completed technical design creates one durable founder scope approval');
