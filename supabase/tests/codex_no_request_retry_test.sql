@@ -182,6 +182,25 @@ begin
     where id=execution_id;
 end;
 $$;
+create temporary table codex_terminal_authorization_result(payload jsonb) on commit drop;
+grant insert on codex_terminal_authorization_result to service_role;
+set local role service_role;
+insert into codex_terminal_authorization_result
+select public.sutra_authorize_codex_task('sutra-worker-codex12345678',
+  (select task_id from codex_retry_fixture),107,
+  'https://github.com/anupdalvi86-oss/sutra/issues/107','openai','gpt-6-luna');
+reset role;
+select is((select payload->>'status' from codex_terminal_authorization_result),'terminal',
+  'polling a terminal Codex execution returns a safe no-op result');
+select is((select payload->>'execution_status' from codex_terminal_authorization_result),'unknown',
+  'terminal status preserves the persisted execution outcome');
+select is((select count(*)::integer from public.agent_runs
+  where task_id=(select task_id from codex_retry_fixture)),3,
+  'terminal authorization does not create another agent run');
+select is((select count(*)::integer from public.agent_run_spend_reservations
+  where agent_run_id in (select id from public.agent_runs
+    where task_id=(select task_id from codex_retry_fixture))),3,
+  'terminal authorization creates no reservation and preserves prior reserves');
 set local role service_role;
 select throws_ok($$select public.sutra_founder_retry_codex_task_execution('12345678',(select task_id from codex_retry_fixture))$$,
   '42501',null,'database total-attempt limit blocks attempt four');

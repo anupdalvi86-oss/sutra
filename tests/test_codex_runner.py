@@ -107,6 +107,18 @@ class CodexRunnerIssueTests(unittest.TestCase):
         self.assertEqual(captured.records[0].getMessage(),
                          f"codex_task_authorization_not_ready task_id={TASK_ID} status=awaiting_approval")
 
+    def test_terminal_codex_execution_is_a_quiet_noop_without_claim_or_spend(self):
+        store = Mock()
+        store.authorize_codex_task.return_value = {"status": "terminal", "execution_status": "failed"}
+        runner = CodexTaskRunner(store, self.github, "test-openai-key", codex_binary=sys.executable)
+        runner.evidence_poller.poll_once = Mock()
+        runner.github.open_task_issues = Mock(return_value=[self.issue])
+        with self.assertNoLogs("sutra.codex_runner", level="INFO"):
+            self.assertFalse(runner.run_once())
+        store.claim_codex_execution.assert_not_called()
+        store.codex_start_request.assert_not_called()
+        store.codex_finish_run.assert_not_called()
+
     def test_runner_logs_github_poll_stage_and_sanitized_error_code(self):
         runner = CodexTaskRunner(Mock(), self.github, "test-openai-key", codex_binary=sys.executable)
         runner.evidence_poller.poll_once = Mock(side_effect=GitHubAPIError("github_forbidden"))
