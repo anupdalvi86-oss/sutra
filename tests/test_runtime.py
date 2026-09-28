@@ -102,6 +102,27 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Active/approved/paused projects: 1", reply)
         self.assertIn("AI QA opportunity", reply)
 
+    def test_board_status_lists_backlog_work_and_project_owners(self):
+        snapshot = status_fixture()
+        snapshot["tasks"].append({"id": "backlog-task", "title": "Prepare user interview plan",
+                                  "status": "backlog", "project_id": "project-1",
+                                  "owner_agent_id": "pm-id"})
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("Projects in motion", reply)
+        self.assertIn("AI QA opportunity — approved; owner Chief Executive; requested ceiling EUR 500", reply)
+        self.assertIn("Open tasks", reply)
+        self.assertIn("[backlog] Prepare user interview plan — Product Manager", reply)
+        self.assertIn("[blocked] Review product plan — Product Manager", reply)
+
+    def test_board_status_reports_how_many_open_tasks_are_omitted(self):
+        snapshot = status_fixture()
+        snapshot["tasks"].extend({"id": f"backlog-{index}", "title": f"Backlog task {index}",
+                                  "status": "backlog", "project_id": "project-1",
+                                  "owner_agent_id": "pm-id"} for index in range(15))
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("16 tasks — 15 backlog", reply)
+        self.assertIn("4 more open tasks omitted; see the Supabase task list", reply)
+
     def test_role_status_commands_cover_operating_roles(self):
         for role, expected in (("CTO", "cto"), ("Product Manager", "product manager"),
                                ("QA", "qa"), ("CMO", "cmo"), ("Governance", "governance")):
