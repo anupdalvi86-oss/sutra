@@ -67,6 +67,39 @@ def _usage_envelope_shape(envelope: Any) -> str:
     return "usage_object:" + ",".join(field_types)
 
 
+def _response_context_shape(envelope: Any) -> str:
+    """Return safe, bounded completion metadata without logging response content."""
+    if not isinstance(envelope, dict):
+        return "response_not_object"
+
+    # Only report code-known envelope keys; arbitrary keys could contain untrusted
+    # provider data and are not needed to distinguish normal/error responses.
+    known_keys = ("choices", "error", "hermes", "usage")
+    present_keys = ",".join(key for key in known_keys if key in envelope) or "none"
+    parts = [f"keys={present_keys}"]
+
+    choices = envelope.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        finish_reason = choices[0].get("finish_reason")
+        if not isinstance(finish_reason, str):
+            finish_reason = "missing"
+        elif finish_reason not in {"stop", "length", "content_filter", "tool_calls", "function_call"}:
+            finish_reason = "other"
+        parts.append(f"finish={finish_reason}")
+
+    error = envelope.get("error")
+    if "error" in envelope:
+        parts.append(f"error_type={type(error).__name__}")
+
+    hermes = envelope.get("hermes")
+    if isinstance(hermes, dict):
+        for field in ("completed", "partial", "failed"):
+            value = hermes.get(field)
+            label = str(value).lower() if type(value) is bool else "other" if field in hermes else "missing"
+            parts.append(f"hermes_{field}={label}")
+    return ",".join(parts)
+
+
 class AgentOutputError(ValueError):
     """Hermes did not return a bounded, attributable role artifact."""
 
@@ -364,8 +397,9 @@ class HermesAgentClient:
         if not isinstance(usage, dict):
             safe_provider, safe_model = _safe_usage_route(provider, model)
             logger.warning(
-                "Hermes usage envelope unavailable provider=%s model=%s shape=%s",
+                "Hermes usage envelope unavailable provider=%s model=%s shape=%s response=%s",
                 safe_provider, safe_model, _usage_envelope_shape(envelope),
+                _response_context_shape(envelope),
             )
             usage = None
         else:
@@ -379,8 +413,9 @@ class HermesAgentClient:
                     or usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]):
                 safe_provider, safe_model = _safe_usage_route(provider, model)
                 logger.warning(
-                    "Hermes usage envelope unavailable provider=%s model=%s shape=%s",
+                    "Hermes usage envelope unavailable provider=%s model=%s shape=%s response=%s",
                     safe_provider, safe_model, _usage_envelope_shape(envelope),
+                    _response_context_shape(envelope),
                 )
         try:
             content = envelope["choices"][0]["message"]["content"]
