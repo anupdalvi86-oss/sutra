@@ -671,7 +671,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             title = re.sub(r"\s+", " ", str(dispatch.get("task_title") or "Engineering task"))[:90]
             code = dispatch.get("last_error")
             if code == "github_permission_denied":
-                explanation = "GitHub denied issue write access; founder token authorization is required"
+                explanation = "GitHub rejected the issue write using the configured repository token; verify its Issues write permission is active"
             elif code == "github_rate_limited":
                 explanation = "GitHub rate limit reached; dispatch will retry within its attempt limit"
             elif code:
