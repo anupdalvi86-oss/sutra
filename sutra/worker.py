@@ -32,6 +32,8 @@ class AgentOutputError(ValueError):
 
 def _safe_failure_detail_code(message: str) -> str:
     """Map internal validation messages to a small, code-owned diagnostic enum."""
+    if message == "Agent artifact must be one JSON object":
+        return "invalid_top_level_json_object"
     if message.startswith("Hermes returned malformed JSON"):
         return "malformed_json"
     if message.startswith("Hermes returned no bounded artifact"):
@@ -307,8 +309,10 @@ class HermesAgentClient:
 
 
 def validate_agent_artifact(role: str, value: Any, run: dict[str, Any] | None = None) -> dict[str, Any]:
-    if role not in ROLE_GUIDANCE or not isinstance(value, dict):
-        raise AgentOutputError("Agent artifact must be a JSON object for a supported role")
+    if role not in ROLE_GUIDANCE:
+        raise AgentOutputError("Agent role is not supported")
+    if not isinstance(value, dict):
+        raise AgentOutputError("Agent artifact must be one JSON object")
     if role in {"qa", "security"}:
         return validate_task_review_artifact(role, value, run)
     if isinstance(run, dict) and isinstance(run.get("task_artifact"), dict):
