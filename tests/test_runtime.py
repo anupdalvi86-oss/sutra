@@ -269,7 +269,7 @@ class FounderCommandTests(unittest.TestCase):
                              "security_risks": ["Protect service credentials"]},
         }]
         reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show my approvals.")
-        self.assertIn("Proposed implementation design: " + design[:1400], reply.text)
+        self.assertIn("Proposed implementation design: " + design[:1399] + "…", reply.text)
         self.assertNotIn(design[:1401], reply.text)
         self.assertIn("Security risks to review: Protect service credentials", reply.text)
         self.assertIn("does not approve spend or release", reply.text)
