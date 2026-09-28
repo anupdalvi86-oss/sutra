@@ -7,7 +7,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - Railway production `sutra-api` is online and the latest `/ready` check returned `ready: true`. The service stays private; there is no public application URL. [Open the Railway service](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce).
 - Post-PR #79 `/ready` returned HTTP 200 with `ready: true`: Supabase reachable, Telegram running, and the agent worker running. The GitHub dispatcher and Codex runner are disabled; webhook signing is configured.
 - A fresh founder-account message to `@sutra86bot` received the expected company-status reply: 3 projects, 3 open tasks, and 2 pending approvals. Telegram `getMe` also confirmed the configured bot identity.
-- Private Railway `sutra-api` variables include a GitHub token, webhook secret, and the same OpenAI key used by Hermes. GitHub confirms the currently configured fine-grained token has access to zero repositories, which explains the service-side HTTP 404. The founder supplied a repository-scoped replacement token and confirmed saving it and the webhook secret to the production API service; the update and subsequent access check are still pending. Secret values are not stored in this repository or this status file.
+- Private Railway `sutra-api` variables already match the GitHub token and webhook secret most recently supplied by the founder; the same OpenAI key is used by Hermes. GitHub's token editor has `anupdalvi86-oss/sutra` selected with the runner's minimum permissions, but the persisted token grant still has zero repositories, which explains the service-side HTTP 404. Saving the staged one-repository grant and rechecking access are pending. Secret values are not stored in this repository or this status file.
 - Supabase project `smqsrigsugjuvuombetq` is reachable. The runner claim column and restricted RPC exist, and migration `20260927224724_claim_codex_runner_lease` is recorded as applied.
 - Three durable proposals and two pending €500 budget approvals are recorded. The founder queue now correctly shows one proposal waiting for PM review and another waiting for CFO and PM review. The latest PM run exhausted its three bounded attempts on artifact validation; no project approval or spend was authorized.
 - The Supabase model ledger records €0.42 in current-month committed inference expenses: €0.11 reconciled actual and €0.31 retained as unknown-use reservations. The active monthly AI inference hard cap is €8 with an 80% warning threshold.
@@ -39,7 +39,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 
 ## Remaining blockers
 
-1. The current Railway GitHub token grants access to zero repositories (HTTP 404). A replacement repository-scoped token and the webhook secret were supplied, with explicit confirmation to save them to production Railway. The variables have not yet been updated and verified. The dispatcher and runner remain disabled.
+1. The current Railway GitHub token grants access to zero repositories (HTTP 404). GitHub has the Sutra-only grant staged with Contents, Issues and Pull requests read/write, Actions and Metadata read. Founder action-time confirmation to save this security access change is outstanding. The dispatcher and runner remain disabled.
 2. The latest PM proposal review exhausted its three bounded attempts and failed artifact validation. The queue correctly blocks founder approval until PM succeeds; the retry limit must not be bypassed without a founder-authorized control change.
 3. Three projects are proposed and all three tasks are blocked. One €500 project-budget approval is waiting for PM; another is waiting for CFO and PM. No project spending is authorized.
 4. The full engineering handoff (approved task → GitHub branch/PR → CI evidence → QA/security/release readiness) has not been exercised live. It requires repository access, a successful PM review, and founder approval.
@@ -47,7 +47,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 
 ## Credentials / integrations still required
 
-- Verify the replacement repository-scoped token in Railway against `anupdalvi86-oss/sutra`; keep the local `gh` credential separate from Railway.
+- Save the staged Sutra-only repository grant in GitHub, then verify the Railway token against `anupdalvi86-oss/sutra`; keep the local `gh` credential separate from Railway.
 - The PM review needs a supported path forward under the existing retry bound. No additional inference attempt has been scheduled.
 - Founder approval remains a separate gate after PM review; a €500 budget ceiling does not authorize spending.
 - Rotate the credentials previously pasted into chat after integration verification is complete. Keep all Railway values private.
