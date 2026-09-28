@@ -7,7 +7,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - Railway production `sutra-api` is online and the latest `/ready` check returned `ready: true`. The service stays private; there is no public application URL. [Open the Railway service](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce).
 - `/ready` reports Supabase reachable, Telegram running, and the agent worker running. The GitHub dispatcher and Codex runner are disabled.
 - A fresh founder-account message to `@sutra86bot` received the expected company-status reply: 3 projects, 3 open tasks, and 2 pending approvals. Telegram `getMe` also confirmed the configured bot identity.
-- Private Railway `sutra-api` variables now include `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, and the existing Hermes `OPENAI_API_KEY`. Secret values are not stored in this repository or this status file.
+- Private Railway `sutra-api` variables include the repository token, webhook secret, and the same OpenAI key used by Hermes. The credentials were re-saved after the latest user handoff and the service is online. GitHub still returns HTTP 404 for this private repository with the configured token. Secret values are not stored in this repository or this status file.
 - Supabase project `smqsrigsugjuvuombetq` is reachable. The runner claim column and restricted RPC exist, and migration `20260927224724_claim_codex_runner_lease` is recorded as applied.
 - Three durable proposals and two pending €500 budget approvals are recorded. The founder queue now correctly shows one proposal waiting for PM review and another waiting for CFO and PM review. The latest PM run exhausted its three bounded attempts on artifact validation; no project approval or spend was authorized.
 - The Supabase model ledger records €0.42 in current-month committed inference expenses: €0.11 reconciled actual and €0.31 retained as unknown-use reservations. The active monthly AI inference hard cap is €8 with an 80% warning threshold.
@@ -20,7 +20,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - Hermes service: `sutra` online with its persistent volume; its API remains private.
 - Telegram: founder-only bot responds to the configured founder account.
 - Supabase: migrations through `20260927234308_founder_pm_approval_readiness` are applied.
-- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#72 merged. Python, database/pgTAP, container build and secret-scan CI checks passed.
+- GitHub: repository `anupdalvi86-oss/sutra`; PRs #65–#73 merged. PR #73 tightened PM artifact validation diagnostics. Python, database/pgTAP, container build and secret-scan CI checks passed on PR #73.
 
 ## Checks performed
 
@@ -29,7 +29,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - `python3 -m bandit -q -r sutra`: no medium or high findings; four low-severity notices relate to subprocess use in the opt-in task runner.
 - Python compile check and `git diff --check` passed.
 - Live read-only Supabase checks verified connectivity, core tables, the one-time runner claim RPC, no direct `anon`/`authenticated` access, project/task counts, and pending approvals. `customers.status='lead'` represents leads in the same lifecycle table.
-- Live GitHub API validation with the supplied token returned HTTP 404 for the private Sutra repository. The local GitHub CLI session can see the repository, but that session's credential was not copied into the service.
+- Live GitHub API validation from the Railway service with the configured repository token returned HTTP 404 for the private Sutra repository. The local GitHub CLI session can see the repository, but that session's credential was not copied into the service.
 - Applied migration `20260927234308_founder_pm_approval_readiness`; Supabase and Telegram now both show the PM review as outstanding and withhold the founder approval action.
 - Supabase `agent_run_spend_reservations` shows three attempts on the latest PM run. One attempt's usage is unknown and remains reserved; the other two are reconciled. The system correctly refuses an additional retry after its bounded attempt limit.
 - Supabase security advisor reports 22 informational `rls_enabled_no_policy` findings. Tables intentionally have RLS enabled and no end-user policies; direct client grants are revoked and company writes use restricted server-side RPCs. Recheck if direct client access is introduced.
