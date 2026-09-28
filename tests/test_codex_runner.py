@@ -1,5 +1,8 @@
 import unittest
 import sys
+import tempfile
+import tomllib
+from pathlib import Path
 from unittest.mock import Mock
 
 from sutra.codex_dispatch import seal_codex_issue_body
@@ -68,6 +71,29 @@ class CodexRunnerIssueTests(unittest.TestCase):
         self.assertEqual(env["OPENAI_BASE_URL"], "http://127.0.0.1:12345/v1")
         self.assertFalse({"GITHUB_TOKEN", "SUPABASE_SERVICE_ROLE_KEY", "TELEGRAM_BOT_TOKEN",
                           "SUTRA_INTERNAL_TOKEN"} & env.keys())
+
+    def test_codex_config_pins_responses_to_metered_loopback_provider(self):
+        with tempfile.TemporaryDirectory() as home:
+            self.runner._write_metered_provider_config(home, "http://127.0.0.1:54321/v1")
+            config_path = Path(home) / "config.toml"
+            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(config["model_provider"], "sutra_metered")
+            provider = config["model_providers"]["sutra_metered"]
+            self.assertEqual(provider["base_url"], "http://127.0.0.1:54321/v1")
+            self.assertEqual(provider["wire_api"], "responses")
+            self.assertEqual(provider["env_key"], "OPENAI_API_KEY")
+            self.assertFalse(provider["supports_websockets"])
+            self.assertEqual(provider["request_max_retries"], 0)
+            self.assertEqual(provider["stream_max_retries"], 0)
+            self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+
+    def test_codex_provider_config_rejects_non_loopback_proxy(self):
+        for url in ("https://example.com/v1", "http://192.168.1.10:54321/v1",
+                    "http://127.0.0.1:54321/v1?redirect=example.com"):
+            with self.subTest(url=url), tempfile.TemporaryDirectory() as home:
+                with self.assertRaises(ValueError):
+                    self.runner._write_metered_provider_config(home, url)
+                self.assertFalse((Path(home) / "config.toml").exists())
 
     def test_runner_logs_authorization_wait_without_provider_or_database_details(self):
         store = Mock()
