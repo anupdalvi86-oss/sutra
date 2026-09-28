@@ -258,9 +258,10 @@ class FounderCommandTests(unittest.TestCase):
         self.store.rpc.assert_called_once()
 
     def test_founder_can_request_verified_no_request_codex_retry(self):
-        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "queued", "retry_number": 1}
+        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "queued", "retry_number": 2,
+                                      "attempt_number": 3, "max_total_attempts": 3}
         reply = self.router.handle(FOUNDER, FOUNDER, f"retry Codex task {APPROVAL}").text
-        self.assertIn("Codex retry queued (attempt 1)", reply)
+        self.assertIn("Codex attempt 3 of 3 queued", reply)
         self.assertIn("previous unknown reservation remains preserved", reply)
         self.assertIn("No project spending, merge, or release authority", reply)
         self.store.rpc.assert_called_once_with("sutra_founder_retry_codex_task_execution", {
@@ -269,10 +270,62 @@ class FounderCommandTests(unittest.TestCase):
         })
 
     def test_codex_retry_approval_is_reported_without_launching(self):
-        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "awaiting_approval", "approval_id": APPROVAL}
+        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "awaiting_approval", "approval_id": APPROVAL,
+                                      "attempt_number": 3, "max_total_attempts": 3}
         reply = self.router.handle(FOUNDER, FOUNDER, f"retry Codex task {APPROVAL}").text
-        self.assertIn(f"waiting for model-spend approval: {APPROVAL}", reply)
+        self.assertIn(f"Codex attempt 3 of 3 is waiting for model-spend approval: {APPROVAL}", reply)
         self.store.rpc.assert_called_once()
+
+    def test_founder_can_read_and_set_audited_codex_retry_limit_without_retrying(self):
+        self.store.rpc.return_value = {"previous_total_attempts": 1, "max_total_attempts": 3,
+                                      "changed": True, "no_retry_triggered": True}
+        reply = self.router.handle(FOUNDER, FOUNDER,
+                                  "CEO, set Codex no-request retry limit to 3 total attempts.").text
+        self.assertIn("limit changed: 3 total attempts per execution", reply)
+        self.assertIn("did not trigger a retry", reply)
+        self.assertIn("monthly hard cap", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_codex_retry_limit", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_total_attempts": 3,
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"max_total_attempts": 3, "changed": False,
+                                      "no_retry_triggered": True}
+        reply = self.router.handle(FOUNDER, FOUNDER,
+                                  "CEO, set Codex no-request retry limit to 3 total attempts.").text
+        self.assertIn("already set to that value", reply)
+        self.assertIn("no change or retry occurred", reply)
+        self.store.rpc.assert_called_once()
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"max_total_attempts": 3}
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show Codex no-request retry limit.").text
+        self.assertIn("Current Codex no-request retry limit: 3 total attempts", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_get_codex_retry_limit", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
+    def test_codex_retry_limit_commands_validate_bounds_and_founder_identity(self):
+        for value in ("0", "6", "999"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_founder_command(f"set Codex no-request retry limit to {value}")
+        self.assertEqual(parse_founder_command("set Codex retry limit to three").kind, "unsupported")
+        reply = self.router.handle("987654321", "987654321",
+                                   "CEO, set Codex no-request retry limit to 3 total attempts.").text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+    def test_codex_retry_limit_database_rejection_does_not_retry_or_escalate(self):
+        self.store.rpc.side_effect = IntegrationError("not founder")
+        reply = self.router.handle(FOUNDER, FOUNDER,
+                                   "CEO, set Codex no-request retry limit to 3 total attempts.").text
+        self.assertIn("limit unchanged", reply)
+        self.assertIn("Only the configured founder", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_codex_retry_limit", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_total_attempts": 3,
+        })
 
     def test_codex_retry_rejects_wrong_founder_or_group_chat(self):
         for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):

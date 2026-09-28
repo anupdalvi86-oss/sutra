@@ -7,6 +7,8 @@ on conflict(key) do update set value=excluded.value;
 select public.sutra_set_agent_model_spend_profile(
   '12345678','openai','gpt-6-luna',0.2,0.5,1000,1000,true
 );
+select is((select value #>> '{}' from public.company_settings where key='codex_no_request_retry_limit'),'3',
+  'Codex no-request retry limit defaults to three total attempts');
 
 create temporary table codex_retry_fixture(task_id uuid,execution_id uuid,run_id uuid,reservation_id uuid) on commit drop;
 do $$
@@ -59,12 +61,31 @@ $$;
 grant select on codex_retry_fixture to service_role;
 create temporary table retry_policy_snapshot on commit drop as
   select name,min_amount,max_amount,required_approvers,active from public.spending_policies;
+create temporary table run_count_before_limit_change on commit drop as
+  select count(*)::integer as count from public.agent_runs;
 
 set local role service_role;
 select throws_ok($$select public.sutra_founder_retry_codex_task_execution('99999999',(select task_id from codex_retry_fixture))$$,
   '42501',null,'a nonfounder cannot retry a Codex execution');
 select throws_ok($$select public.sutra_founder_retry_codex_task_execution('12345678',null)$$,
   '22023',null,'malformed Codex retry requests are rejected');
+select throws_ok($$select public.sutra_founder_set_codex_retry_limit('99999999',4)$$,
+  '42501',null,'a nonfounder cannot change the Codex retry limit');
+select throws_ok($$select public.sutra_founder_set_codex_retry_limit('12345678',0)$$,
+  '22023',null,'an out-of-range Codex retry limit is rejected');
+select is((public.sutra_founder_get_codex_retry_limit('12345678')->>'max_total_attempts')::integer,3,
+  'founder can read the current total-attempt limit');
+select is((public.sutra_founder_set_codex_retry_limit('12345678',4)->>'max_total_attempts')::integer,4,
+  'founder can set the retry limit to four total attempts');
+select is((select count(*)::integer from public.agent_runs),
+  (select count from run_count_before_limit_change),
+  'changing retry authority does not start a retry or agent run');
+select ok(exists(select 1 from public.audit_log where actor_type='founder' and actor_id='12345678'
+  and action='founder.codex_retry_limit_changed' and resource_id='codex_no_request_retry_limit'
+  and details->>'previous_total_attempts'='3' and details->>'new_total_attempts'='4'
+  and details->>'no_retry_triggered'='true'),
+  'retry-limit changes are audit logged with no retry side effect');
+select public.sutra_founder_set_codex_retry_limit('12345678',3);
 create temporary table codex_retry_result(payload jsonb) on commit drop;
 insert into codex_retry_result select public.sutra_founder_retry_codex_task_execution(
   '12345678',(select task_id from codex_retry_fixture));
@@ -73,7 +94,9 @@ reset role;
 select is((select payload->>'status' from codex_retry_result),'queued',
   'founder retry queues the existing scoped Codex task');
 select is((select (payload->>'retry_number')::integer from codex_retry_result),1,
-  'the first retry is recorded as attempt one');
+  'the initial failed run is recorded as the first retry ordinal');
+select is((select (payload->>'attempt_number')::integer from codex_retry_result),2,
+  'the first retry creates attempt two of three total attempts');
 select is((select (payload->>'old_unknown_reservation_preserved')::boolean from codex_retry_result),true,
   'retry does not rewrite or release the old unknown reservation');
 select is((select status from public.agent_run_spend_reservations
@@ -105,7 +128,8 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder'
   and resource_id=(select task_id::text from codex_retry_fixture)
   and details->>'prior_request_count'='0' and details->>'project_spending_authorized'='false'),
   'retry records founder identity, verified no-request evidence, and unchanged project authority');
--- A second failed run with even one authorized model request must remain ineligible.
+-- A provider request blocks retry. When reset to a verified no-request failure,
+-- attempt three may run; attempt four is blocked by the database-configured cap.
 do $$
 declare execution_id uuid; run_id uuid; reservation_id uuid; task_id uuid;
 begin
@@ -123,9 +147,54 @@ select throws_ok($$select public.sutra_founder_retry_codex_task_execution('12345
   '42501',null,'a model request prevents the no-request retry path');
 reset role;
 
+do $$
+declare execution_id uuid;
+begin
+  select e.id into execution_id from public.codex_task_executions e
+    where e.id=(select f.execution_id from codex_retry_fixture f);
+  update public.codex_task_executions set status='unknown',request_count=0,input_tokens=0,output_tokens=0
+    where id=execution_id;
+end;
+$$;
+set local role service_role;
+create temporary table codex_retry_third_result(payload jsonb) on commit drop;
+insert into codex_retry_third_result select public.sutra_founder_retry_codex_task_execution(
+  '12345678',(select task_id from codex_retry_fixture));
+reset role;
+select is((select (payload->>'attempt_number')::integer from codex_retry_third_result),3,
+  'the founder-configured three-attempt ceiling allows attempt three');
+select is((select (payload->>'max_total_attempts')::integer from codex_retry_third_result),3,
+  'retry response states the authoritative total-attempt ceiling');
+select is((select count(*)::integer from public.codex_task_execution_attempts
+  where execution_id=(select execution_id from codex_retry_fixture)),2,
+  'both previous no-request attempts remain in immutable history');
+do $$
+declare execution_id uuid; run_id uuid; reservation_id uuid;
+begin
+  select e.id,e.agent_run_id,e.reservation_id into execution_id,run_id,reservation_id
+    from public.codex_task_executions e where e.id=(select f.execution_id from codex_retry_fixture f);
+  update public.agent_runs set status='failed',finished_at=now(),lease_token=null,lease_expires_at=null,
+    output='{"codex_execution_status":"unknown"}'::jsonb where id=run_id;
+  update public.agent_run_spend_reservations set status='unknown',settled_at=now(),
+    usage='{"reason":"Codex execution ended without trusted complete usage"}'::jsonb where id=reservation_id;
+  update public.codex_task_executions set status='unknown',request_count=0,input_tokens=0,output_tokens=0
+    where id=execution_id;
+end;
+$$;
+set local role service_role;
+select throws_ok($$select public.sutra_founder_retry_codex_task_execution('12345678',(select task_id from codex_retry_fixture))$$,
+  '42501',null,'database total-attempt limit blocks attempt four');
+select throws_ok($$select public.sutra_founder_get_codex_retry_limit('99999999')$$,
+  '42501',null,'a nonfounder cannot read the retry limit');
+reset role;
+
 set local role anon;
 select throws_ok($$select public.sutra_founder_retry_codex_task_execution('12345678',(select task_id from codex_retry_fixture))$$,
   '42501',null,'anonymous callers cannot execute the retry RPC');
+select throws_ok($$select public.sutra_founder_set_codex_retry_limit('12345678',4)$$,
+  '42501',null,'anonymous callers cannot execute the setting RPC');
+select throws_ok($$select public.sutra_founder_get_codex_retry_limit('12345678')$$,
+  '42501',null,'anonymous callers cannot execute the getter RPC');
 reset role;
 
 select * from finish();

@@ -263,6 +263,7 @@ class FounderCommand:
     budget: float | None = None
     task_id: str | None = None
     status_role: str = "company"
+    retry_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -282,6 +283,14 @@ PRODUCT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+task\s+([0
 ARCHITECT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+architect\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 GITHUB_DISPATCH_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+github\s+dispatch\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 CODEX_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+codex\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
+CODEX_RETRY_LIMIT_SET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?codex\s+no-request\s+retry\s+limit\s+to\s+([0-9]{1,3})(?:\s+total\s+attempts?)?\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+CODEX_RETRY_LIMIT_GET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?codex\s+no-request\s+retry\s+limit\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
 STATUS_ROLE_RE = re.compile(r"^\s*(ceo|cto|cpo|cfo|coo|product manager|pm|architect|developer|qa|security|devops|cmo|marketing|sales|governance|audit)[, :]\s*(?:give me|show me|provide)?\s*(?:the\s+)?(?:company\s+)?(?:department\s+)?status(?:\s+report)?\s*[?.!]*\s*$", re.IGNORECASE)
 STATUS_ROLES = {
     "ceo": ("CEO", None), "cto": ("CTO", "cto"), "cpo": ("CPO", "cpo"),
@@ -342,6 +351,14 @@ def parse_founder_command(text: str) -> FounderCommand:
         except ValueError as exc:
             raise ValueError("Codex retry needs a valid task ID") from exc
         return FounderCommand("retry_codex_task", text.strip(), task_id=task_id)
+    match = CODEX_RETRY_LIMIT_SET_RE.fullmatch(text)
+    if match:
+        total_attempts = int(match.group(1))
+        if not 1 <= total_attempts <= 5:
+            raise ValueError("Codex no-request retry limit must be 1 to 5 total attempts")
+        return FounderCommand("set_codex_retry_limit", text.strip(), retry_limit=total_attempts)
+    if CODEX_RETRY_LIMIT_GET_RE.fullmatch(text):
+        return FounderCommand("get_codex_retry_limit", text.strip())
     lowered = text.lower()
     if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
         return FounderCommand("approvals", text.strip())
@@ -546,10 +563,37 @@ class FounderCommandRouter:
                 )
             if result.get("status") == "awaiting_approval":
                 return FounderResponse(
-                    f"Codex retry is waiting for model-spend approval: {result.get('approval_id')}. The old unknown reservation remains preserved."
+                    f"Codex attempt {result.get('attempt_number', '?')} of {result.get('max_total_attempts', '?')} is waiting for model-spend approval: {result.get('approval_id')}. The old unknown reservation remains preserved."
                 )
             return FounderResponse(
-                f"Codex retry queued (attempt {result.get('retry_number')}). The previous unknown reservation remains preserved; a fresh capped reservation was requested. No project spending, merge, or release authority was added."
+                f"Codex attempt {result.get('attempt_number', '?')} of {result.get('max_total_attempts', '?')} queued. The previous unknown reservation remains preserved; a fresh reservation was requested under the existing spend policy and monthly hard cap. No project spending, merge, or release authority was added."
+            )
+        if command.kind == "get_codex_retry_limit":
+            try:
+                result = self.store.rpc("sutra_founder_get_codex_retry_limit", {
+                    "p_founder_telegram_user_id": user_id,
+                })
+            except IntegrationError:
+                return FounderResponse("I couldn't read the Codex retry limit. No setting changed; check the database connection and try again.")
+            return FounderResponse(
+                f"Current Codex no-request retry limit: {result.get('max_total_attempts')} total attempts per execution (founder-adjustable from 1 to 5). Changing it never starts a retry."
+            )
+        if command.kind == "set_codex_retry_limit":
+            try:
+                result = self.store.rpc("sutra_founder_set_codex_retry_limit", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_total_attempts": command.retry_limit,
+                })
+            except IntegrationError:
+                return FounderResponse("Codex retry limit unchanged. Only the configured founder can set it from 1 to 5 total attempts.")
+            changed = bool(result.get("changed"))
+            change_note = (
+                "The change was audit logged and did not trigger a retry."
+                if changed
+                else "It was already set to that value, so no change or retry occurred."
+            )
+            return FounderResponse(
+                f"Codex no-request retry limit {'changed' if changed else 'already set'}: {result.get('max_total_attempts')} total attempts per execution. {change_note} Existing spend policy, monthly hard cap, task scope, merge, and release authority are unchanged."
             )
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
@@ -560,6 +604,8 @@ class FounderCommandRouter:
             "Use: retry Architect task <task-id> for a bounded failed architecture task.\n"
             "Use: retry GitHub dispatch <task-id> after fixing a GitHub permission failure.\n"
             "Use: retry Codex task <task-id> after a verified no-request runner failure.\n"
+            "Use: CEO, show Codex no-request retry limit.\n"
+            "Use: CEO, set Codex no-request retry limit to <1-5> total attempts. This only changes the audited founder setting; it does not retry a task.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
