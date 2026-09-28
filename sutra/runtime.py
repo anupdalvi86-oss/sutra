@@ -359,8 +359,8 @@ def parse_founder_command(text: str) -> FounderCommand:
     match = CODEX_RETRY_LIMIT_SET_RE.fullmatch(text)
     if match:
         total_attempts = int(match.group(1))
-        if not 1 <= total_attempts <= 5:
-            raise ValueError("Codex no-request retry limit must be 1 to 5 total attempts")
+        if not 1 <= total_attempts <= 3:
+            raise ValueError("Codex no-request retry limit must be 1 to 3 total attempts")
         return FounderCommand("set_codex_retry_limit", text.strip(), retry_limit=total_attempts)
     if CODEX_RETRY_LIMIT_GET_RE.fullmatch(text):
         return FounderCommand("get_codex_retry_limit", text.strip())
@@ -581,7 +581,7 @@ class FounderCommandRouter:
             except IntegrationError:
                 return FounderResponse("I couldn't read the Codex retry limit. No setting changed; check the database connection and try again.")
             return FounderResponse(
-                f"Current Codex no-request retry limit: {result.get('max_total_attempts')} total attempts per execution (founder-adjustable from 1 to 5). Changing it never starts a retry."
+                f"Current Codex no-request retry limit: {result.get('max_total_attempts')} total attempts per execution (founder-adjustable from 1 to 3). Changing it never starts a retry."
             )
         if command.kind == "set_codex_retry_limit":
             try:
@@ -590,7 +590,7 @@ class FounderCommandRouter:
                     "p_total_attempts": command.retry_limit,
                 })
             except IntegrationError:
-                return FounderResponse("Codex retry limit unchanged. Only the configured founder can set it from 1 to 5 total attempts.")
+                return FounderResponse("Codex retry limit unchanged. Only the configured founder can set it from 1 to 3 total attempts.")
             changed = bool(result.get("changed"))
             change_note = (
                 "The change was audit logged and did not trigger a retry."
@@ -610,7 +610,7 @@ class FounderCommandRouter:
             "Use: retry GitHub dispatch <task-id> after fixing a GitHub permission failure.\n"
             "Use: retry Codex task <task-id> after a verified no-request runner failure.\n"
             "Use: CEO, show Codex no-request retry limit.\n"
-            "Use: CEO, set Codex no-request retry limit to <1-5> total attempts. This only changes the audited founder setting; it does not retry a task.\n"
+            "Use: CEO, set Codex no-request retry limit to <1-3> total attempts. This only changes the audited founder setting; it does not retry a task.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."

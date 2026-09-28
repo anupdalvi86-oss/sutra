@@ -74,16 +74,18 @@ select throws_ok($$select public.sutra_founder_set_codex_retry_limit('99999999',
   '42501',null,'a nonfounder cannot change the Codex retry limit');
 select throws_ok($$select public.sutra_founder_set_codex_retry_limit('12345678',0)$$,
   '22023',null,'an out-of-range Codex retry limit is rejected');
+select throws_ok($$select public.sutra_founder_set_codex_retry_limit('12345678',4)$$,
+  '22023',null,'the founder cannot raise the hard cap above three total attempts');
 select is((public.sutra_founder_get_codex_retry_limit('12345678')->>'max_total_attempts')::integer,3,
   'founder can read the current total-attempt limit');
-select is((public.sutra_founder_set_codex_retry_limit('12345678',4)->>'max_total_attempts')::integer,4,
-  'founder can set the retry limit to four total attempts');
+select is((public.sutra_founder_set_codex_retry_limit('12345678',2)->>'max_total_attempts')::integer,2,
+  'founder can lower the retry limit to two total attempts');
 select is((select count(*)::integer from public.agent_runs),
   (select count from run_count_before_limit_change),
   'changing retry authority does not start a retry or agent run');
 select ok(exists(select 1 from public.audit_log where actor_type='founder' and actor_id='12345678'
   and action='founder.codex_retry_limit_changed' and resource_id='codex_no_request_retry_limit'
-  and details->>'previous_total_attempts'='3' and details->>'new_total_attempts'='4'
+  and details->>'previous_total_attempts'='3' and details->>'new_total_attempts'='2'
   and details->>'no_retry_triggered'='true'),
   'retry-limit changes are audit logged with no retry side effect');
 select public.sutra_founder_set_codex_retry_limit('12345678',3);

@@ -344,7 +344,7 @@ class FounderCommandTests(unittest.TestCase):
         })
 
     def test_codex_retry_limit_commands_validate_bounds_and_founder_identity(self):
-        for value in ("0", "6", "999"):
+        for value in ("0", "4", "6", "999"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_founder_command(f"set Codex no-request retry limit to {value}")
         self.assertEqual(parse_founder_command("set Codex retry limit to three").kind, "unsupported")
