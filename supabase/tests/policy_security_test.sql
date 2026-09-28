@@ -34,6 +34,10 @@ select throws_ok($$select public.sutra_submit_proposal('99999999','Private propo
   '42501',null,'wrong Telegram identity cannot submit a proposal');
 select throws_ok($$select public.sutra_set_spending_policy('99999999','automatic_up_to_10',0,10,true,true,'{}',80,true)$$,
   '42501',null,'nonfounder cannot change financial authority');
+select throws_ok($$select public.sutra_set_budget('developer','agent','developer','monthly',999,80,true)$$,
+  '42501',null,'agent cannot increase its own budget or financial authority');
+select throws_ok($$select public.sutra_set_company_setting('developer','agent_budget_override','999'::jsonb)$$,
+  '42501',null,'agent cannot write company settings to escalate its authority');
 select throws_ok($$select public.sutra_authorize_spend('agent','founder',(select id from public.agents where slug='ceo'),null,null,'ai_api',null,'impersonation',2,'EUR')$$,
   '42501',null,'agent cannot impersonate founder');
 select throws_ok($$select public.sutra_authorize_spend('agent','developer',(select id from public.agents where slug='developer'),null,(select id from public.departments where slug='finance'),'ai_api',null,'department spoof',2,'EUR')$$,
@@ -709,6 +713,12 @@ select is((select payload->>'status' from budget_warning_test),'approved',
   'soft budget threshold allows the transaction');
 select ok((select payload->'budget_warnings' @> '["category:policy-test-warning"]'::jsonb from budget_warning_test),
   'budget usage at or above its configurable warning threshold is returned');
+select lives_ok($$select public.sutra_set_budget('12345678','agent','developer','monthly',3,80,true)$$,
+  'founder can configure an agent budget through the audited policy function');
+select ok(exists(select 1 from public.audit_log where actor_type='founder' and actor_id='12345678'
+  and action='governance.budget_changed' and details->>'scope'='agent'
+  and details->>'scope_key'='developer' and details->>'limit_amount'='3'),
+  'founder-authorized budget changes create an audit record with the configured limit');
 
 select * from finish();
 rollback;
