@@ -160,6 +160,24 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertIn("Do not invent actual leads, contact anyone, or send messages", prompt)
         self.assertIn("task_acceptance", request.call_args.args[0].data.decode())
 
+    def test_product_task_prompt_shows_exact_criterion_evidence_contract(self):
+        response = {"choices": [{"message": {"content": json.dumps(task_artifact_output())}}],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+        fake_response = Mock()
+        fake_response.__enter__ = Mock(return_value=fake_response)
+        fake_response.__exit__ = Mock(return_value=False)
+        fake_response.read.return_value = json.dumps(response).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=fake_response) as request:
+            client = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-4o-mini")
+            client.review(task_artifact_run("product_manager"), max_output_tokens=500)
+        messages = json.loads(request.call_args.args[0].data)["messages"]
+        prompt = messages[0]["content"]
+        task_context = messages[1]["content"]
+        self.assertIn('"criterion":"COPY THE ASSIGNED CRITERION VERBATIM"', prompt)
+        self.assertIn('"evidence":"Explain where the persisted deliverable satisfies it"', prompt)
+        self.assertIn("The output is recorded", task_context)
+        self.assertIn("The handoff is actionable", task_context)
+
     def test_qa_and_security_artifacts_are_bound_to_database_claim_and_have_complete_evidence(self):
         for role in ("qa", "security"):
             result = validate_agent_artifact(role, task_review_artifact(role), task_review_run(role))
