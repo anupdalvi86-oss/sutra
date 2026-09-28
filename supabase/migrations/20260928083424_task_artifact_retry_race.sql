@@ -82,3 +82,22 @@ begin
     'prior_results','[]'::jsonb,'spending_policies',policy_rows,'applicable_budgets',budget_rows);
 end
 $$;
+
+-- The race may already have blocked a task that still has a founder-authorized
+-- queued retry. Restore only that approved PM task to the worker's claimable
+-- state, without creating another run or changing its spending authority.
+with recovered as (
+  update public.tasks t set status='in_progress',updated_at=now()
+  from public.projects p, public.agents a
+  where t.project_id=p.id and t.owner_agent_id=a.id and t.assigned_agent_id=a.id
+    and a.slug='product_manager' and a.active and p.status in ('approved','active')
+    and t.status='blocked'
+    and not exists(select 1 from public.task_agent_artifacts x where x.task_id=t.id)
+    and exists(select 1 from public.agent_runs r where r.task_id=t.id and r.trigger_type='task_artifact'
+      and r.status='queued' and r.attempt_count<3)
+  returning t.id
+)
+insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)
+select 'system','migration:task_artifact_retry_race','task_artifact.retry_recovered','task',id::text,
+  '{"reason":"preserve_founder_authorized_queued_retry","spending_authority_changed":false}'::jsonb
+from recovered;

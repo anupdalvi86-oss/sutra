@@ -391,7 +391,7 @@ select is((select payload->>'status' from artifact_submit),'succeeded','PM task 
 reset role;
 select is((select count(*)::integer from public.task_agent_artifacts where artifact_type='product_plan'),1,
   'PM product plan artifact is durably stored');
-set local role service_role;
+reset role;
 create temporary table retry_queue_fixture(task_id uuid, queued_run_id uuid) on commit drop;
 do $$
 declare task_id uuid; pm_id uuid; project_id uuid; queued_run_id uuid;
@@ -411,8 +411,12 @@ begin
   insert into retry_queue_fixture values(task_id,queued_run_id);
 end;
 $$;
+grant select on retry_queue_fixture to service_role;
 create temporary table retry_queue_claim(payload jsonb) on commit drop;
+grant insert,select on retry_queue_claim to service_role;
+set local role service_role;
 insert into retry_queue_claim select public.sutra_claim_task_agent_run('sutra-worker-12345678');
+reset role;
 select is((select payload->>'run_id' from retry_queue_claim),(select queued_run_id::text from retry_queue_fixture),
   'a queued bounded retry is claimed before an earlier failure can block its task');
 select is((select status from public.agent_runs where id=(select queued_run_id from retry_queue_fixture)),'running',
