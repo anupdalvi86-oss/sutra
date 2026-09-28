@@ -1,53 +1,44 @@
-# Sutra Status
+# Sutra status
 
 Updated: 2026-09-28 (Europe/Stockholm)
 
-## What is working
+## Working
 
-- Railway production `sutra-api` is online and reports `ready: true`. A direct probe from its Railway console returned HTTP 200. The readiness response showed Supabase reachable, Telegram running, and the agent worker running. The service is private; there is no public application URL. [Open the Railway service](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce).
-- The production `sutra` Hermes service is online with its persistent Railway volume. Its API remains private.
-- Telegram founder interface `@sutra86bot` works for the configured founder account. Status and approval-queue commands were exercised in the founder's logged-in session.
-- The proposal review workflow completed in production for the AI QA opportunity: CEO → CPO → CTO → CFO → Product Manager. Each stage persisted a successful run and role artifact. The CPO retry used the founder-only recovery command on attempt 2 of the existing 3-attempt bound; its action was audit logged.
-- Three project records exist for the AI QA opportunity because the proposal was submitted more than once during recovery. One €500 request was rejected; two requests remain pending. One is ready for the founder's decision and one is still waiting for Product Manager review. No product-development work or non-inference project spend has been authorized; the only project-linked expenses are model inference for the reviews below.
-- Database spending controls remain authoritative and configurable. The live budget table currently has a €8 monthly AI inference hard cap and three €500 lifetime proposal ceilings. It has no overall company, department, agent or vendor budget rows, so the €8 inference cap is not a total company operating budget. The current-month model ledger reports €0.15 reconciled actual usage and €0.31 retained as unknown-usage reservations (€0.28 Kimi and €0.03 OpenAI). These reserves remain included in the cap; their usage will not be estimated or released. Other budget scopes can be set only through the founder-audited budget RPC.
-- Railway logs identify the Kimi failure: `kimi-k2.6` returned HTTP 429 because the Kimi organization had reached its configured maximum concurrency of one. The Sutra worker itself runs one review at a time. The response did not include verifiable usage, so the €0.28 reservation remains held. Production role routing is currently `{}` and defaults all roles to GPT-6 Luna; Kimi is not routed for new production work until concurrency behavior and usage settlement can be verified.
-- Supabase project `smqsrigsugjuvuombetq` is reachable. Migrations through `20260928022447_validate_agent_spend_usage_envelope` are applied. Direct `anon`/`authenticated` table access remains revoked; consequential operations use restricted RPCs.
-- Railway has the latest founder-provided GitHub token and webhook secret in private `sutra-api` variables. The GitHub token still grants access to zero repositories (service-side private-repository check returned 404). The GitHub settings page has the Sutra-only permission grant staged, but its final confirmation is still outstanding.
-- GitHub issue/PR evidence handling and the metered Codex runner are implemented. The GitHub dispatcher and Codex runner remain disabled until repository access is verified and a founder-approved task is ready.
+- **Production services:** Railway production project `valiant-liberation` has both `sutra-api` and the Hermes `sutra` service online. Hermes has a persistent Railway volume mounted at `/opt/data`; internal endpoints are private. The API `/ready` endpoint was probed from its live Railway console on 2026-09-28 and returned HTTP 200, `ready: true`, with Supabase reachable, Telegram and the worker running, and the signed GitHub webhook configured.
+- **Telegram:** `@sutra86bot` is running and restricted to founder ID `8776723105`. Board-style status commands, the approval queue, proposal intake, and founder-only retry flows have been exercised in the logged-in Telegram session. Status summaries include projects, tasks, blockers, approvals, and financial controls from persisted Supabase data.
+- **Supabase:** project `smqsrigsugjuvuombetq` is `ACTIVE_HEALTHY`, PostgreSQL 17.6. The latest hosted migration is `20260928092906_task_artifact_approval_context`; all 29 repository migrations are recorded. Public operational tables have RLS enabled; client roles have no direct table access. Founder approvals and policy changes use audited, restricted database functions.
+- **Configured financial authority:** live database policies implement automatic spend through €10, department-head review above €10 through €50, CFO + CEO above €50 through €200, and founder review from €200. The €10–50 band fails closed until a department head is assigned. A monthly €8 AI inference budget has an 80% warning and hard stop. Three €500 project ceilings exist from duplicate proposal records; only project `58c52b74-8f15-4174-a079-e869e3df713c` is approved. No total company operating budget is configured.
+- **Audit and model spend:** the live audit table contains 184 records at the latest query. The provider ledger has €0.19 reconciled actual usage and €0.40 in five unknown-usage reservations, all retained under the €8 monthly cap. This includes a €0.28 Kimi HTTP 429 with unverifiable usage and four OpenAI reservations. No unknown amount has been estimated or released. Production routes all roles to OpenAI GPT-6 Luna; Kimi is not routed.
+- **GitHub delivery controls:** PRs #97, #98 and #99 are merged. CI passed Python, database/pgTAP/lint, container and secret-scan jobs. The Railway token authenticated through GitHub `/user` as the repository owner. Its GitHub settings show only Sutra selected, with Metadata read, Issues read/write, Contents read/write, Pull Requests read/write, and Actions read; no Administration permission is present. Dispatcher and Codex runner remain disabled until the founder confirms the product scope. No production Codex task has run.
 
-## Deployment
+## Current project and workflow
 
-- Railway project: `valiant-liberation`, production environment.
-- API service: `sutra-api`, private, online. The latest live `/ready` probe after a docs-only release returned HTTP 200 and `ready: true`; Supabase, Telegram and the agent worker were healthy. The current GitHub token and webhook secret are stored in private variables; repository access remains unverified.
-- Hermes service: `sutra`, online with persistent volume.
-- Telegram: `@sutra86bot`, founder-only; successful status, retry, and approval-queue messages verified.
-- Supabase: reachable; migrations through `20260928022447_validate_agent_spend_usage_envelope` are applied.
-- GitHub: `anupdalvi86-oss/sutra`; PRs #87–#90 are merged. CI passed Python, database/pgTAP/lint, container and secret-scan jobs.
+The AI QA opportunity has three proposal records from repeated submissions: one €500 request was rejected, one €500 request is approved, and one duplicate €500 request remains pending. The approved project is `AI QA product opportunity` (`58c52b74-8f15-4174-a079-e869e3df713c`). PM and Architect planning tasks have persisted artifacts. The PM plan is research-first and gates prototype implementation on a founder-reviewed scope, validation evidence, and approved representative scenarios. The approved project ceiling does not itself authorize individual purchases or external research outreach.
+
+A successful PM planning artifact exists and the approved project has a bounded task chain. The Architect recovery succeeded and persisted a technical design after the latest migration supplied the founder-approved project flag and prior PM/CPO artifact context. The two new provider attempts reconciled at €0.02 total; the old €0.03 unknown reservation remains held. The successful Architect artifact is a draft and explicitly requires target-user, data-handling, evaluation-scope and validation decisions before prototype work. The CPO research task and generic Developer task are marked ready; five QA/Security/DevOps/Marketing/Sales tasks remain backlog. The Codex dispatcher/runner are disabled. The Developer task's database ready state does not itself mean the unreviewed PM scope is approved. No product-code PR, release, external sales message, or marketing campaign has been produced.
 
 ## Checks performed
 
-- `python3 -m pytest -q`: 113 passed. PRs #89 and #90 changed documentation only.
-- `python3 -m compileall -q sutra tests`: passed.
-- `python3 -m bandit -ll -q -r sutra`: passed with no medium/high findings. Four low-severity notices remain in the opt-in Codex runner for bounded subprocess execution; one existing `nosec` annotation is reported as not needed by the current Bandit version.
-- `git diff --check`: passed.
-- GitHub Actions runs for PRs #87–#90 passed Python, database/pgTAP/lint, containers and secret scanning.
-- Live Supabase checks verified the configured founder identity, all five successful review stages for the decision-ready proposal, two pending approvals, one rejected duplicate, and no non-inference project expenses. The auditable inference ledger retains the unknown reservations described above.
-- Live Supabase spending ledger after the workflow: €0.15 reconciled actual usage; €0.31 remains reserved because prior provider usage could not be verified. The €8 monthly hard cap remains active.
-- Supabase security advisor reports 22 informational `rls_enabled_no_policy` findings. The company tables have RLS enabled, no user-facing policies, and direct client grants revoked; writes go through restricted server RPCs. Performance advisor reports unused indexes on lightly used/early-stage tables.
-- Railway console probe of `http://127.0.0.1:8080/ready` returned HTTP 200 with database, Telegram and agent worker healthy; GitHub webhook configured; GitHub dispatcher and Codex runner disabled.
-- Earlier attempt to run the local Supabase Docker stack failed because the Docker VM ran out of storage while pulling images. Hosted PostgreSQL migration, pgTAP and lint jobs pass in CI.
+- Production Supabase connectivity, migration history, RLS/table inventory, spending policies, budgets, project/task/approval state, spend reservations, and audit count were queried on 2026-09-28.
+- Production Railway `/ready` returned HTTP 200 and `ready: true`; both Railway services showed Online.
+- Founder Telegram status and approval commands were exercised. The run that generated the PM artifact reconciled €0.01 and persisted an artifact; the Architect attempt failed closed on unknown usage and retained its reserve.
+- PRs #97–#99 passed all required GitHub Actions checks before merge.
+- Local Python suite after PR #99: `python3 -m unittest discover -s tests -q` (128 passed); `python3 -m compileall -q sutra tests`; Bandit (`python3 -m bandit -q -r sutra -ll`, no high/medium findings; existing network-binding B104 warning); and `git diff --check` passed.
+- An earlier local Supabase Docker stack attempt could not complete because the Docker VM ran out of storage. Hosted database migration, pgTAP, and lint jobs pass in CI. Supabase advisor findings previously included informational RLS-without-policy notices; direct client grants remain revoked.
 
-## Remaining blockers
+## Blockers and remaining work
 
-1. **Founder project decisions:** Telegram has two pending AI QA proposal records: one ready for your decision and one waiting for Product Manager review. A separate duplicate request was rejected. Decide on the ready request in Telegram; approval does not itself authorize an individual expense beyond the configured spending policy.
-2. **GitHub repository permission:** the Railway token currently has no repository grant. The one-repository grant for `anupdalvi86-oss/sutra` is staged in GitHub with the runner's minimum permissions. Save the staged grant in GitHub, then verify the Railway service can access the repository. Until then, the dispatcher and Codex runner stay disabled.
-3. **Engineering-to-release workflow:** after a founder-approved project/task and verified GitHub access, enable the gated dispatcher/runner for one low-cost task, then validate PR → CI → QA → security → release readiness. No real sales or marketing messages have been sent.
-4. **Credential hygiene:** rotate the credentials previously shared in chat after verification is complete, then update only the corresponding private Railway variables. Secret values are not in this repository.
-5. **Overall company budget:** no total operating budget has been configured. If one is required in addition to the €8 model-usage cap and proposal ceilings, choose its amount and period through the founder approval flow; the system supports an audited company budget hard stop.
+1. **Founder scope decision:** review the PM plan and Architect design; confirm target user, QA workflow, validation scenarios, data handling and whether founder-provided research participants are available. Until then, no product prototype or external research outreach should begin.
+2. **Codex engineering lane:** the production fine-grained token now authenticates and has the narrow repository permissions listed above. Keep the opt-in dispatcher/runner disabled until the founder confirms the specific product scope. Then exercise issue → branch/PR → same-SHA CI → QA → Security evidence. No live Codex task has run.
+3. **Launch handoff:** Marketing and Sales outputs are internal drafts only. No real outreach, payment, agreement, or production release has occurred.
+4. **Credential hygiene:** credentials previously shared in chat should be rotated after the base flow is verified. Keep replacement values only in the relevant private Railway variables; do not put them in chat, GitHub, or this repository.
+5. **Budgets:** assign a department head through the founder-audited flow before using the €10–50 approval tier, and set company/department/agent/vendor limits if required. Current €8 is specifically an inference budget, not the total company budget.
 
-## Recommended next steps
+## Deployment and links
 
-1. Review the AI QA research assessment and choose approve or reject in the Telegram approval queue.
-2. In GitHub's open fine-grained-token editor, save the staged Sutra-only permission grant and verify private repo access from Railway.
-3. Only after those two gates, enable the GitHub dispatcher and Codex runner for one explicitly approved task and exercise the engineering/QA/security handoff.
-4. Rotate the exposed credentials and update the relevant Railway private variables.
+- Railway production project: [valiant-liberation](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce)
+- API service: [sutra-api](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce), private; no public API URL
+- Hermes: `sutra`, private; volume mounted at `/opt/data`
+- Telegram: [@sutra86bot](https://t.me/sutra86bot)
+- GitHub: [anupdalvi86-oss/sutra](https://github.com/anupdalvi86-oss/sutra)
+- Supabase: `smqsrigsugjuvuombetq`, `ACTIVE_HEALTHY`
