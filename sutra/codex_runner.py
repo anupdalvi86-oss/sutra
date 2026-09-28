@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -18,6 +19,8 @@ from .codex_metering import MeteredResponsesProxy
 from .github_dispatch import GitHubAPIError, GitHubIssues
 from .github_evidence_polling import GitHubEvidencePoller
 from .runtime import IntegrationError
+
+logger = logging.getLogger(__name__)
 
 
 class CodexTaskRunner:
@@ -54,10 +57,13 @@ class CodexTaskRunner:
     def run_once(self) -> bool:
         self.evidence_poller.poll_once()
         issues = self.github.open_task_issues()
+        if not issues:
+            logger.info("codex_runner_poll_complete signed_issue_candidates=0")
         for issue in issues:
             try:
                 accepted = self._verified_issue(issue)
             except (ValueError, TypeError):
+                logger.warning("codex_issue_rejected")
                 continue
             task_id = accepted["task_id"]
             with self._lock:
@@ -65,25 +71,35 @@ class CodexTaskRunner:
                     continue
                 self._active_tasks.add(task_id)
             try:
-                authorized = self.store.authorize_codex_task(
-                    self.worker_id, task_id, accepted["issue_number"], accepted["issue_url"],
-                    self.provider, self.model,
-                )
+                try:
+                    authorized = self.store.authorize_codex_task(
+                        self.worker_id, task_id, accepted["issue_number"], accepted["issue_url"],
+                        self.provider, self.model,
+                    )
+                except IntegrationError:
+                    logger.warning("codex_task_authorization_unavailable task_id=%s", task_id)
+                    continue
                 if not isinstance(authorized, dict) or authorized.get("status") != "authorized":
+                    status = authorized.get("status") if isinstance(authorized, dict) else "malformed"
+                    if not isinstance(status, str) or status not in {"awaiting_approval", "rejected", "malformed"}:
+                        status = "unknown"
+                    logger.warning("codex_task_authorization_not_ready task_id=%s status=%s",
+                                   task_id, status)
                     continue
                 run_id, lease_token = authorized.get("run_id"), authorized.get("lease_token")
                 if not isinstance(run_id, str) or not isinstance(lease_token, str):
                     raise IntegrationError("Codex authorization response is malformed")
-                claimed = self.store.claim_codex_execution(self.worker_id, run_id, lease_token)
-                if not isinstance(claimed, dict) or claimed.get("claimed") is not True:
+                try:
+                    claimed = self.store.claim_codex_execution(self.worker_id, run_id, lease_token)
+                except IntegrationError:
+                    logger.warning("codex_task_claim_unavailable task_id=%s", task_id)
                     continue
+                if not isinstance(claimed, dict) or claimed.get("claimed") is not True:
+                    logger.warning("codex_task_claim_rejected task_id=%s", task_id)
+                    continue
+                logger.info("codex_task_claimed task_id=%s run_id=%s", task_id, run_id)
                 self._execute(accepted, authorized)
                 return True
-            except IntegrationError:
-                # The database is authoritative; never continue if policy state
-                # denies this issue or its execution is terminal. Inspect other
-                # signed issues; a broad service outage is retried next poll.
-                continue
             finally:
                 with self._lock:
                     self._active_tasks.discard(task_id)
@@ -258,7 +274,10 @@ class CodexTaskRunner:
         while not stop.is_set():
             try:
                 worked = self.run_once()
-            except (IntegrationError, GitHubAPIError, OSError, RuntimeError, ValueError):
+            except (IntegrationError, GitHubAPIError, OSError, RuntimeError, ValueError) as exc:
+                # Exception text may contain provider or request details. Log only
+                # the bounded exception class for production diagnosis.
+                logger.warning("codex_runner_cycle_failed error_type=%s", type(exc).__name__)
                 worked = False
             if not worked:
                 stop.wait(idle_seconds)

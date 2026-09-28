@@ -33,6 +33,8 @@ The repository is public, so an anonymous repository GET alone does not prove to
 
 The dispatcher creates/reuses a GitHub issue for an approved Developer task and audits the handoff. The metered Codex runner verifies signed issue content, obtains a one-time database claim and can push a task branch/open a PR; it cannot merge or deploy. It uses the database price profile, spend authorization, and metering proxy for provider calls. PR/CI evidence must match the same SHA before Developer completion. QA and Security work is deferred by founder direction. The webhook endpoint is `POST /webhooks/github`; it validates the SHA-256 signature and repository. Railway's API can remain private when its server-side GitHub poller is used.
 
+Railway API logs provide bounded Codex runner diagnostics (`codex_issue_rejected`, `codex_task_authorization_not_ready`, `codex_task_claim_rejected`, and `codex_runner_cycle_failed`). Exception text, issue bodies, credentials, and model prompts are excluded. Set `SUTRA_LOG_LEVEL` to adjust process log verbosity; the default is `INFO`.
+
 PR #117 CI and main run [36463003360](https://github.com/anupdalvi86-oss/sutra/actions/runs/36463003360) passed; checks include Python, database/pgTAP/lint, container/runtime, and secret scanning. See [STATUS.md](../STATUS.md) for current proof and outstanding gates.
 
 ## Telegram
