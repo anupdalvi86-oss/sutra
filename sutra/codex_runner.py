@@ -22,6 +22,79 @@ from .runtime import IntegrationError
 
 logger = logging.getLogger(__name__)
 
+SAFE_FAILURE_DETAIL_CODES = {
+    "codex_process_failed", "codex_process_timeout", "codex_process_unavailable",
+    "provider_auth_rejected", "provider_access_denied", "provider_rate_limited",
+    "provider_quota_exhausted", "provider_model_unavailable", "provider_request_rejected",
+    "provider_server_error", "provider_connection_failed", "provider_timeout",
+    "provider_usage_missing", "provider_usage_unverified",
+}
+
+_PROVIDER_ERROR_CODES = {
+    "invalid_api_key": "provider_auth_rejected",
+    "authentication_error": "provider_auth_rejected",
+    "unauthorized": "provider_auth_rejected",
+    "permission_denied": "provider_access_denied",
+    "insufficient_permissions": "provider_access_denied",
+    "rate_limit_exceeded": "provider_rate_limited",
+    "rate_limit_error": "provider_rate_limited",
+    "insufficient_quota": "provider_quota_exhausted",
+    "billing_hard_limit_reached": "provider_quota_exhausted",
+    "model_not_found": "provider_model_unavailable",
+    "invalid_request_error": "provider_request_rejected",
+    "server_error": "provider_server_error",
+    "service_unavailable": "provider_server_error",
+    "connection_error": "provider_connection_failed",
+    "timeout": "provider_timeout",
+    "request_timeout": "provider_timeout",
+}
+
+
+def classify_codex_failure(stdout_path: str, stderr_path: str, exit_code: int | None) -> str:
+    """Return an allowlisted failure category without persisting CLI/provider text."""
+    if exit_code is None:
+        return "codex_process_unavailable"
+    captured: list[bytes] = []
+    for path in (stderr_path, stdout_path):
+        try:
+            with open(path, "rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - 1_048_576))
+                captured.append(stream.read(1_048_576))
+        except OSError:
+            continue
+    for raw in captured:
+        text = raw.decode("utf-8", errors="replace")
+        for match in re.finditer(r"\bHTTP(?:\s+status)?\s*[:=]?\s*(401|403|404|408|429|5\d\d)\b", text, re.IGNORECASE):
+            status_code = int(match.group(1))
+            return {
+                401: "provider_auth_rejected", 403: "provider_access_denied",
+                404: "provider_model_unavailable", 408: "provider_timeout",
+                429: "provider_rate_limited",
+            }.get(status_code, "provider_server_error")
+        for line in text.splitlines()[-500:]:
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            stack: list[tuple[Any, int]] = [(event, 0)]
+            while stack:
+                value, depth = stack.pop()
+                if depth > 8:
+                    continue
+                if isinstance(value, dict):
+                    for key in ("code", "type"):
+                        candidate = value.get(key)
+                        if isinstance(candidate, str):
+                            mapped = _PROVIDER_ERROR_CODES.get(candidate.lower())
+                            if mapped:
+                                return mapped
+                    stack.extend((child, depth + 1) for child in value.values())
+                elif isinstance(value, list):
+                    stack.extend((child, depth + 1) for child in value[-100:])
+    return "codex_process_failed"
+
 
 class CodexTaskRunner:
     """Poll signed, approved task issues; open PRs without merging or deploying."""
@@ -267,6 +340,7 @@ class CodexTaskRunner:
                 stderr_path = os.path.join(temp_dir, "codex-errors.log")
                 process_exit_code = None
                 codex_succeeded = False
+                failure_detail_code = None
                 try:
                     with open(stdout_path, "wb") as stdout_file, open(stderr_path, "wb") as stderr_file:
                         process = subprocess.run(
@@ -277,18 +351,29 @@ class CodexTaskRunner:
                     codex_succeeded = process.returncode == 0 and proxy.saw_usage and not proxy.uncertain
                     process_exit_code = process.returncode
                     if not codex_succeeded:
+                        failure_detail_code = (
+                            classify_codex_failure(stdout_path, stderr_path, process.returncode)
+                            if process.returncode != 0 else
+                            "provider_usage_unverified" if proxy.uncertain else
+                            "provider_usage_missing"
+                        )
                         logger.warning(
-                            "codex_process_incomplete return_code=%s usage_recorded=%s usage_uncertain=%s",
-                            process.returncode, proxy.saw_usage, proxy.uncertain,
+                            "codex_process_incomplete return_code=%s usage_recorded=%s usage_uncertain=%s failure_detail_code=%s",
+                            process.returncode, proxy.saw_usage, proxy.uncertain, failure_detail_code,
                         )
                 except (subprocess.TimeoutExpired, OSError) as exc:
-                    logger.warning("codex_process_unavailable error_type=%s", type(exc).__name__)
+                    failure_detail_code = (
+                        "codex_process_timeout" if isinstance(exc, subprocess.TimeoutExpired)
+                        else "codex_process_unavailable"
+                    )
+                    logger.warning("codex_process_unavailable error_type=%s failure_detail_code=%s",
+                                   type(exc).__name__, failure_detail_code)
                     codex_succeeded = False
                 finally:
                     usage_trusted = proxy.saw_usage and not proxy.uncertain
                     self.store.codex_finish_run(
                         self.worker_id, run_id, lease_token, usage_trusted,
-                        codex_succeeded, process_exit_code,
+                        codex_succeeded, process_exit_code, failure_detail_code,
                     )
                     finished = True
             if not finished or not codex_succeeded:
