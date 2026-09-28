@@ -10,7 +10,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - The proposal review workflow completed in production for the AI QA opportunity: CEO → CPO → CTO → CFO → Product Manager. Each stage persisted a successful run and role artifact. The CPO retry used the founder-only recovery command on attempt 2 of the existing 3-attempt bound; its action was audit logged.
 - The PM result is a research-only opportunity assessment. The €500 project budget remains only a proposed maximum, not spending authorization. The project is still proposed and its approval is pending founder decision. Telegram says it is ready for a decision. No project expense or development work has been authorized.
 - Database spending controls remain authoritative and configurable. Current defaults are a €8 monthly AI inference hard cap with an 80% warning threshold. The current-month model ledger reports €0.15 reconciled actual usage and €0.31 retained as unknown-usage reservations.
-- Supabase project `smqsrigsugjuvuombetq` is reachable. Migration `20260928012624_founder_retry_failed_review_stage` is applied. Direct `anon`/`authenticated` table access remains revoked; consequential operations use restricted RPCs.
+- Supabase project `smqsrigsugjuvuombetq` is reachable. Migrations through `20260928022447_validate_agent_spend_usage_envelope` are applied. Direct `anon`/`authenticated` table access remains revoked; consequential operations use restricted RPCs.
 - Railway has the current founder-provided GitHub token and webhook secret in private service variables. The repository token still grants access to zero repositories (service-side private-repository check returned 404). The GitHub settings page has the Sutra-only permission grant staged, but its final action-time confirmation is still outstanding.
 - GitHub issue/PR evidence handling and the metered Codex runner are implemented. The GitHub dispatcher and Codex runner remain disabled until repository access is verified and a founder-approved task is ready.
 
@@ -20,7 +20,7 @@ Updated: 2026-09-28 (Europe/Stockholm)
 - API service: `sutra-api`, private, online. Railway reports PR #85 deployed successfully. The live `/ready` probe returned HTTP 200 and `ready: true` after that deployment. Founder-provided GitHub token and webhook secret are stored in private variables; the repository permission grant remains unverified.
 - Hermes service: `sutra`, online with persistent volume.
 - Telegram: `@sutra86bot`, founder-only; successful status, retry, and approval-queue messages verified.
-- Supabase: reachable; migrations through `20260928012624_founder_retry_failed_review_stage` are applied.
+- Supabase: reachable; migrations through `20260928022447_validate_agent_spend_usage_envelope` are applied.
 - GitHub: `anupdalvi86-oss/sutra`; PR #85 is merged. Its CI passed Python, database/pgTAP/lint, container and secret-scan jobs.
 
 ## Checks performed
