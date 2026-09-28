@@ -1,46 +1,56 @@
 # Sutra status
 
-Updated: 2026-09-28 (Europe/Stockholm), after PR #120 rollout and founder dispatch retry
+Updated: 2026-09-28 22:18 Europe/Stockholm
 
 ## Working
 
-- **Production services:** Railway production project `valiant-liberation` has both `sutra-api` and Hermes `sutra` Online. Hermes has a persistent Railway volume at `/opt/data`; internal endpoints are private. The PR #119 API deployment is active and its `/health` check returned HTTP 200. The API service remains private.
-- **Telegram:** `@sutra86bot` is running and restricted to founder ID `8776723105`. Board-style status commands, the approval queue, proposal intake, and founder-only retry flows have been exercised in the logged-in Telegram session. Status summaries include projects, tasks, blockers, approvals, and financial controls from persisted Supabase data.
-- **Supabase:** project `smqsrigsugjuvuombetq` is `ACTIVE_HEALTHY`, PostgreSQL 17.6. The hosted `founder_github_dispatch_retry` migration is applied (33 migrations recorded). The retry RPC is executable only by `service_role`; its database checks enforce founder identity, active Developer assignment, existing scope/project approvals, the exact permission-denied failure, no issue/PR association at retry time, and a bounded lifetime retry limit. Public operational tables have RLS enabled; client roles have no direct table access. Founder approvals and policy changes use audited, restricted database functions.
-- **Configured financial authority:** live database policies implement automatic spend through €10, department-head review above €10 through €50, CFO + CEO above €50 through €200, and founder review from €200. The €10–50 band fails closed until a department head is assigned. A monthly €8 AI inference budget has an 80% warning and hard stop. Three €500 project ceilings exist from duplicate proposal records; only project `58c52b74-8f15-4174-a079-e869e3df713c` is approved. No total company operating budget is configured.
-- **Audit and model spend:** the latest live query returned 236 audit events. The live spend policies include an €8 monthly AI-inference hard stop and 80% warning. Unknown-usage reservations remain held and are never estimated or released. Railway now routes only CPO to `kimi-coding:kimi-k2.6`; other roles use OpenAI GPT-6 Luna. No CPO run after this rollout has verified Kimi usage reconciliation. The earlier Kimi attempt retains a €0.28 unknown reservation.
-- **GitHub delivery controls:** PR #119 is merged as `ff597b1`; all four CI jobs passed. Railway deployed #119 successfully. Founder retry 2/3 was accepted and audited. Railway then signed the existing issue #107 and recorded issue creation successfully; no duplicate issue was created. GitHub's current token settings show repository-scoped Issues, Contents, and Pull requests read/write. The task is now `in_progress`, but Supabase has no `codex_task_executions` row yet and no implementation PR exists; the Codex runner handoff remains unverified.
+- **Supabase:** project `smqsrigsugjuvuombetq` is reachable and `ACTIVE_HEALTHY`. Founder-gated Codex retry migration is applied. Supabase remains the source of truth for projects, tasks, approvals, spending rules, reservations and audit events.
+- **Railway:** production project `valiant-liberation` has Hermes `sutra` and API `sutra-api` Online. The latest merged code is `b24230c` (PR #127); the API's `/health` probe returned HTTP 200 after deployment. Both services remain private. Hermes state uses the persistent volume at `/opt/data`.
+- **Telegram:** [@sutra86bot](https://t.me/sutra86bot) is restricted to founder ID `8776723105`. Board-style CEO/department status, proposal intake, approval listing and founder-only retry commands have been exercised in the logged-in founder chat.
+- **Founder command workflow:** an AI QA product proposal completed CEO → CPO → CTO → CFO → PM and persisted role artifacts. One project is approved with a requested ceiling of €500; two separate proposals remain proposed, with one project-budget approval pending. The approved project ceiling does not authorize individual purchases or external outreach.
+- **Financial controls:** database-configured defaults remain automatic through €10, department-head review above €10 through €50, CFO + CEO above €50 through €200, and founder review at/above €200. A monthly €8 AI-inference hard stop has an 80% warning. The €10–50 band fails closed until a department head is assigned. No total company operating budget is configured. Unknown reservations remain held and are never estimated or released.
+- **GitHub:** repository-scoped GitHub access now verifies and signs existing issue [#107](https://github.com/anupdalvi86-oss/sutra/issues/107), and the runner checked out the repository. PR #127 added explicit Codex model-provider routing through the metering proxy; all four CI jobs passed and it was merged. It did not change project scope or financial authority.
 
-## Current project and workflow
+## Current engineering attempt
 
-The AI QA opportunity has three proposal records from repeated submissions: one €500 request was rejected, one €500 request is approved, and one duplicate €500 request remains pending. The approved project is `AI QA product opportunity` (`58c52b74-8f15-4174-a079-e869e3df713c`). PM and Architect planning tasks have persisted artifacts. The PM plan is research-first and gates prototype implementation on a founder-reviewed scope, validation evidence, and approved representative scenarios. The approved project ceiling does not itself authorize individual purchases or external research outreach.
+The founder-approved Developer task `269cd305-2a8c-46a7-abb7-3d00f271d78f` remains `in_progress`, linked to issue #107. Its single permitted founder retry was accepted and audited. Railway claimed that run, but Codex CLI exited before it made a model request because it ignored the environment-only base URL and defaulted to the public endpoint with the runner's dummy key.
 
-A successful PM planning artifact and an Architect design are persisted. The design limits the proposal to a non-executing Playwright test-draft workflow and records target-user, data-handling, provider, validation and retention decisions still needed. Founder scope approval `971fe1e2-d4cb-41d7-bcfb-3c38f097342e` is approved and the Developer task `269cd305-2a8c-46a7-abb7-3d00f271d78f` is ready; the approval authorizes scoped implementation start but not spend or release. Live counts are 9 open tasks (5 backlog, 2 ready, 2 blocked) and 1 pending approval: a separate proposed €500 project (`93b43006-58f9-4096-9e72-df9aeaf350ff`, approval `539a8225-1230-4896-87d2-b48e7c28ae82`). A CPO research task is ready, with no execution run since the CPO-only Kimi route rollout. Founder direction defers QA and Security role handoffs for now. The approved project remains limited to draft-only work; no product release, external outreach or campaign has occurred.
+PR #127 fixes this by generating a private `$CODEX_HOME/config.toml` that selects Sutra's loopback Responses provider. Codex CLI 0.157.1 was smoke-tested with a dummy key and a local rejecting endpoint; its request reached the configured `/v1/responses` loopback endpoint. The change is deployed to Railway and both services are Online. **The production task has not been retried against the fix:** its database-enforced one-retry limit is exhausted. Supabase records zero model requests and zero tokens for the failed run; the old unknown reservation remains held, and the fresh retry reservation is also preserved. No production model usage or implementation PR resulted.
+
+## Current operational counts
+
+Latest live Supabase query:
+
+- Projects: 1 approved, 2 proposed.
+- Tasks: 2 done, 1 ready, 1 in progress, 5 backlog, 2 blocked.
+- Pending approvals: 1 project-budget approval (`539a8225-1230-4896-87d2-b48e7c28ae82`) for a separate proposed project.
+- The approved AI QA project has not been released. No real sales/marketing messages, purchases, agreements, or deployments of a product have occurred.
+- QA and Security agent handoffs remain deferred by founder direction.
 
 ## Checks performed
 
-- Production Supabase connectivity, migration history, RLS/table inventory, spending policies, budgets, project/task/approval state, spend reservations, and audit count were queried on 2026-09-28. The `founder_github_dispatch_retry` migration is applied. Founder retry 2/3 and issue #107 creation are reflected in the dispatch row and audit trail; the bounded status RPC remains restricted to `service_role`.
-- After the #111 deployment, a fresh production probe from the Railway `sutra-api` console returned `/ready` with `ready: true`, no blockers, and database, Telegram, Hermes gateway, agent worker, GitHub dispatcher and Codex runner all running/configured; both Railway services showed Online. The new warning-level stage logs show that GitHub issue lookup finds canonical issue #107, then the signing PATCH receives HTTP 403. The dispatch now records the allowed `github_api_error` code and stops retrying after its three-attempt limit rather than leaving an invalid database error code and a stale lease.
-- After PR #104, the Railway UI showed `sutra-api` and Hermes `sutra` Online, with the #104 deployment successful. Telegram rendered the scoped Developer approval with its design excerpt and risks.
-- Founder Telegram status and approval commands were exercised. The run that generated the PM artifact reconciled €0.01 and persisted an artifact; the Architect attempt failed closed on unknown usage and retained its reserve.
-- PRs #101–#106 passed CI before merge. PR #106 passed all four jobs; its main-branch run is listed at [run 36411707540](https://github.com/anupdalvi86-oss/sutra/actions/runs/36411707540).
-- Local Python suite: `python3 -m pytest -q` (144 passed on the PR #119 branch). PR #119 CI run [36466235499](https://github.com/anupdalvi86-oss/sutra/actions/runs/36466235499) passed all four jobs: Python, database/pgTAP/lint, container/runtime, and secret scan. QA and Security agent handoffs are deferred per founder direction; existing authorization, spending controls, and automated CI remain enabled.
-- The founder Telegram command `CEO, give me company status.` was exercised against the deployed PR #115 service. Its board brief returned live project/task/approval/budget status and correctly surfaced the audited `github_permission_denied` delivery blocker at attempt 3/3.
-- Production Supabase connectivity, migration history, founder scope gate/task state, approval context and audit state were verified after both hosted migrations. The local Supabase Docker stack could not start because the Docker VM ran out of storage while downloading images; hosted migrations, pgTAP and lint passed. Supabase advisor findings previously included informational RLS-without-policy notices; direct client grants remain revoked.
+- Full Python suite: `python3 -m unittest discover -s tests` — 155 passed.
+- Python compile check: `python3 -m compileall -q sutra tests` — passed.
+- Bandit: no medium/high findings.
+- Gitleaks 8.30.1: no leaks found.
+- PR #127 GitHub CI run [36477574459](https://github.com/anupdalvi86-oss/sutra/actions/runs/36477574459) passed Python, database/pgTAP/lint, container/runtime, and secret-scan jobs.
+- Codex CLI 0.157.1 isolated smoke: local test server received the Responses request at `/v1/responses`; the key was a dummy value and no production provider call was made.
+- Railway after PR #127: both services showed Online and `sutra-api` `/health` returned HTTP 200.
+- Supabase production project was queried for task state, the retry execution, reservations and the corresponding audit record.
 
-## Blockers and remaining work
+## Remaining work and blockers
 
-1. **Production execution (critical):** founder scope approval is in place. Retry 2/3 successfully signed and linked issue #107, and the current token settings show the required repository-scoped Issues, Contents, and Pull requests write permissions. The Developer task is `in_progress`; however, no Codex execution row or implementation PR has appeared. The Railway service flag `SUTRA_ENABLE_CODEX_RUNNER` is `true`. Diagnose why the runner has not claimed the signed issue before spending more retry cycles. QA and Security agent handoffs are deferred per founder direction.
-2. **Product discovery and boundaries:** the CPO research task is ready. Target users, research participants, representative non-sensitive scenarios, data classification, provider retention and evaluation rubric still need evidence or founder input before external research or any product release. Current approved scope is non-executing draft-only.
-3. **Separate proposal:** approval `539a8225-1230-4896-87d2-b48e7c28ae82` is pending for the separate proposed €500 project; this is unrelated to the already-approved project and creates no spend authority.
-4. **Launch handoff:** Marketing and Sales outputs are internal drafts only. No real outreach, payment, agreement, or product release has occurred.
-5. **Credential hygiene and budgets:** rotate credentials previously shared in chat after base-flow verification. The €8/month limit is the AI inference cap, not a total company operating budget. The €10–50 spend tier remains fail-closed until a department head is assigned; configure other company/department/agent/vendor budgets if needed. The CPO-only Kimi route should not be considered validated until a suitable founder-authorized run reports reconcilable usage; the existing unknown Kimi reserve remains held.
+1. **Additional founder authorization is required to retry:** the database intentionally permits only one no-request retry, and it has been used. To run the same approved scope again, the founder must authorize a narrowly scoped extension of the founder-only retry gate for one further zero-request attempt. Existing spend limits and project/task approvals must remain unchanged. No more execution should be triggered until that authorization is recorded.
+2. After authorization, add and deploy the audited retry-gate migration, then verify the metering proxy receives the production run before any model response is returned. Continue only under the existing €8 monthly hard cap.
+3. If the task reaches implementation, the runner may create a branch and PR but cannot merge or release. Keep CI evidence attached to the PR. QA and Security role handoffs are deferred by founder direction.
+4. The CPO-only Kimi route has no post-rollout usage-reconciliation evidence; an earlier €0.28 unknown reservation remains held. A separate proposed €500 project-budget approval remains pending.
+5. Rotate credentials previously shared in chat after base-flow verification. The €8 cap covers AI inference only, not all company operations.
 
 ## Deployment and links
 
 - Railway production project: [valiant-liberation](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce)
-- API service: [sutra-api](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce), private; no public API URL
-- Hermes: `sutra`, private; volume mounted at `/opt/data`
+- API service: [sutra-api](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce), private
+- Hermes service: `sutra`, private, persistent volume mounted at `/opt/data`
 - Telegram: [@sutra86bot](https://t.me/sutra86bot)
 - GitHub: [anupdalvi86-oss/sutra](https://github.com/anupdalvi86-oss/sutra)
 - Supabase: `smqsrigsugjuvuombetq`, `ACTIVE_HEALTHY`
