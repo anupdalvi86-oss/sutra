@@ -6,7 +6,7 @@ values('founder_telegram_user_id','"12345678"'::jsonb,true,'test')
 on conflict(key) do update set value=excluded.value;
 
 -- The spend-reservation snapshot trigger requires an active founder-configured
--- model ceiling. This test profile deterministically prices the fixture reserve at €0.03.
+-- model ceiling. The trigger reserves all three bounded model iterations.
 select public.sutra_set_agent_model_spend_profile(
   '12345678','openai','gpt-6-luna',0.2,0.5,100000,10000,true
 );
@@ -16,8 +16,8 @@ do $$
 declare project_id uuid; task_id uuid; run_id uuid; pm_id uuid; expense_id uuid; reserve_amount numeric(14,2);
 begin
   select id into pm_id from public.agents where slug='product_manager' and active;
-  select greatest(0.01,ceil((max_input_tokens*input_eur_per_million_tokens
-      + max_output_tokens*output_eur_per_million_tokens)/10000)/100)
+  select greatest(0.01,ceil((max_input_tokens*3*input_eur_per_million_tokens
+      + max_output_tokens*3*output_eur_per_million_tokens)/10000)/100)
     into reserve_amount from public.agent_model_spend_profiles
     where provider='openai' and model='gpt-6-luna' and active;
   if reserve_amount is null then raise exception 'fixture model price profile was not configured'; end if;
