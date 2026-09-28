@@ -220,8 +220,12 @@ class CodexTaskRunner:
             git_env.pop("GH_TOKEN", None)
             git_env.pop("GITHUB_TOKEN", None)
             clone_url = f"https://github.com/{self.github.repository}.git"
-            self._git(git_env, ["clone", "--depth", "1", "--branch", "main", clone_url, worktree])
-            self._git(git_env, ["switch", "-c", branch], cwd=worktree)
+            try:
+                self._git(git_env, ["clone", "--depth", "1", "--branch", "main", clone_url, worktree])
+                self._git(git_env, ["switch", "-c", branch], cwd=worktree)
+            except RuntimeError:
+                logger.warning("codex_git_checkout_failed")
+                raise
 
             # Codex receives neither GitHub nor Supabase credentials. All model
             # traffic is sent to the loopback metering proxy, which replaces the
@@ -245,7 +249,13 @@ class CodexTaskRunner:
                             check=False,
                         )
                     codex_succeeded = process.returncode == 0 and proxy.saw_usage and not proxy.uncertain
-                except (subprocess.TimeoutExpired, OSError):
+                    if not codex_succeeded:
+                        logger.warning(
+                            "codex_process_incomplete return_code=%s usage_recorded=%s usage_uncertain=%s",
+                            process.returncode, proxy.saw_usage, proxy.uncertain,
+                        )
+                except (subprocess.TimeoutExpired, OSError) as exc:
+                    logger.warning("codex_process_unavailable error_type=%s", type(exc).__name__)
                     codex_succeeded = False
                 finally:
                     if proxy.saw_usage and not proxy.uncertain:
