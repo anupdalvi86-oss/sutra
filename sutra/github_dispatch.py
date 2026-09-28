@@ -62,7 +62,9 @@ class GitHubIssues:
         except urllib.error.HTTPError as exc:
             if exc.code in {403, 429} and exc.headers.get("X-RateLimit-Remaining") == "0":
                 raise GitHubAPIError("github_rate_limited") from exc
-            raise GitHubAPIError("github_api_error") from exc
+            # Keep a safe status category for durable dispatch diagnostics. Never
+            # persist the response body: GitHub can echo request content there.
+            raise GitHubAPIError(f"github_http_{exc.code}") from exc
         except GitHubAPIError:
             raise
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
@@ -173,6 +175,27 @@ class GitHubIssues:
             title = item.get("title")
             if (isinstance(body, str) and f"<!-- sutra-task-id:{task_id} -->" in body
                     and isinstance(title, str)
+                    and isinstance(number, int) and not isinstance(number, bool)
+                    and isinstance(url, str)
+                    and re.fullmatch(rf"https://github\.com/{re.escape(self.repository)}/issues/{number}", url, re.IGNORECASE)):
+                return {"number": number, "url": url, "title": title, "body": body}
+        # GitHub search indexing is eventually consistent. A dispatch retry may
+        # run seconds after a successful POST but before Search sees the issue.
+        # Consult the repository issue listing before creating another copy.
+        result = self._request(
+            f"/repos/{self.repository}/issues?state=all&per_page=100&sort=created&direction=asc"
+        )
+        if not isinstance(result, list) or len(result) > 100:
+            raise GitHubAPIError("malformed_github_response")
+        marker = f"<!-- sutra-task-id:{task_id} -->"
+        for item in result:
+            if not isinstance(item, dict) or item.get("pull_request"):
+                continue
+            body = item.get("body")
+            number = item.get("number")
+            url = item.get("html_url")
+            title = item.get("title")
+            if (isinstance(body, str) and marker in body and isinstance(title, str)
                     and isinstance(number, int) and not isinstance(number, bool)
                     and isinstance(url, str)
                     and re.fullmatch(rf"https://github\.com/{re.escape(self.repository)}/issues/{number}", url, re.IGNORECASE)):
