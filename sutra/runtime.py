@@ -247,6 +247,7 @@ class FounderCommand:
     decision: str | None = None
     comment: str = ""
     budget: float | None = None
+    task_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -262,6 +263,7 @@ MONEY_PATTERNS = (
 APPROVAL_RE = re.compile(r"^\s*(approve|reject)\s+([0-9a-f-]{36})(?:\s+(.*))?\s*$", re.IGNORECASE)
 PM_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 AGENT_REVIEW_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+agent\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
+PRODUCT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 
 
 def parse_founder_command(text: str) -> FounderCommand:
@@ -284,6 +286,13 @@ def parse_founder_command(text: str) -> FounderCommand:
         except ValueError as exc:
             raise ValueError("Agent review retry needs a valid run ID") from exc
         return FounderCommand("retry_agent_review", text.strip(), approval_id=run_id)
+    match = PRODUCT_TASK_RETRY_RE.fullmatch(text)
+    if match:
+        try:
+            task_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("PM task retry needs a valid task ID") from exc
+        return FounderCommand("retry_product_task", text.strip(), task_id=task_id)
     lowered = text.lower()
     if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
         return FounderCommand("approvals", text.strip())
@@ -426,11 +435,24 @@ class FounderCommandRouter:
                 f"{role} review queued: {result.get('run_id')}. A new attempt uses the normal spend reservation and monthly hard cap. "
                 "Unknown earlier usage remains reserved; project spending is not authorized."
             )
+        if command.kind == "retry_product_task":
+            try:
+                result = self.store.rpc("sutra_founder_retry_product_task_artifact", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_task_id": command.task_id,
+                })
+            except IntegrationError:
+                return FounderResponse("PM task was not retried. It must be a blocked task in an approved project with a failed, recognized artifact run and retry capacity remaining.")
+            return FounderResponse(
+                f"PM task queued: {result.get('task_id')}. A new run uses the normal spend reservation and monthly hard cap. "
+                "Unknown earlier usage remains reserved; project approval and spending authority are unchanged."
+            )
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
             "Use: CEO, show my approvals.\n"
             "Use: retry PM review <run-id>.\n"
+            "Use: retry PM task <task-id> for a bounded failed product-plan task.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
