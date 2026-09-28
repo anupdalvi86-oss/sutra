@@ -1,5 +1,6 @@
 import io
 import json
+import urllib.error
 import unittest
 from unittest.mock import Mock, patch
 
@@ -42,7 +43,7 @@ class GitHubIssueTests(unittest.TestCase):
         def fake_urlopen(request, timeout):
             calls.append(request)
             if request.get_method() == "GET":
-                return Response({"items": []})
+                return Response({"items": []} if "/search/" in request.full_url else [])
             body = json.loads(request.data)
             if request.get_method() == "POST":
                 self.assertEqual(body["title"], "Sutra: Implement approved API change")
@@ -65,9 +66,51 @@ class GitHubIssueTests(unittest.TestCase):
         with patch("sutra.github_dispatch.urllib.request.urlopen", side_effect=fake_urlopen):
             result = client.create_or_find_issue(TASK)
         self.assertEqual(result, {"number": 41, "url": "https://github.com/acme/sutra/issues/41"})
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(calls[0].get_header("Authorization"), "Bearer never-logged-token")
         self.assertNotIn("never-logged-token", calls[0].full_url)
+
+    def test_search_index_lag_reuses_issue_from_repository_listing(self):
+        calls = []
+        client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)
+        unsigned_body = client._issue_body(TASK, TASK_ID)
+
+        def fake_urlopen(request, timeout):
+            calls.append(request)
+            if request.get_method() == "GET" and "/search/" in request.full_url:
+                return Response({"items": []})
+            if request.get_method() == "GET":
+                return Response([{
+                    "number": 41,
+                    "html_url": "https://github.com/acme/sutra/issues/41",
+                    "title": "Sutra: Implement approved API change",
+                    "body": unsigned_body,
+                }])
+            body = json.loads(request.data)["body"]
+            self.assertEqual(request.get_method(), "PATCH")
+            return Response({
+                "number": 41,
+                "html_url": "https://github.com/acme/sutra/issues/41",
+                "title": "Sutra: Implement approved API change",
+                "body": body,
+            })
+
+        with patch("sutra.github_dispatch.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = client.create_or_find_issue(TASK)
+        self.assertEqual(result["number"], 41)
+        self.assertEqual([call.get_method() for call in calls], ["GET", "GET", "PATCH"])
+
+    def test_github_http_diagnostics_keep_status_only(self):
+        client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)
+        error = urllib.error.HTTPError(
+            "https://api.github.com/repos/acme/sutra/issues/41", 422,
+            "validation failed", {}, io.BytesIO(b"may contain user content"),
+        )
+        with patch("sutra.github_dispatch.urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(GitHubAPIError) as caught:
+                client._request("/repos/acme/sutra/issues/41", "PATCH", {"body": "private"})
+        self.assertEqual(caught.exception.code, "github_http_422")
+        self.assertNotIn("private", str(caught.exception))
 
     def test_existing_unsigned_issue_is_sealed_after_worker_lease_recovery(self):
         calls = []
