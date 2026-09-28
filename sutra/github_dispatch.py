@@ -95,7 +95,9 @@ class GitHubIssues:
 
     def open_task_issues(self) -> list[dict[str, Any]]:
         """Read open Sutra task issues for the private polling Codex dispatcher."""
-        path = f"/repos/{self.repository}/issues?state=open&per_page=100&sort=created&direction=asc"
+        # The API response is capped at 1 MB in _request; 20 leaves headroom
+        # for long task bodies while retaining a bounded runner candidate set.
+        path = f"/repos/{self.repository}/issues?state=open&per_page=20&sort=created&direction=asc"
         result = self._request(path)
         if not isinstance(result, list):
             raise GitHubAPIError("malformed_github_response")
@@ -107,7 +109,7 @@ class GitHubIssues:
     def recent_pull_requests(self) -> list[dict[str, Any]]:
         """Read a bounded window of PR evidence for the private poller."""
         result = self._request(
-            f"/repos/{self.repository}/pulls?state=all&per_page=100&sort=updated&direction=desc"
+            f"/repos/{self.repository}/pulls?state=all&per_page=20&sort=updated&direction=desc"
         )
         if not isinstance(result, list) or len(result) > 100:
             raise GitHubAPIError("malformed_github_response")
@@ -116,7 +118,7 @@ class GitHubIssues:
     def recent_completed_workflows(self) -> list[dict[str, Any]]:
         """Read only completed CI workflows needed to reconcile PR evidence."""
         result = self._request(
-            f"/repos/{self.repository}/actions/runs?status=completed&per_page=100"
+            f"/repos/{self.repository}/actions/runs?status=completed&per_page=20"
         )
         if not isinstance(result, dict) or not isinstance(result.get("workflow_runs"), list):
             raise GitHubAPIError("malformed_github_response")

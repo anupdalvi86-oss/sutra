@@ -208,7 +208,7 @@ class GitHubIssueTests(unittest.TestCase):
         ])
         self.assertEqual(client.open_task_issues(), [{"number": 1, "title": "Sutra: signed task"}])
         client._request.assert_called_once_with(
-            "/repos/acme/sutra/issues?state=open&per_page=100&sort=created&direction=asc")
+            "/repos/acme/sutra/issues?state=open&per_page=20&sort=created&direction=asc")
 
     def test_pull_request_creation_is_bound_to_task_branch_and_main(self):
         client = GitHubIssues("token", "acme/sutra", SIGNING_SECRET)

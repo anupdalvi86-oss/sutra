@@ -41,6 +41,8 @@ class GitHubEvidencePollingTests(unittest.TestCase):
 
         self.assertEqual(self.poller.poll_once(), 2)
         self.assertEqual(self.github._request.call_count, 2)
+        self.assertIn("per_page=20", self.github._request.call_args_list[0].args[0])
+        self.assertIn("per_page=20", self.github._request.call_args_list[1].args[0])
         self.assertEqual(self.store.rpc.call_count, 2)
         pr_event = self.store.rpc.call_args_list[0].args[1]
         ci_event = self.store.rpc.call_args_list[1].args[1]
