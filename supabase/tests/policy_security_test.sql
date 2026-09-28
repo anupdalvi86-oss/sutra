@@ -582,6 +582,8 @@ select is((select payload->>'status' from codex_finish),'reconciled',
   'trusted provider usage reconciles to policy even when the Codex process fails');
 select is((select (payload->>'process_succeeded')::boolean from codex_finish),false,
   'Codex process outcome is returned independently from financial settlement');
+select throws_ok($$select public.sutra_codex_finish_run('sutra-worker-codex12345678',null,null,true)$$,
+  '55000',null,'stale runners using the conflated completion call are safely rejected during rollout');
 reset role;
 select is((select status from public.agent_runs where id=(select (payload->>'run_id')::uuid from codex_run_claim)),
   'failed','a nonzero Codex process is persisted as a failed run');

@@ -4,7 +4,7 @@ Updated: 2026-09-28 23:26 Europe/Stockholm
 
 ## In-progress platform correction
 
-Branch `fix/codex-process-outcome` contains a fix for the latest production Codex failure. The former completion RPC used one boolean for both trusted usage settlement and CLI success, so attempt 3 was financially reconciled but incorrectly recorded as a successful agent run when Codex exited 1. The new RPC records those outcomes separately, keeps the €0.01 reservation reconciled, marks the agent run and execution failed, and writes a sanitized audit event. CEO status now surfaces that in-progress task as blocked by execution and says no automatic retry is queued. No project-spend, source-control, merge, or release authority is added by this change. Local verification is complete; it has not yet been merged, applied to production, or deployed.
+PR #133 merged the runner/status correction to `main`. The former completion RPC used one boolean for both trusted usage settlement and CLI success, so attempt 3 was financially reconciled but incorrectly recorded as a successful agent run when Codex exited 1. The new RPC records those outcomes separately, keeps the €0.01 reservation reconciled, marks the agent run and execution failed, and writes a sanitized audit event. CEO status now surfaces that in-progress task as blocked by execution and says no automatic retry is queued. A follow-up fail-closed migration guard is being validated before applying the database change. Until that guard is merged and the migration is applied, production DB and runtime versions are mismatched: the exhausted task cannot run, and no retry was issued. No project-spend, merge, or release authority is added by this change.
 
 ## Working
 
