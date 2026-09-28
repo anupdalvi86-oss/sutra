@@ -635,5 +635,80 @@ select is((select count(*)::integer from public.audit_log where action='agent_ru
 select is((select count(*)::integer from public.expenses where actual_amount=0.01),11,
   'actual Hermes and Codex model usage is reconciled into its authoritative expense');
 
+-- Exercise every configurable budget scope and every supported period. Use
+-- unique category/vendor keys so earlier workflow fixtures cannot affect the
+-- usage totals, and set zero caps to prove a single positive spend is blocked.
+select lives_ok($$select public.sutra_set_budget('12345678','company','*','daily',0,80,true)$$,
+  'founder can configure a daily company hard stop');
+select throws_ok($$select public.sutra_authorize_spend('system','policy-test',null,null,null,'policy-test-company-daily',null,'daily company cap',0.01,'EUR')$$,
+  '23514',null,'daily company budget exhaustion blocks spend');
+select lives_ok($$select public.sutra_set_budget('12345678','company','*','daily',999999999999.99,80,true)$$,
+  'daily company fixture is isolated from subsequent spend checks');
+select lives_ok($$select public.sutra_set_budget('12345678','department',
+  (select department_id::text from public.agents where slug='developer'),'daily',0,80,true)$$,
+  'founder can configure a daily department hard stop');
+select throws_ok($$select public.sutra_authorize_spend('system','policy-test',null,null,
+  (select department_id from public.agents where slug='developer'),'policy-test-department-daily',null,'daily department cap',0.01,'EUR')$$,
+  '23514',null,'daily department budget exhaustion blocks spend');
+select lives_ok($$select public.sutra_set_budget('12345678','department',
+  (select department_id::text from public.agents where slug='developer'),'daily',999999999999.99,80,true)$$,
+  'department fixture is isolated from subsequent spend checks');
+select lives_ok($$select public.sutra_set_budget('12345678','agent','developer','monthly',0,80,true)$$,
+  'founder can configure a monthly agent hard stop');
+select throws_ok($$select public.sutra_authorize_spend('agent','developer',
+  (select id from public.agents where slug='developer'),null,null,'policy-test-agent-monthly',null,'monthly agent cap',0.01,'EUR')$$,
+  '23514',null,'monthly agent budget exhaustion blocks its spend');
+select lives_ok($$select public.sutra_set_budget('12345678','agent','developer','monthly',999999999999.99,80,true)$$,
+  'agent fixture is isolated from subsequent spend checks');
+select lives_ok($$select public.sutra_set_budget('12345678','category','policy-test-category','monthly',0,80,true)$$,
+  'founder can configure a monthly category hard stop');
+select throws_ok($$select public.sutra_authorize_spend('system','policy-test',null,null,null,'policy-test-category',null,'monthly category cap',0.01,'EUR')$$,
+  '23514',null,'monthly category budget exhaustion blocks spend');
+select lives_ok($$select public.sutra_set_budget('12345678','category','policy-test-category','monthly',999999999999.99,80,true)$$,
+  'category fixture is isolated from subsequent spend checks');
+select lives_ok($$select public.sutra_set_budget('12345678','vendor','policy-test-vendor','monthly',0,80,true)$$,
+  'founder can configure a monthly vendor hard stop');
+select throws_ok($$select public.sutra_authorize_spend('system','policy-test',null,null,null,'policy-test-vendor-category','policy-test-vendor','monthly vendor cap',0.01,'EUR')$$,
+  '23514',null,'monthly vendor budget exhaustion blocks spend');
+select lives_ok($$select public.sutra_set_budget('12345678','vendor','policy-test-vendor','monthly',999999999999.99,80,true)$$,
+  'vendor fixture is isolated from subsequent spend checks');
+select lives_ok($$select public.sutra_set_budget('12345678','project',
+  (select id::text from public.projects where status='approved' order by created_at desc limit 1),'lifetime',0,80,true)$$,
+  'founder can configure a lifetime project hard stop');
+select throws_ok($$select public.sutra_authorize_spend('system','policy-test',null,
+  (select id from public.projects where status='approved' order by created_at desc limit 1),null,
+  'policy-test-project-lifetime',null,'lifetime project cap',0.01,'EUR')$$,
+  '23514',null,'lifetime project budget exhaustion blocks spend');
+select lives_ok($$select public.sutra_set_budget('12345678','project',
+  (select id::text from public.projects where status='approved' order by created_at desc limit 1),'lifetime',999999999999.99,80,true)$$,
+  'project fixture is isolated from subsequent spend checks');
+
+select lives_ok($$select public.sutra_set_budget('12345678','category','policy-test-daily-use','daily',0.05,80,true)$$,
+  'founder can configure a positive daily category budget');
+select is((public.sutra_authorize_spend('system','policy-test',null,null,null,'policy-test-daily-use',null,'first daily use',0.03,'EUR')->>'status'),
+  'approved','spend below a fresh daily cap succeeds');
+select throws_ok($$select public.sutra_authorize_spend('system','policy-test',null,null,null,'policy-test-daily-use',null,'exhausted daily use',0.03,'EUR')$$,
+  '23514',null,'daily usage accumulates and blocks an over-budget transaction');
+select lives_ok($$select public.sutra_set_budget('12345678','category','policy-test-daily-use','daily',999999999999.99,80,true)$$,
+  'daily use fixture is isolated from subsequent spend checks');
+select lives_ok($$select public.sutra_set_budget('12345678','vendor','policy-test-monthly-use','monthly',0.05,80,true)$$,
+  'founder can configure a positive monthly vendor budget');
+select is((public.sutra_authorize_spend('system','policy-test',null,null,null,'policy-test-monthly-vendor','policy-test-monthly-use','first monthly use',0.03,'EUR')->>'status'),
+  'approved','spend below a fresh monthly vendor cap succeeds');
+select throws_ok($$select public.sutra_authorize_spend('system','policy-test',null,null,null,'policy-test-monthly-vendor','policy-test-monthly-use','exhausted monthly use',0.03,'EUR')$$,
+  '23514',null,'monthly vendor usage accumulates and blocks an over-budget transaction');
+select lives_ok($$select public.sutra_set_budget('12345678','vendor','policy-test-monthly-use','monthly',999999999999.99,80,true)$$,
+  'monthly use fixture is isolated from subsequent spend checks');
+
+create temporary table budget_warning_test(payload jsonb) on commit drop;
+select lives_ok($$select public.sutra_set_budget('12345678','category','policy-test-warning','transaction',0.05,80,false)$$,
+  'founder can configure a nonblocking warning threshold');
+insert into budget_warning_test select public.sutra_authorize_spend(
+  'system','policy-test',null,null,null,'policy-test-warning',null,'warning threshold',0.06,'EUR');
+select is((select payload->>'status' from budget_warning_test),'approved',
+  'soft budget threshold allows the transaction');
+select ok((select payload->'budget_warnings' @> '["category:policy-test-warning"]'::jsonb from budget_warning_test),
+  'budget usage at or above its configurable warning threshold is returned');
+
 select * from finish();
 rollback;
