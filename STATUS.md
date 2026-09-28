@@ -1,6 +1,6 @@
 # Sutra status
 
-Updated: 2026-09-29 00:02 Europe/Stockholm
+Updated: 2026-09-29 00:03 Europe/Stockholm
 
 ## Codex process failure correction (live)
 
@@ -40,7 +40,7 @@ Latest live Supabase query:
 - PR #127 GitHub CI run [36477574459](https://github.com/anupdalvi86-oss/sutra/actions/runs/36477574459) passed Python, database/pgTAP/lint, container/runtime, and secret-scan jobs.
 - PR #129 GitHub CI run [36480418155](https://github.com/anupdalvi86-oss/sutra/actions/runs/36480418155) passed Python, database/pgTAP/lint, container/runtime, and secret-scan jobs. PR #131 GitHub CI run [36483408973](https://github.com/anupdalvi86-oss/sutra/actions/runs/36483408973) passed the same four jobs, including the new retry policy SQL tests. Local validation also passed Bandit 1.9.4 (`-ll`) and Gitleaks 8.30.1.
 - PR #133 passed all four CI jobs; PR #134 passed all four CI jobs on workflow run [36486867292](https://github.com/anupdalvi86-oss/sutra/actions/runs/36486867292); PR #135 passed all four on run [36487639254](https://github.com/anupdalvi86-oss/sutra/actions/runs/36487639254). The SQL suite contains 324 pgTAP assertions across eight files. Migration filename `20260928213518` matches the version recorded by Supabase.
-- PR #137 passed all four CI jobs on workflow run [36488946286](https://github.com/anupdalvi86-oss/sutra/actions/runs/36488946286): 163 Python tests, 329 pgTAP assertions across eight files, database lint, container/runtime checks, and secret scanning. Supabase migration `20260928215517` and the production function grants were verified against live migration history.
+- PR #137 passed all four CI jobs on workflow run [36488946286](https://github.com/anupdalvi86-oss/sutra/actions/runs/36488946286): 163 Python tests, 329 pgTAP assertions across eight files, database lint, container/runtime checks, and secret scanning. Supabase migration `20260928215517` and the production function grants were verified against live migration history. PR #138 aligned the checked-in migration filename and status/deployment docs; its four CI jobs passed on run [36489585469](https://github.com/anupdalvi86-oss/sutra/actions/runs/36489585469).
 - Codex CLI 0.157.1 isolated smoke: local test server received the Responses request at `/v1/responses`; the key was a dummy value and no production provider call was made.
 - Railway after PR #127: both services showed Online and `sutra-api` `/health` returned HTTP 200.
 - Supabase production project was queried for setting value, RPC grants, task state, three attempts, reservations and the corresponding audit records. Railway showed `sutra-api` and Hermes online; the Telegram founder chat verified the read/set commands and the 3/3 retry response. The CEO board status command was also rechecked.
