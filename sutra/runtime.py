@@ -231,6 +231,11 @@ class SupabaseREST:
             "expenses": "expenses?select=amount,currency,status,category,project_id,department_id,agent_id&status=in.(approved,paid,requested)&limit=500",
         }
         snapshot = {key: self.request(path) for key, path in paths.items()}
+        dispatch_status = self.rpc("sutra_company_github_dispatch_status", {})
+        dispatches = dispatch_status.get("dispatches")
+        if not isinstance(dispatches, list):
+            raise IntegrationError("Supabase returned an invalid GitHub dispatch status response")
+        snapshot["github_dispatches"] = dispatches
         if not all(isinstance(rows, list) for rows in snapshot.values()):
             raise IntegrationError("Supabase returned an invalid company status response")
         return snapshot
@@ -633,6 +638,27 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             explanation = "no execution run is linked to this task, so there is no recorded completion or blocker evidence"
         cause = "; " + explanation
         lines.append(f"• {title} — owned by {owner}{cause}.")
+    dispatch_rows = snapshot.get("github_dispatches", [])
+    include_delivery = is_company_wide or agent_slug in {"cto", "developer", "devops"}
+    visible_dispatches = dispatch_rows[:6] if include_delivery else []
+    if visible_dispatches:
+        lines.append("Engineering delivery")
+        for dispatch in visible_dispatches:
+            title = re.sub(r"\s+", " ", str(dispatch.get("task_title") or "Engineering task"))[:90]
+            code = dispatch.get("last_error")
+            if code == "github_permission_denied":
+                explanation = "GitHub denied issue write access; founder token authorization is required"
+            elif code == "github_rate_limited":
+                explanation = "GitHub rate limit reached; dispatch will retry within its attempt limit"
+            elif code:
+                explanation = f"latest dispatch error: {str(code)[:48]}"
+            elif dispatch.get("status") == "creating":
+                explanation = "GitHub issue handoff is in progress"
+            else:
+                explanation = "GitHub delivery needs attention"
+            attempts = dispatch.get("attempts")
+            attempt_text = f"; attempt {attempts}/3" if isinstance(attempts, int) else ""
+            lines.append(f"• [{dispatch.get('status', 'unknown')}] {title}{attempt_text} — {explanation}.")
     lines.extend(["", "Approvals requiring attention"])
     if not scoped_approvals:
         lines.append("• None pending.")

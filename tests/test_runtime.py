@@ -39,6 +39,7 @@ def status_fixture():
         "budgets": [{"scope": "company", "scope_key": "*", "period": "monthly", "currency": "EUR",
                      "limit_amount": 8.0, "warning_percent": 80, "hard_stop": True}],
         "expenses": [{"amount": 0.15, "currency": "EUR", "status": "paid", "category": "ai_inference"}],
+        "github_dispatches": [],
     }
 
 
@@ -57,6 +58,26 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Approval waiting for CFO", reply)
         self.assertIn("company / * / monthly: EUR 8.0", reply)
         self.store.company_status.assert_called_once_with()
+
+    def test_company_status_surfaces_github_permission_blocker(self):
+        snapshot = status_fixture()
+        snapshot["github_dispatches"] = [{
+            "task_id": "developer-task", "task_title": "Implement approved product tasks",
+            "status": "failed", "attempts": 3, "last_error": "github_permission_denied",
+        }]
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("Engineering delivery", reply)
+        self.assertIn("GitHub denied issue write access; founder token authorization is required", reply)
+        self.assertIn("attempt 3/3", reply)
+
+    def test_delivery_health_is_scoped_to_company_and_engineering_roles(self):
+        snapshot = status_fixture()
+        snapshot["github_dispatches"] = [{
+            "task_id": "developer-task", "task_title": "Implement approved product tasks",
+            "status": "failed", "attempts": 3, "last_error": "github_permission_denied",
+        }]
+        self.assertNotIn("Engineering delivery", render_status_brief(snapshot, "sales"))
+        self.assertIn("Engineering delivery", render_status_brief(snapshot, "cto"))
 
     def test_department_status_is_detailed_and_scoped_to_its_work(self):
         self.store.company_status.return_value = status_fixture()
@@ -87,17 +108,20 @@ class FounderCommandTests(unittest.TestCase):
     def test_status_snapshot_reads_projects_tasks_approvals_and_financial_controls(self):
         expected = status_fixture()
         store = SupabaseREST("https://sutra.example", "server-key")
-        store.request = Mock(side_effect=list(expected.values()))
+        store.request = Mock(side_effect=[expected[key] for key in expected if key != "github_dispatches"])
+        store.rpc = Mock(return_value={"dispatches": expected["github_dispatches"]})
         self.assertEqual(store.company_status(), expected)
         requested_paths = [call.args[0] for call in store.request.call_args_list]
         self.assertTrue(any(path.startswith("projects?") and "requested_budget" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("tasks?") and "owner_agent_id" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("approvals?") and "required_roles" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("budgets?") and "hard_stop" in path for path in requested_paths))
+        store.rpc.assert_called_once_with("sutra_company_github_dispatch_status", {})
 
     def test_status_snapshot_rejects_partial_or_malformed_database_responses(self):
         store = SupabaseREST("https://sutra.example", "server-key")
         store.request = Mock(side_effect=[[], [], [], [], [], [], None, []])
+        store.rpc = Mock(return_value={"dispatches": []})
         with self.assertRaises(IntegrationError):
             store.company_status()
 
