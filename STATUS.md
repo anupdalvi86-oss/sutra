@@ -1,10 +1,10 @@
 # Sutra status
 
-Updated: 2026-09-28 22:41 Europe/Stockholm
+Updated: 2026-09-28 23:00 Europe/Stockholm
 
 ## Working
 
-- **Supabase:** project `smqsrigsugjuvuombetq` is reachable and `ACTIVE_HEALTHY`. Founder-gated Codex retry migration is applied. Supabase remains the source of truth for projects, tasks, approvals, spending rules, reservations and audit events.
+- **Supabase:** project `smqsrigsugjuvuombetq` is reachable and `ACTIVE_HEALTHY`. The live project is healthy; the new founder-adjustable retry-limit migration is in PR #131 and is not yet applied. Supabase remains the source of truth for projects, tasks, approvals, spending rules, reservations and audit events.
 - **Railway:** production project `valiant-liberation` has Hermes `sutra` and API `sutra-api` Online. The latest merged code is `39c27f8` (PR #129); Railway shows its deployment active/successful and the API's `/health` probe returned HTTP 200. Both services remain private. Hermes state uses the persistent volume at `/opt/data`.
 - **Telegram:** [@sutra86bot](https://t.me/sutra86bot) is restricted to founder ID `8776723105`. Board-style CEO/department status, proposal intake, approval listing and founder-only retry commands have been exercised in the logged-in founder chat.
 - **Founder command workflow:** an AI QA product proposal completed CEO → CPO → CTO → CFO → PM and persisted role artifacts. One project is approved with a requested ceiling of €500; two separate proposals remain proposed, with one project-budget approval pending. The approved project ceiling does not authorize individual purchases or external outreach.
@@ -15,7 +15,7 @@ Updated: 2026-09-28 22:41 Europe/Stockholm
 
 The founder-approved Developer task `269cd305-2a8c-46a7-abb7-3d00f271d78f` remains `in_progress`, linked to issue #107. Its single permitted founder retry was accepted and audited. Railway claimed that run, but Codex CLI exited before it made a model request because it ignored the environment-only base URL and defaulted to the public endpoint with the runner's dummy key.
 
-PR #127 fixes this by generating a private `$CODEX_HOME/config.toml` that selects Sutra's loopback Responses provider. Codex CLI 0.157.1 was smoke-tested with a dummy key and a local rejecting endpoint; its request reached the configured `/v1/responses` loopback endpoint. The change is deployed to Railway and both services are Online. **The production task has not been retried against the fix:** its database-enforced one-retry limit is exhausted. Supabase records zero model requests and zero tokens for the failed run; the old unknown reservation remains held, and the fresh retry reservation is also preserved. No production model usage or implementation PR resulted.
+PR #127 fixes this by generating a private `$CODEX_HOME/config.toml` that selects Sutra's loopback Responses provider. Codex CLI 0.157.1 was smoke-tested with a dummy key and a local rejecting endpoint; its request reached the configured `/v1/responses` loopback endpoint. The change is deployed to Railway and both services are Online. **The production task has not yet been retried against the fix:** the live database still has the old retry ceiling. PR #131 adds a three-total-attempt default and founder-only audited control, pending CI and production migration. Supabase records zero model requests and zero tokens for the failed run; the old unknown reservation remains held, and the fresh retry reservation is also preserved. No production model usage or implementation PR resulted.
 
 ## Current operational counts
 
@@ -41,8 +41,8 @@ Latest live Supabase query:
 
 ## Remaining work and blockers
 
-1. **Additional founder authorization is required to retry:** the database intentionally permits only one no-request retry, and it has been used. To run the same approved scope again, the founder must authorize a narrowly scoped extension of the founder-only retry gate for one further zero-request attempt. Existing spend limits and project/task approvals must remain unchanged. No more execution should be triggered until that authorization is recorded.
-2. After authorization, add and deploy the audited retry-gate migration, then verify the metering proxy receives the production run before any model response is returned. Continue only under the existing €8 monthly hard cap.
+1. PR #131 implements the already founder-authorized extension to three total attempts for this same approved Developer task and scope. Its production migration and Telegram command are pending passing CI, database application, and Railway deployment. Changing the setting will not itself retry the task.
+2. Once the setting and code are live, verify the stored limit and audit trail, then request the final permitted attempt only if Supabase still confirms a terminal failure with zero requests/tokens. Preserve the unknown reservation and reserve fresh spend under the existing €8 monthly hard cap.
 3. If the task reaches implementation, the runner may create a branch and PR but cannot merge or release. Keep CI evidence attached to the PR. QA and Security role handoffs are deferred by founder direction.
 4. The CPO-only Kimi route has no post-rollout usage-reconciliation evidence; an earlier €0.28 unknown reservation remains held. PR #129 improves sanitized diagnostics for a future database-reserved reproduction, but does not establish the historical cause. Kimi remains disabled. A separate proposed €500 project-budget approval remains pending.
 5. Rotate credentials previously shared in chat after base-flow verification. The €8 cap covers AI inference only, not all company operations.
