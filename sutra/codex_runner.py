@@ -164,6 +164,8 @@ class CodexTaskRunner:
                     continue
                 if not isinstance(authorized, dict) or authorized.get("status") != "authorized":
                     status = authorized.get("status") if isinstance(authorized, dict) else "malformed"
+                    if status == "terminal":
+                        continue
                     if not isinstance(status, str) or status not in {"awaiting_approval", "rejected", "malformed"}:
                         status = "unknown"
                     logger.warning("codex_task_authorization_not_ready task_id=%s status=%s",
