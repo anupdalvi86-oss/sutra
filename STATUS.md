@@ -1,12 +1,12 @@
 # Sutra status
 
-Updated: 2026-09-29, after production verification of PR #177
+Updated: 2026-09-29, after production verification of PR #178
 
 ## Working
 
-- **Railway:** Production project `valiant-liberation` runs private `sutra` and `sutra-api` services. The API is Online; Railway shows the PR #177 deployment as ACTIVE and successful (deployment `b7b94383-410b-4c6e-8fdd-e872cc07df72`). Hermes data is stored on the persistent `/opt/data` volume.
+- **Railway:** Production project `valiant-liberation` runs private `sutra` and `sutra-api` services. The API is Online; Railway shows the PR #178 deployment as ACTIVE and successful (deployment `fc9586d1-5d32-47d7-a1d7-f5192020d8c9`). Hermes data is stored on the persistent `/opt/data` volume.
 - **Supabase:** Project `smqsrigsugjuvuombetq` is the authoritative company state and is `ACTIVE_HEALTHY`. The production migration `founder_sales_artifact_retry` is applied (server migration version `20260929103538`).
-- **Telegram:** [@sutra86bot](https://t.me/sutra86bot) accepts private commands from founder ID `8776723105`. Live founder retry and CEO board-status commands both succeeded after the PR #177 deployment.
+- **Telegram:** [@sutra86bot](https://t.me/sutra86bot) accepts private commands from founder ID `8776723105`. Live founder retry and CEO/Sales department status commands succeeded after their respective production deployments.
 - **Founder review/recovery controls:** QA/Security deferral is founder-only, atomic, and audited. The Sales schema-failure recovery is founder-only, audit-logged, and limited to one requeue for the same already-approved task after three terminal schema failures and fully reconciled prior reservations. Each new model attempt still uses normal spend preflight.
 - **Financial controls:** Database policy enforces configurable approval thresholds: automatic at/below €10, department head above €10 through €50, CFO + CEO above €50 and below €200, and founder at/above €200. The €10–50 band fails closed until a department approver is assigned. AI inference has an €8 monthly hard stop and 80% warning. No company-wide operating budget is configured.
 - **GitHub:** Repository is public. Engineering tasks can dispatch to GitHub and Codex can open branches/PRs; Sutra cannot merge or release. CI requires Python, database/pgTAP/lint, container/runtime, and secret-scan jobs.
@@ -25,11 +25,12 @@ Eight unknown model-spend reservations totaling €0.74 remain held; none were c
 
 ## Latest verification
 
-- PR [#177](https://github.com/anupdalvi86-oss/sutra/pull/177) merged as `9db8f9279055ad6814ed0e43acae559f9f8293c3`. All five CI jobs passed: Python, database, containers, secret scan, and change detection.
+- PR [#177](https://github.com/anupdalvi86-oss/sutra/pull/177) merged as `9db8f9279055ad6814ed0e43acae559f9f8293c3`; all five CI jobs passed. It added the Sales recovery and founder-only Telegram command.
+- PR [#178](https://github.com/anupdalvi86-oss/sutra/pull/178) merged as `f493dcaead1bd2a9ee2a02f096596d1d7e470eb0`; all five CI jobs passed, including the full Python suite, database/Auth/RLS/pgTAP/lint, containers, secret scan, and change detection. Railway shows its deployment as ACTIVE and successful.
 - Local verification for PR #177: **204 Python tests passed**, **441 pgTAP assertions across 15 files passed**, Supabase database lint was clean, Bandit reported no medium/high findings, `compileall` passed, and `git diff --check` passed.
-- Production verification for PR #177: Railway deployment is Online/ACTIVE/successful; the migration is applied; the founder-only retry function is unavailable to `anon` and `authenticated` and executable by `service_role` only.
+- Production verification: the Sales migration is applied; the founder-only retry function is unavailable to `anon` and `authenticated` and executable by `service_role` only.
 - Live Telegram-to-Supabase verification: founder Sales recovery command returned success; task is `done`; exactly one `sales_handoff` artifact is persisted; new and prior reservations are reconciled; audit log names founder `8776723105` and records no added spend, merge, or release authority.
-- Live CEO board status reflects 2 blocked CPO tasks, 2 deferred QA/Security reviews, the pending project approval, project budget controls, and the merged PR/CI evidence.
+- Live CEO board status reflects 2 blocked CPO tasks, 2 deferred QA/Security reviews, the pending project approval, financial controls, completed role handoffs, and merged PR/CI evidence. Completed tasks are shown separately and do not inflate open-task counts. The live Sales brief shows its completed handoff and zero open tasks.
 
 ## Remaining work and blockers
 
@@ -39,7 +40,7 @@ Eight unknown model-spend reservations totaling €0.74 remain held; none were c
 4. Railway logs previously warned that the internal API binds to `0.0.0.0` while Hermes uses a local, unsandboxed terminal backend. Railway currently lists the API as unexposed; runtime hardening remains outstanding.
 5. Rotate credentials previously pasted into chat and replace them directly in private Railway variables. Do not commit credentials. The €8 cap covers AI inference, not all company operations.
 6. Keep all 8 unknown reservations totaling €0.74 held until provider evidence supports exact reconciliation.
-7. CEO and department Telegram reports give board-style portfolio, open-work, blocker, approval, and control details. A follow-up improvement is in progress to include recent completed tasks in these briefs.
+7. CEO and department Telegram reports give board-style portfolio, open-work, recent completions, blockers, approvals, and control details; company-wide and department scopes were verified in Telegram.
 
 ## Deployment and links
 
