@@ -1,5 +1,5 @@
 begin;
-select plan(25);
+select plan(28);
 
 select ok((select relrowsecurity from pg_class where oid='public.customer_email_actions'::regclass),
   'customer email actions have row level security enabled');
@@ -17,6 +17,12 @@ select ok(not has_function_privilege('anon',
 select ok(has_function_privilege('service_role',
   'public.sutra_queue_customer_email(uuid,text,uuid,uuid,uuid,text,text,text,numeric,text)','EXECUTE'),
   'only the internal service can request a database-authorized email action');
+select ok(to_regclass('public.customer_email_actions_agent_idx') is not null,
+  'the agent foreign key is indexed');
+select ok(to_regclass('public.customer_email_actions_customer_idx') is not null,
+  'the customer foreign key is indexed');
+select ok(to_regclass('public.customer_email_actions_task_idx') is not null,
+  'the task foreign key is indexed');
 
 insert into public.company_settings(key,value,governance_sensitive,founder_only,updated_by)
   values('founder_telegram_user_id','"12345678"'::jsonb,true,true,'test')

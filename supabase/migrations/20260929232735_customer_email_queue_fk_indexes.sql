@@ -1,0 +1,3 @@
+create index customer_email_actions_agent_idx on public.customer_email_actions(agent_id);
+create index customer_email_actions_customer_idx on public.customer_email_actions(customer_id);
+create index customer_email_actions_task_idx on public.customer_email_actions(task_id);
