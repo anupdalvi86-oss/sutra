@@ -29,11 +29,11 @@ class GitHubEvidencePollingTests(unittest.TestCase):
             "base": {"ref": "main"},
         }
         workflow = {
-            "id": 101,
+            "id": 36_530_327_914,
             "name": "CI",
             "status": "completed",
             "conclusion": "success",
-            "html_url": f"https://github.com/{REPOSITORY}/actions/runs/101",
+            "html_url": f"https://github.com/{REPOSITORY}/actions/runs/36530327914",
             "head_sha": HEAD_SHA,
             "pull_requests": [{"number": 42, "head": {"sha": HEAD_SHA}}],
         }

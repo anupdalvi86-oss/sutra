@@ -31,6 +31,13 @@ def _positive_int(value: Any) -> int | None:
     return value
 
 
+def _positive_run_id(value: Any) -> int | None:
+    """GitHub Actions run IDs exceed 32-bit PR/issue number limits."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 9_223_372_036_854_775_807:
+        return None
+    return value
+
+
 def normalize_github_event(event_name: str, repository: str, payload: Any) -> dict[str, Any] | None:
     """Discard unrelated events and return only bounded fields used by SQL policy."""
     if not isinstance(payload, dict) or not isinstance(repository, str):
@@ -93,10 +100,11 @@ def normalize_github_event(event_name: str, repository: str, payload: Any) -> di
             return None
         run_sha = run.get("head_sha")
         url = run.get("html_url")
-        run_id = _positive_int(run.get("id"))
+        run_id = _positive_run_id(run.get("id"))
         if not isinstance(run_sha, str) or not SHA_RE.fullmatch(run_sha):
             return None
         if (run_id is None or not isinstance(url, str) or not RUN_URL_RE.fullmatch(url)
+                or url.rsplit("/", 1)[-1] != str(run_id)
                 or not url.casefold().startswith(f"https://github.com/{repository}/actions/runs/".casefold())):
             return None
         prs = run.get("pull_requests")
