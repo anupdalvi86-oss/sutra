@@ -821,7 +821,8 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         for campaign in campaign_rows:
             campaign_status = str(campaign.get("status") or "unknown")
             campaign_counts[campaign_status] = campaign_counts.get(campaign_status, 0) + 1
-        lines.append("• " + ", ".join(f"{status}: {count}" for status, count in sorted(campaign_counts.items())))
+        if campaign_counts:
+            lines.append("• " + ", ".join(f"{status}: {count}" for status, count in sorted(campaign_counts.items())))
         for campaign in campaign_rows[:5]:
             name = re.sub(r"\s+", " ", str(campaign.get("name") or "Untitled campaign"))[:80]
             channel = re.sub(r"\s+", " ", str(campaign.get("channel") or "unspecified channel"))[:40]
@@ -841,7 +842,8 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         for customer in customer_rows:
             customer_status = str(customer.get("status") or "unknown")
             customer_counts[customer_status] = customer_counts.get(customer_status, 0) + 1
-        lines.append("• " + ", ".join(f"{status}: {count}" for status, count in sorted(customer_counts.items())))
+        if customer_counts:
+            lines.append("• " + ", ".join(f"{status}: {count}" for status, count in sorted(customer_counts.items())))
         for customer in customer_rows[:5]:
             name = re.sub(r"\s+", " ", str(customer.get("name") or "Unnamed lead"))[:60]
             company = re.sub(r"\s+", " ", str(customer.get("company") or ""))[:60]
