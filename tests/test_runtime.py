@@ -24,6 +24,9 @@ def status_fixture():
         "projects": [{"id": "project-1", "name": "AI QA opportunity", "status": "approved",
                       "requested_budget": 500, "currency": "EUR", "department_id": "finance-dept",
                       "owner_agent_id": "ceo-id"}],
+        "objectives": [{"id": "objective-1", "project_id": "project-1",
+                        "title": "Validate buyer demand", "status": "active",
+                        "owner_agent_id": "cpo-id"}],
         "tasks": [{"id": "task-1", "title": "Review product plan", "status": "blocked",
                    "project_id": "project-1", "owner_agent_id": "pm-id"}],
         "approvals": [{"id": APPROVAL, "project_id": "project-1", "summary": "Approval waiting for CFO",
@@ -39,6 +42,10 @@ def status_fixture():
         "budgets": [{"scope": "company", "scope_key": "*", "period": "monthly", "currency": "EUR",
                      "limit_amount": 8.0, "warning_percent": 80, "hard_stop": True}],
         "expenses": [{"amount": 0.15, "currency": "EUR", "status": "paid", "category": "ai_inference"}],
+        "campaigns": [{"id": "campaign-1", "project_id": "project-1", "name": "QA pilot positioning",
+                       "channel": "internal", "status": "draft", "budget_amount": 0, "currency": "EUR"}],
+        "customers": [{"id": "lead-1", "name": "Synthetic lead", "company": "Example Co",
+                       "source": "test fixture", "status": "qualified"}],
         "github_dispatches": [],
     }
 
@@ -58,6 +65,24 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Approval waiting for CFO", reply)
         self.assertIn("company / * / monthly: EUR 8.0", reply)
         self.store.company_status.assert_called_once_with()
+
+    def test_board_status_includes_objectives_campaigns_and_customer_pipeline(self):
+        reply = render_status_brief(status_fixture(), "ceo")
+        self.assertIn("Objective [active]: Validate buyer demand", reply)
+        self.assertIn("Marketing pipeline", reply)
+        self.assertIn("[draft] QA pilot positioning — internal", reply)
+        self.assertIn("Customer and lead pipeline", reply)
+        self.assertIn("[qualified] Synthetic lead (Example Co) — test fixture", reply)
+
+    def test_marketing_and_sales_statuses_include_their_operating_pipelines(self):
+        snapshot = status_fixture()
+        marketing = render_status_brief(snapshot, "cmo")
+        self.assertIn("Marketing pipeline", marketing)
+        self.assertNotIn("Customer and lead pipeline", marketing)
+        sales = render_status_brief(snapshot, "sales")
+        self.assertIn("Customer and lead pipeline", sales)
+        self.assertNotIn("Marketing pipeline", sales)
+        self.assertNotIn("Engineering delivery", sales)
 
     def test_company_status_surfaces_github_permission_blocker(self):
         snapshot = status_fixture()
@@ -150,14 +175,19 @@ class FounderCommandTests(unittest.TestCase):
         self.assertEqual(store.company_status(), expected)
         requested_paths = [call.args[0] for call in store.request.call_args_list]
         self.assertTrue(any(path.startswith("projects?") and "requested_budget" in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("objectives?") and "title" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("tasks?") and "owner_agent_id" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("approvals?") and "required_roles" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("budgets?") and "hard_stop" in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("campaigns?") and "budget_amount" in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("customers?") and "email" not in path for path in requested_paths))
         store.rpc.assert_called_once_with("sutra_company_github_dispatch_status", {})
 
     def test_status_snapshot_rejects_partial_or_malformed_database_responses(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        store.request = Mock(side_effect=[[], [], [], [], [], [], None, []])
+        malformed_responses = [[] for _ in range(11)]
+        malformed_responses[6] = None
+        store.request = Mock(side_effect=malformed_responses)
         store.rpc = Mock(return_value={"dispatches": []})
         with self.assertRaises(IntegrationError):
             store.company_status()
