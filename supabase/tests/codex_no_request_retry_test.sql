@@ -114,6 +114,8 @@ select is((select request_count from public.codex_task_executions
 select is((select status from public.codex_task_executions
   where id=(select execution_id from codex_retry_fixture)),'running',
   'new execution is claimable by the metered runner');
+select is((select status from public.tasks where id=(select task_id from codex_retry_fixture)),'in_progress',
+  'an approved fresh reservation reopens the same task for its retry');
 select is((select s.status from public.agent_run_spend_reservations s
   join public.codex_task_executions e on e.reservation_id=s.id
   where e.id=(select execution_id from codex_retry_fixture)),'reserved',
@@ -143,11 +145,14 @@ begin
   update public.agent_run_spend_reservations set status='unknown',settled_at=now(),
     usage='{"reason":"Codex execution ended without trusted complete usage"}'::jsonb where id=reservation_id;
   update public.codex_task_executions set status='unknown',request_count=1 where id=execution_id;
+  update public.tasks set status='blocked' where id=task_id;
 end;
 $$;
 set local role service_role;
 select throws_ok($$select public.sutra_founder_retry_codex_task_execution('12345678',(select task_id from codex_retry_fixture))$$,
   '42501',null,'a model request prevents the no-request retry path');
+select is((select status from public.tasks where id=(select task_id from codex_retry_fixture)),'blocked',
+  'a terminal execution with provider activity stays visibly blocked');
 reset role;
 
 do $$
@@ -171,19 +176,36 @@ select is((select (payload->>'max_total_attempts')::integer from codex_retry_thi
 select is((select count(*)::integer from public.codex_task_execution_attempts
   where execution_id=(select execution_id from codex_retry_fixture)),2,
   'both previous no-request attempts remain in immutable history');
-do $$
-declare execution_id uuid; run_id uuid; reservation_id uuid;
-begin
-  select e.id,e.agent_run_id,e.reservation_id into execution_id,run_id,reservation_id
-    from public.codex_task_executions e where e.id=(select f.execution_id from codex_retry_fixture f);
-  update public.agent_runs set status='failed',finished_at=now(),lease_token=null,lease_expires_at=null,
-    output='{"codex_execution_status":"unknown"}'::jsonb where id=run_id;
-  update public.agent_run_spend_reservations set status='unknown',settled_at=now(),
-    usage='{"reason":"Codex execution ended without trusted complete usage"}'::jsonb where id=reservation_id;
-  update public.codex_task_executions set status='unknown',request_count=0,input_tokens=0,output_tokens=0
-    where id=execution_id;
-end;
-$$;
+select is((select status from public.tasks where id=(select task_id from codex_retry_fixture)),'in_progress',
+  'retrying the same approved blocked task restores in-progress status');
+create temporary table codex_terminal_finish_request on commit drop as
+  select e.agent_run_id as run_id,e.task_id,r.lease_token,e.issue_number,e.provider,e.model from public.codex_task_executions e
+  join public.agent_runs r on r.id=e.agent_run_id
+  where e.id=(select execution_id from codex_retry_fixture);
+grant select on codex_terminal_finish_request to service_role;
+create temporary table codex_terminal_authorization_attempt(payload jsonb) on commit drop;
+grant insert on codex_terminal_authorization_attempt to service_role;
+create temporary table codex_terminal_finish_result(payload jsonb) on commit drop;
+grant insert on codex_terminal_finish_result to service_role;
+set local role service_role;
+insert into codex_terminal_authorization_attempt
+select public.sutra_authorize_codex_task('sutra-worker-codex12345678',task_id,issue_number,
+  'https://github.com/anupdalvi86-oss/sutra/issues/107',provider,model)
+from codex_terminal_finish_request;
+insert into codex_terminal_finish_result
+select public.sutra_codex_finish_run('sutra-worker-codex12345678',run_id,lease_token,
+  false,false,1,'codex_process_failed') from codex_terminal_finish_request;
+reset role;
+select is((select payload->>'status' from codex_terminal_authorization_attempt),'authorized',
+  'the retry runner starts the fresh reservation before Codex completion');
+select is((select r.status from public.agent_runs r join public.codex_task_executions e on e.agent_run_id=r.id
+  where e.id=(select execution_id from codex_retry_fixture)),'failed',
+  'terminal Codex failure is persisted before the task is blocked');
+select is((select status from public.tasks where id=(select task_id from codex_retry_fixture)),'blocked',
+  'terminal no-request failure blocks the task for board reporting');
+select ok(exists(select 1 from public.audit_log where action='codex.task_blocked_after_terminal_failure'
+  and resource_id=(select task_id::text from codex_retry_fixture)),
+  'terminal Codex task-state transition is audit logged');
 create temporary table codex_terminal_authorization_result(payload jsonb) on commit drop;
 grant insert on codex_terminal_authorization_result to service_role;
 set local role service_role;
