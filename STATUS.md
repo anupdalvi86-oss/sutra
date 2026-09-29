@@ -1,14 +1,14 @@
 # Sutra status
 
-Updated: 2026-09-29, after production verification of PR #180
+Updated: 2026-09-29, after PR #183 and production database verification
 
 ## Working
 
-- **Railway:** Production project `valiant-liberation` runs private `sutra` and `sutra-api` services. Both services are Online; Railway shows the PR #180 deployment as ACTIVE and successful (API deployment `512ababf-8630-4b43-a737-e53b8bf2a2a9`). Hermes data is stored on the persistent `/opt/data` volume.
-- **Supabase:** Project `smqsrigsugjuvuombetq` is the authoritative company state and is `ACTIVE_HEALTHY`. The production migration `founder_sales_artifact_retry` is applied (server migration version `20260929103538`).
+- **Railway:** Production project `valiant-liberation` runs private `sutra` and `sutra-api` services. Both services are Online; Railway shows the PR #180 deployment as ACTIVE and successful (API deployment `512ababf-8630-4b43-a737-e53b8bf2a2a9`). PR #183 changed only database logic and documentation, so it required no Railway deployment. Hermes data is stored on the persistent `/opt/data` volume.
+- **Supabase:** Project `smqsrigsugjuvuombetq` is the authoritative company state and is `ACTIVE_HEALTHY`. Production migrations include `founder_sales_artifact_retry` and `department_head_spend_approval_safety`.
 - **Telegram:** [@sutra86bot](https://t.me/sutra86bot) accepts private commands from founder ID `8776723105`. Live founder retry and CEO/Sales department status commands succeeded after their respective production deployments.
 - **Founder review/recovery controls:** QA/Security deferral is founder-only, atomic, and audited. The Sales schema-failure recovery is founder-only, audit-logged, and limited to one requeue for the same already-approved task after three terminal schema failures and fully reconciled prior reservations. Each new model attempt still uses normal spend preflight.
-- **Financial controls:** Database policy enforces configurable approval thresholds: automatic at/below €10, department head above €10 through €50, CFO + CEO above €50 and below €200, and founder at/above €200. The €10–50 band fails closed until a department approver is assigned. AI inference has an €8 monthly hard stop and 80% warning. No company-wide operating budget is configured.
+- **Financial controls:** Database policy enforces configurable approval thresholds: automatic at/below €10, department head above €10 through €50, CFO + CEO above €50 and below €200, and founder at/above €200. Founder-audited department head assignments are active for all 10 departments: CEO for Executive and Governance, CTO for Engineering, QA, and Security, CFO for Finance, CMO for Marketing and Sales, COO for Operations, and CPO for Product. A designated head cannot approve their own expense. AI inference has an €8 monthly hard stop and 80% warning. No company-wide operating budget is configured.
 - **GitHub:** Repository is public. Engineering tasks can dispatch to GitHub and Codex can open branches/PRs; Sutra cannot merge or release. CI requires Python, database/pgTAP/lint, container/runtime, and secret-scan jobs.
 
 ## Current operating state
@@ -28,8 +28,10 @@ Eight unknown model-spend reservations totaling €0.74 remain held; none were c
 - PR [#177](https://github.com/anupdalvi86-oss/sutra/pull/177) merged as `9db8f9279055ad6814ed0e43acae559f9f8293c3`; all five CI jobs passed. It added the Sales recovery and founder-only Telegram command.
 - PR [#178](https://github.com/anupdalvi86-oss/sutra/pull/178) merged as `f493dcaead1bd2a9ee2a02f096596d1d7e470eb0`; all five CI jobs passed, including the full Python suite, database/Auth/RLS/pgTAP/lint, containers, secret scan, and change detection. Railway shows its deployment as ACTIVE and successful.
 - PR [#180](https://github.com/anupdalvi86-oss/sutra/pull/180) merged as `e51615a48299b00c1711c3bc43bb822ed630be89`; all five CI jobs passed. The full Python suite passed 204 tests in about 10 seconds; database and container checks also passed. Railway shows the PR #180 deployment as ACTIVE and successful.
+- PR [#182](https://github.com/anupdalvi86-oss/sutra/pull/182) merged as `18cf60d13eb297ceece07c0fb1b5ff7e5c2639c0`; all five CI jobs passed. Railway shows the API deployment as ACTIVE and successful. The live CEO reply now explains that proposed-project CPO work is held at the project-budget approval gate and confirms no run or model spend began.
+- PR [#183](https://github.com/anupdalvi86-oss/sutra/pull/183) merged as `745403036025ad1dc1f5250ddbf9389f132d9833`; all five CI jobs passed. The focused local policy security file passed 257 pgTAP checks. Production migration application succeeded; all 10 department approver mappings are active and each setting has a founder audit-log record.
 - Local verification for PR #177: **204 Python tests passed**, **441 pgTAP assertions across 15 files passed**, Supabase database lint was clean, Bandit reported no medium/high findings, `compileall` passed, and `git diff --check` passed.
-- Production verification: the Sales migration is applied; the founder-only retry function is unavailable to `anon` and `authenticated` and executable by `service_role` only.
+- Production verification: the Sales and department-spend-safety migrations are applied; founder-only retry and setting functions are unavailable to `anon` and `authenticated` and executable by `service_role` only.
 - Live Telegram-to-Supabase verification: founder Sales recovery command returned success; task is `done`; exactly one `sales_handoff` artifact is persisted; new and prior reservations are reconciled; audit log names founder `8776723105` and records no added spend, merge, or release authority.
 - Live CEO board status reflects 2 blocked CPO tasks, 2 deferred QA/Security reviews, the pending project approval, financial controls, completed role handoffs, and merged PR/CI evidence. Completed tasks are shown separately and do not inflate open-task counts. The live Sales brief shows its completed handoff and zero open tasks.
 
