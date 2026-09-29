@@ -4,7 +4,7 @@
 
 ## Decision context
 
-The smallest coherent product hypothesis in the approved project records is a tool that turns one user-provided end-to-end scenario into an editable Playwright test draft, explains how the draft maps to the scenario, and lets a person accept, edit, or reject it. The draft remains unverified and is never run by the tool.
+One candidate straw scope, taken from a completed Architect artifact, is a tool that turns one user-provided end-to-end scenario into an editable Playwright test draft, explains how the draft maps to the scenario, and lets a person accept, edit, or reject it. The draft remains unverified and is never run by the tool. This is one hypothesis for review, not a decision that reconciles the duplicate project records.
 
 This is a hypothesis selected to make the proposed workflow concrete, not a validated product direction. Current records do not establish a target buyer, a repeated unmet need, differentiation from existing options, willingness to pay, or market size. Product work should remain at bounded, no-spend discovery unless the evidence gates below pass and the founder approves a separate proposal.
 
@@ -16,8 +16,8 @@ This is a hypothesis selected to make the proposed workflow concrete, not a vali
 | Sourced evidence | Commercial products describe test creation, maintenance, and failure-triage capabilities. | The CPO artifact cites [mabl](https://www.mabl.com/pricing), [SmartBear Reflect](https://smartbear.com/product/reflect/pricing/), and [BrowserStack](https://www.browserstack.com/pricing?cycle=annual&product=low-code-automation). Vendor feature and pricing pages establish what those vendors report, not unmet demand or comparable prices. |
 | Sourced evidence | Test maintenance and flaky tests are reported as workflow concerns. | The CPO artifact cites the [ACM flaky-test study](https://dl.acm.org/doi/10.1145/3510457.3513037) and vendor research. These sources support investigating a problem; they do not show that this proposed product solves it or that buyers will pay. |
 | Sourced evidence | Untrusted test scenarios or pasted application context can create prompt-injection and unsafe-output risks. | The Architect artifact cites [OWASP LLM01](https://owasp.org/www-project-top-10-for-large-language-model-applications/2_0_vulns/LLM01_PromptInjection.html). This informs safeguards; it is not a completed Security review. |
-| Sourced project evidence | The approved project has completed CPO research, PM planning, and an Architect design artifact. The CPO recommends discovery rather than development; the PM and Architect artifacts both leave product implementation conditional. | Read-only project/task/artifact records for project `58c52b74-8f15-4174-a079-e869e3df713c`: CPO task `9033583d-0867-4dde-9f55-df9f58d51c71`, PM task `38ab260a-9a72-4cc0-9de8-9ef2ffd6a5c6`, and Architect task `20030c5e-792c-4970-b12a-f9adc3036cf7`. Completion of those artifact tasks is not evidence that the opportunity is validated. |
-| Sourced project evidence | The repo’s discovery gate requires an authoritative model-routing status before discovery or prototype work; it also calls for one workflow, disconfirming research, and a stop/continue recommendation. | [`docs/AI_QA_OPPORTUNITY_DISCOVERY.md`](../AI_QA_OPPORTUNITY_DISCOVERY.md). `STATUS.md` says two proposed-project CPO tasks remain blocked and QA/Security are deferred. This document does not resolve those task records or perform either review. |
+| Sourced project evidence | The repo records three approved €500 project records as duplicate planning records for the same opportunity, not as three validated products. Research and product-plan artifacts describe different candidate directions, including Playwright test drafting/repair and AI application evaluation. | Current [`STATUS.md`](../../STATUS.md) and read-only task/artifact records: project `58c52b74-8f15-4174-a079-e869e3df713c` (CPO `9033583d-0867-4dde-9f55-df9f58d51c71`, PM `38ab260a-9a72-4cc0-9de8-9ef2ffd6a5c6`, Architect `20030c5e-792c-4970-b12a-f9adc3036cf7`); project `277a4042-b7a8-4461-a117-60c4ccecf52c` (CPO `3dde0907-1420-4832-a52d-f71dfc7307e6`, PM `6483e5d2-8c40-4a1e-9b91-c190dc253e96`, blocked Architect `8c59a877-ba5d-4a4e-aa8c-78181de1a265`); and project `93b43006-58f9-4096-9e72-df9aeaf350ff` (CPO `225f3fb1-3c8e-4d74-a138-160d7231f461`, PM `9fa934dc-60a3-482e-9f67-afc7d2506e51`). The records do not establish which hypothesis users need. |
+| Sourced project evidence | The repo’s discovery gate requires an authoritative model-routing status before discovery or prototype work; it also calls for one workflow, disconfirming research, and a stop/continue recommendation. `STATUS.md` identifies Architecture and acceptance-criteria verification as blocked and QA/Security reviews as deferred by founder direction. | [`docs/AI_QA_OPPORTUNITY_DISCOVERY.md`](../AI_QA_OPPORTUNITY_DISCOVERY.md) and current [`STATUS.md`](../../STATUS.md). This proposal does not complete the blocked tasks or perform QA/Security reviews. |
 | Assumption to test | Small teams using Playwright may have a costly test-authoring or maintenance workflow that is not adequately served by current tools. | Proposed in the approved CPO artifact as a candidate segment/workflow. Buyer, frequency, cost, unmet need, adoption, and payment intent remain unknown. |
 | Assumption to test | A scenario-linked rationale and review controls may be useful differentiation for a Playwright draft. | A design choice from the PM and Architect artifacts, not evidence of customer preference or market gap. |
 
@@ -41,7 +41,7 @@ No test execution, browser control, CI integration, repository write, test repai
 3. A validator checks output shape and size. The interface displays generated code as inert, untrusted text alongside rationale and warnings.
 4. The user reviews the draft and chooses accept, edit, or reject. The system does not execute the result. A prototype evaluation records only the minimum review outcome needed for an approved study.
 
-The target user and exact scenario type must be selected through discovery; this workflow is a testable framing, not a known user journey.
+The target user, exact scenario type, and choice among the competing recorded hypotheses must be selected through founder review and discovery; this workflow is a testable framing, not a known user journey.
 
 ## Minimum logical architecture (conditional prototype)
 
@@ -51,11 +51,11 @@ The target user and exact scenario type must be selected through discovery; this
 - **Output validator:** require the agreed response schema and safe size; reject malformed output; render code as text, never execute it.
 - **State:** no persistent scenario or draft store in the smallest prototype. Keep only consented, minimal evaluation notes if a separately approved study requires them, under an explicit retention rule.
 
-This is a logical boundary only, not an implementation design approval. The Architect artifact proposed a persistent tenant-scoped draft/review store and API; this proposal removes those elements from the first testable scope to reduce data and build surface. Add persistence or multi-user tenancy only if discovery justifies it and architecture, privacy, and Security reviews are authorized and completed.
+This is a logical boundary only, not an implementation design approval or completion of the blocked Architecture task. One completed Architect artifact proposed a persistent tenant-scoped draft/review store and API; this proposal removes those elements from the first testable scope to reduce data and build surface. Another product-plan artifact instead proposes first checking model routing, interviewing up to eight users, and only then considering existing evaluation tools. The different proposals are not combined here. Add persistence or multi-user tenancy only if discovery justifies it and architecture, privacy, and Security reviews are authorized and completed.
 
 ## Acceptance gates
 
-These criteria are for deciding whether to advance the proposal. They do not certify that any current product exists or that blocked tasks are complete.
+These proposed criteria are for deciding whether to advance a hypothesis. They are not QA results, do not complete the blocked acceptance-criteria verification task, and do not certify that any current product exists.
 
 ### Discovery decision gate
 
@@ -86,8 +86,8 @@ Only if the founder separately approves a prototype proposal:
 
 ## Unresolved questions for founder review
 
-1. Should the approved project continue with bounded, no-spend discovery, or stop until the blocked proposed-project CPO work and duplicate-project decision are resolved?
-2. If discovery continues, is the Playwright test-drafting/maintenance workflow the single hypothesis to investigate, or should Product select a different one based on evidence?
+1. Should the approved effort continue with bounded, no-spend discovery, or pause until the duplicate-project records and blocked Architecture/acceptance-criteria tasks are resolved?
+2. If discovery continues, which single candidate should Product test: Playwright test drafting/maintenance, review of AI-proposed Playwright repairs, or regression evaluation for AI application changes? The existing artifacts support these as hypotheses only; they must not be combined without evidence.
 3. What authoritative record will establish model-routing readiness, and is it complete?
 4. May Product seek founder-approved participants and contact them for discovery? The existing research invitation and sales copy are drafts only; no outreach is authorized by this document.
 5. If discovery passes, will the founder authorize a separately scoped prototype, including any required data handling and expense approvals?
