@@ -25,6 +25,7 @@ def status_fixture():
         "projects": [{"id": "project-1", "name": "AI QA opportunity", "status": "approved",
                       "requested_budget": 500, "currency": "EUR", "department_id": "finance-dept",
                       "owner_agent_id": "ceo-id", "budget_assessment_status": "within_cap",
+                      "legal_hold": False,
                       "budget_assessment": {"estimated_total_eur": 400, "confidence": "medium",
                                             "recommended_action": "proceed_within_cap"}}],
         "objectives": [{"id": "objective-1", "project_id": "project-1",
@@ -53,6 +54,7 @@ def status_fixture():
                        "channel": "internal", "status": "draft", "budget_amount": 0, "currency": "EUR"}],
         "customers": [{"id": "lead-1", "name": "Synthetic lead", "company": "Example Co",
                        "source": "test fixture", "status": "qualified"}],
+        "customer_email_actions": [],
         "legal_escalations": [],
         "github_dispatches": [],
     }
@@ -161,6 +163,40 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("case remains open", reply)
         self.assertIn("only the configured founder", reply)
 
+    def test_project_legal_hold_commands_are_founder_only_and_audited(self):
+        project_id = "00000000-0000-4000-8000-000000000029"
+        command = f"set legal hold {project_id} because a contract question needs review."
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "set_project_legal_hold")
+        self.assertEqual(parsed.project_id, project_id)
+        self.assertIs(parsed.project_legal_hold, True)
+        self.assertEqual(parsed.legal_reason, "a contract question needs review")
+        self.store.rpc.return_value = {"project_id": project_id, "legal_hold": True, "changed": True}
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("Audited legal hold set", reply)
+        self.assertIn("blocks outbound customer email", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_project_legal_hold", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": project_id,
+            "p_legal_hold": True,
+            "p_reason": "a contract question needs review",
+        })
+
+        self.store.rpc.reset_mock()
+        clear_command = f"clear legal hold for {project_id} because founder reviewed the question."
+        self.store.rpc.return_value = {"project_id": project_id, "legal_hold": False, "changed": True}
+        reply = self.router.handle(FOUNDER, FOUNDER, clear_command).text
+        self.assertIn("legal hold cleared", reply)
+        self.assertIn("does not resume a paused initiative", reply)
+
+        self.store.rpc.reset_mock()
+        reply = self.router.handle("other-user", "other-user", command).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+        self.assertEqual(parse_founder_command(f"set legal hold not-a-uuid because this input is malformed").kind, "unsupported")
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command(f"clear legal hold {project_id} because short")
+
     def test_board_status_explains_blocked_work_waiting_on_proposed_project_approval(self):
         snapshot = status_fixture()
         snapshot["projects"].append({
@@ -209,6 +245,23 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Objective [active]: Validate buyer demand", reply)
         self.assertIn("Marketing pipeline", reply)
         self.assertIn("[draft] QA pilot positioning — internal", reply)
+        self.assertIn("Customer communications", reply)
+        self.assertIn("No budgeted customer email actions are queued or recorded", reply)
+
+    def test_status_reports_customer_email_action_state_without_disclosing_content(self):
+        snapshot = status_fixture()
+        snapshot["customer_email_actions"] = [{
+            "id": "action-1", "project_id": "project-1", "purpose": "sales",
+            "status": "queued", "subject": "private subject", "body_text": "private content",
+        }]
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("[queued] sales email action — ID action-1", reply)
+        self.assertNotIn("private subject", reply)
+        self.assertNotIn("private content", reply)
+
+        snapshot["projects"][0]["legal_hold"] = True
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("Legal hold active: external customer email is blocked", reply)
         self.assertIn("Customer and lead pipeline", reply)
         self.assertIn("[qualified] Synthetic lead (Example Co) — test fixture", reply)
 
@@ -584,6 +637,8 @@ class FounderCommandTests(unittest.TestCase):
                             for path in requested_paths))
         self.assertTrue(any(path.startswith("campaigns?") and "budget_amount" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("customers?") and "email" not in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("customer_email_actions?") and "body_text" not in path
+                            and "recipient_email" not in path for path in requested_paths))
         self.assertEqual(store.rpc.call_args_list, [
             unittest.mock.call("sutra_company_github_dispatch_status", {}),
             unittest.mock.call("sutra_company_code_release_status", {}),
@@ -591,7 +646,7 @@ class FounderCommandTests(unittest.TestCase):
 
     def test_status_snapshot_rejects_partial_or_malformed_database_responses(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        malformed_responses = [[] for _ in range(13)]
+        malformed_responses = [[] for _ in range(14)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
         store.rpc = Mock(side_effect=[{"dispatches": []}, []])
