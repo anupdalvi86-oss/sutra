@@ -181,6 +181,11 @@ class AgentArtifactTests(unittest.TestCase):
         prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
         self.assertIn("Do not invent actual leads, contact anyone, or send messages", prompt)
         self.assertIn("task_acceptance", request.call_args.args[0].data.decode())
+        self.assertIn('"ideal_customer_profile":"..."', prompt)
+        self.assertIn('"lead_criteria":["..."]', prompt)
+        self.assertIn('"qualification_questions":["..."]', prompt)
+        self.assertIn('"first_contact_draft":"..."', prompt)
+        self.assertIn("do not identify or invent a real lead", prompt)
 
     def test_product_task_prompt_shows_exact_criterion_evidence_contract(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output())}}],
