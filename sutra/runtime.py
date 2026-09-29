@@ -815,7 +815,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             lines.append(f"• [{dispatch.get('status', 'unknown')}] {title}{attempt_text} — {explanation}.")
     include_campaigns = is_company_wide or agent_slug == "cmo"
     campaign_rows = snapshot.get("campaigns", []) if include_campaigns else []
-    if campaign_rows:
+    if include_campaigns:
         lines.extend(["", "Marketing pipeline"])
         campaign_counts: dict[str, int] = {}
         for campaign in campaign_rows:
@@ -829,11 +829,13 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             budget = (f"; draft ceiling {str(campaign.get('currency') or 'EUR')[:3]} {amount}"
                       if isinstance(amount, (int, float)) and amount > 0 else "")
             lines.append(f"• [{campaign.get('status', 'unknown')}] {name} — {channel}{budget}")
+        if not campaign_rows:
+            lines.append("• No campaign records are currently recorded.")
         if len(campaign_rows) > 5:
             lines.append(f"• {len(campaign_rows) - 5} more campaigns omitted; see Supabase.")
     include_customer_pipeline = is_company_wide or agent_slug == "sales"
     customer_rows = snapshot.get("customers", []) if include_customer_pipeline else []
-    if customer_rows:
+    if include_customer_pipeline:
         lines.extend(["", "Customer and lead pipeline"])
         customer_counts: dict[str, int] = {}
         for customer in customer_rows:
@@ -846,6 +848,8 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             source = re.sub(r"\s+", " ", str(customer.get("source") or "source unrecorded"))[:40]
             organization = f" ({company})" if company else ""
             lines.append(f"• [{customer.get('status', 'unknown')}] {name}{organization} — {source}")
+        if not customer_rows:
+            lines.append("• No customer or lead records are currently recorded.")
         if len(customer_rows) > 5:
             lines.append(f"• {len(customer_rows) - 5} more lead/customer records omitted; see Supabase.")
     lines.extend(["", "Approvals requiring attention"])
