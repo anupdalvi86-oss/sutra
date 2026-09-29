@@ -538,20 +538,27 @@ class AgentArtifactTests(unittest.TestCase):
 
     def test_invalid_hermes_response_records_only_a_safe_failure_category(self):
         store = self.approved_store("cpo")
-        hermes = Mock()
-        hermes.review.side_effect = AgentOutputError(
-            "Hermes returned malformed JSON including untrusted response",
-            usage_envelope_shape="usage_missing",
-        )
+        payload = {"choices": [{"message": {"content": "private-response-marker"}}]}
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        hermes = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-4o-mini")
         worker = AgentWorker(store, hermes, "openai", "gpt-4o-mini", worker_id="sutra-worker-12345678")
 
-        self.assertEqual(worker.run_once(), "failed_unknown_spend")
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response), \
+             self.assertLogs("sutra.worker", level="WARNING") as captured:
+            self.assertEqual(worker.run_once(), "failed_unknown_spend")
         output = store.complete_agent_run.call_args.args[3]
         self.assertEqual(output["failure_category"], "invalid_hermes_response")
         self.assertEqual(output["failure_detail_code"], "malformed_json")
         self.assertEqual(output["usage_state"], "unverified")
         self.assertEqual(output["usage_envelope_shape"], "usage_missing")
-        self.assertNotIn("untrusted response", str(output))
+        self.assertNotIn("private-response-marker", str(output))
+        self.assertNotIn("private-response-marker", "\n".join(captured.output))
+        store.reconcile_agent_run_spend.assert_called_once_with(
+            "sutra-worker-12345678", claimed_run("cpo"), "reservation-1", "openai", "gpt-4o-mini", None
+        )
 
     def test_unavailable_hermes_retains_reserve_and_fails_run(self):
         store = self.approved_store()
