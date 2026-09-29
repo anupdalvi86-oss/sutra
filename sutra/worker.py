@@ -323,6 +323,21 @@ class HermesAgentClient:
                     "pricing statements. Return exactly the contract fields and assigned task_acceptance items. "
                     "This is internal research only; do not contact customers, create leads, publish, or spend."
                 )
+            elif role == "sales":
+                role_output += (
+                    " For the sales_handoff artifact, use exactly these nested fields and JSON types: "
+                    "ideal_customer_profile is one concise string; lead_criteria is an array of 1-20 "
+                    "concise strings; qualification_questions is an array of 1-20 concise strings; "
+                    "first_contact_draft is one concise string. Do not return an array for either string "
+                    "field, and do not return a string for either array field. Use this shape: "
+                    "{\"summary\":\"...\",\"recommendation\":\"...\",\"evidence\":[],"
+                    "\"task_acceptance\":[{\"criterion\":\"exact assigned text\","
+                    "\"evidence\":\"specific proof in the artifact\"}],\"artifact\":{"
+                    "\"ideal_customer_profile\":\"...\",\"lead_criteria\":[\"...\"],"
+                    "\"qualification_questions\":[\"...\"],\"first_contact_draft\":\"...\"}}. "
+                    "The first-contact copy is a private draft for founder review only: do not identify "
+                    "or invent a real lead, contact anyone, send or publish it, or claim that outreach occurred."
+                )
         elif role == "qa":
             role_output = (
                 "Return JSON fields summary, recommendation, result (pass or fail), tested_commit_sha, "
