@@ -614,7 +614,7 @@ class AgentArtifactTests(unittest.TestCase):
             {"status": "unknown"},
         ]
         payload = {
-            "choices": [{"message": {"content": json.dumps(artifact("cpo"))}}],
+            "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(artifact("cpo"))}}],
             "usage": {"prompt_tokens": 20},
         }
         response = Mock()
@@ -632,6 +632,12 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertIsNone(calls[1].args[-1])
         self.assertEqual(store.complete_agent_run.call_args.args[2], "failed")
         self.assertEqual(store.complete_agent_run.call_args.args[4], "unknown_or_overrun_spend")
+        output = store.complete_agent_run.call_args.args[3]
+        self.assertEqual(output["usage_state"], "unverified")
+        self.assertEqual(output["usage_envelope_shape"],
+                         "usage_object:prompt_tokens=int,completion_tokens=missing,total_tokens=missing")
+        self.assertEqual(output["response_context_shape"], "keys=choices,usage,finish=stop")
+        self.assertNotIn("20", json.dumps(output))
 
     def test_pending_database_spend_approval_never_calls_hermes(self):
         store = self.approved_store()

@@ -272,6 +272,9 @@ class HermesAgentClient:
         self.provider = provider
         self.model = model
         self.timeout = timeout
+        # Reset per request and retain only bounded, code-owned shape labels so
+        # the worker can explain unknown spend without persisting provider data.
+        self.last_usage_diagnostics: dict[str, str] = {}
 
     def review(self, run: dict[str, Any], provider: str | None = None, model: str | None = None,
                max_output_tokens: int = 2200, max_input_tokens: int = 1_000_000) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -279,6 +282,7 @@ class HermesAgentClient:
         model = model or self.model
         if not provider or not model:
             raise IntegrationError("Hermes exact model route is not configured")
+        self.last_usage_diagnostics = {}
         role = run["agent"]["slug"]
         if isinstance(run.get("task_artifact"), dict):
             context = run["task_artifact"]
@@ -442,13 +446,17 @@ class HermesAgentClient:
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise IntegrationError("Hermes review request failed") from exc
         usage_shape = _usage_envelope_shape(envelope)
+        response_shape = _response_context_shape(envelope)
+        self.last_usage_diagnostics = {
+            "usage_envelope_shape": usage_shape,
+            "response_context_shape": response_shape,
+        }
         usage = envelope.get("usage") if isinstance(envelope, dict) else None
         if not isinstance(usage, dict):
             safe_provider, safe_model = _safe_usage_route(provider, model)
             logger.warning(
                 "Hermes usage envelope unavailable provider=%s model=%s shape=%s response=%s",
-                safe_provider, safe_model, _usage_envelope_shape(envelope),
-                _response_context_shape(envelope),
+                safe_provider, safe_model, usage_shape, response_shape,
             )
             usage = None
         else:
@@ -463,8 +471,7 @@ class HermesAgentClient:
                 safe_provider, safe_model = _safe_usage_route(provider, model)
                 logger.warning(
                     "Hermes usage envelope unavailable provider=%s model=%s shape=%s response=%s",
-                    safe_provider, safe_model, _usage_envelope_shape(envelope),
-                    _response_context_shape(envelope),
+                    safe_provider, safe_model, usage_shape, response_shape,
                 )
         try:
             content = envelope["choices"][0]["message"]["content"]
@@ -822,8 +829,18 @@ class AgentWorker:
         except IntegrationError:
             return "spend_reconciliation_pending"
         if spend_status != "reconciled":
+            output = {
+                "summary": "Hermes usage exceeded or could not settle within its reserved profile",
+                "usage_state": "unverified",
+            }
+            diagnostics = getattr(self.hermes, "last_usage_diagnostics", None)
+            if isinstance(diagnostics, dict):
+                for key in ("usage_envelope_shape", "response_context_shape"):
+                    value = diagnostics.get(key)
+                    if isinstance(value, str) and len(value) <= 160:
+                        output[key] = value
             self.store.complete_agent_run(self.worker_id, run, "failed",
-                {"summary": "Hermes usage exceeded or could not settle within its reserved profile"}, "unknown_or_overrun_spend")
+                output, "unknown_or_overrun_spend")
             return "failed_unknown_spend"
         if isinstance(run.get("task_artifact"), dict):
             try:
