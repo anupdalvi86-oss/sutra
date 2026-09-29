@@ -241,6 +241,7 @@ class SupabaseREST:
         """Read a bounded, factual operating snapshot from authoritative company state."""
         paths = {
             "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
+            "objectives": "objectives?select=id,project_id,title,status,owner_agent_id&status=in.(proposed,active)&order=created_at&limit=100",
             "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at&status=in.(backlog,ready,in_progress,blocked,review)&order=updated_at.desc&limit=100",
             "approvals": "approvals?select=id,project_id,summary,amount,currency,status,required_roles,decisions,created_at&status=eq.pending&order=created_at.desc&limit=50",
             "agent_runs": "agent_runs?select=task_id,status,output,finished_at&status=in.(failed,blocked)&order=finished_at.desc&limit=200",
@@ -248,6 +249,8 @@ class SupabaseREST:
             "departments": "departments?select=id,slug,name&limit=100",
             "budgets": "budgets?select=scope,scope_key,period,currency,limit_amount,warning_percent,hard_stop&active=eq.true&limit=100",
             "expenses": "expenses?select=amount,currency,status,category,project_id,department_id,agent_id&status=in.(approved,paid,requested)&limit=500",
+            "campaigns": "campaigns?select=id,project_id,name,channel,status,budget_amount,currency,created_at&order=created_at.desc&limit=100",
+            "customers": "customers?select=id,name,company,source,status,updated_at&status=in.(lead,qualified,customer)&order=updated_at.desc&limit=100",
         }
         snapshot = {key: self.request(path) for key, path in paths.items()}
         dispatch_status = self.rpc("sutra_company_github_dispatch_status", {})
@@ -664,6 +667,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     """Render a board-style status using only persisted Supabase facts."""
     label, agent_slug = STATUS_ROLES.get(requested_role, ("Company", None))
     projects = snapshot["projects"]
+    objectives = snapshot.get("objectives", [])
     tasks = snapshot["tasks"]
     approvals = snapshot["approvals"]
     runs_by_task: dict[str, dict[str, Any]] = {}
@@ -720,6 +724,11 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         budget = f"; requested ceiling {currency} {amount}" if isinstance(amount, (int, float)) else ""
         owner = agents.get(str(project.get("owner_agent_id")), {}).get("display_name", "Unassigned")
         lines.append(f"• {name} — {status_text}; owner {owner}{budget}")
+        project_objectives = [objective for objective in objectives
+                              if objective.get("project_id") == project.get("id")]
+        for objective in project_objectives[:2]:
+            objective_title = re.sub(r"\s+", " ", str(objective.get("title") or "Untitled objective"))[:100]
+            lines.append(f"  Objective [{objective.get('status', 'unknown')}]: {objective_title}")
     if len(scoped_projects) > 8:
         lines.append(f"• {len(scoped_projects) - 8} more projects omitted; see the Supabase project list.")
     lines.extend(["", "Open tasks"])
@@ -804,6 +813,41 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             attempts = dispatch.get("attempts")
             attempt_text = f"; attempt {attempts}/3" if isinstance(attempts, int) else ""
             lines.append(f"• [{dispatch.get('status', 'unknown')}] {title}{attempt_text} — {explanation}.")
+    include_campaigns = is_company_wide or agent_slug == "cmo"
+    campaign_rows = snapshot.get("campaigns", []) if include_campaigns else []
+    if campaign_rows:
+        lines.extend(["", "Marketing pipeline"])
+        campaign_counts: dict[str, int] = {}
+        for campaign in campaign_rows:
+            campaign_status = str(campaign.get("status") or "unknown")
+            campaign_counts[campaign_status] = campaign_counts.get(campaign_status, 0) + 1
+        lines.append("• " + ", ".join(f"{status}: {count}" for status, count in sorted(campaign_counts.items())))
+        for campaign in campaign_rows[:5]:
+            name = re.sub(r"\s+", " ", str(campaign.get("name") or "Untitled campaign"))[:80]
+            channel = re.sub(r"\s+", " ", str(campaign.get("channel") or "unspecified channel"))[:40]
+            amount = campaign.get("budget_amount")
+            budget = (f"; draft ceiling {str(campaign.get('currency') or 'EUR')[:3]} {amount}"
+                      if isinstance(amount, (int, float)) and amount > 0 else "")
+            lines.append(f"• [{campaign.get('status', 'unknown')}] {name} — {channel}{budget}")
+        if len(campaign_rows) > 5:
+            lines.append(f"• {len(campaign_rows) - 5} more campaigns omitted; see Supabase.")
+    include_customer_pipeline = is_company_wide or agent_slug == "sales"
+    customer_rows = snapshot.get("customers", []) if include_customer_pipeline else []
+    if customer_rows:
+        lines.extend(["", "Customer and lead pipeline"])
+        customer_counts: dict[str, int] = {}
+        for customer in customer_rows:
+            customer_status = str(customer.get("status") or "unknown")
+            customer_counts[customer_status] = customer_counts.get(customer_status, 0) + 1
+        lines.append("• " + ", ".join(f"{status}: {count}" for status, count in sorted(customer_counts.items())))
+        for customer in customer_rows[:5]:
+            name = re.sub(r"\s+", " ", str(customer.get("name") or "Unnamed lead"))[:60]
+            company = re.sub(r"\s+", " ", str(customer.get("company") or ""))[:60]
+            source = re.sub(r"\s+", " ", str(customer.get("source") or "source unrecorded"))[:40]
+            organization = f" ({company})" if company else ""
+            lines.append(f"• [{customer.get('status', 'unknown')}] {name}{organization} — {source}")
+        if len(customer_rows) > 5:
+            lines.append(f"• {len(customer_rows) - 5} more lead/customer records omitted; see Supabase.")
     lines.extend(["", "Approvals requiring attention"])
     if not scoped_approvals:
         lines.append("• None pending.")
