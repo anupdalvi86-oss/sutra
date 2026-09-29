@@ -53,6 +53,7 @@ def status_fixture():
                        "channel": "internal", "status": "draft", "budget_amount": 0, "currency": "EUR"}],
         "customers": [{"id": "lead-1", "name": "Synthetic lead", "company": "Example Co",
                        "source": "test fixture", "status": "qualified"}],
+        "legal_escalations": [],
         "github_dispatches": [],
     }
 
@@ -60,6 +61,7 @@ def status_fixture():
 class FounderCommandTests(unittest.TestCase):
     def setUp(self):
         self.store = Mock()
+        self.store.founder_legal_escalations.return_value = []
         self.router = FounderCommandRouter(self.store, FOUNDER)
 
     def test_kimi_probe_command_queues_one_founder_only_bounded_request(self):
@@ -99,6 +101,65 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Approval waiting for CFO", reply)
         self.assertIn("company / * / monthly: EUR 8.0", reply)
         self.store.company_status.assert_called_once_with()
+        self.store.founder_legal_escalations.assert_called_once_with(FOUNDER)
+
+    def test_legal_escalation_commands_are_founder_only_and_persist_disposition(self):
+        case_id = "00000000-0000-4000-8000-000000000019"
+        parsed = parse_founder_command("CEO, show legal escalations.")
+        self.assertEqual(parsed.kind, "legal_escalations")
+        self.store.founder_legal_escalations.return_value = [{
+            "id": case_id, "project_id": "project-1", "project_name": "AI QA opportunity",
+            "project_status": "paused", "budget_cap": 500, "currency": "EUR",
+            "summary": "Founder review is required before work resumes.", "status": "open",
+        }]
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show legal escalations.").text
+        self.assertIn("Open legal escalations (1 shown)", reply)
+        self.assertIn(case_id, reply)
+        self.assertIn("project remains paused", reply)
+        self.assertIn("does not resume work", reply)
+        self.store.founder_legal_escalations.assert_called_with(FOUNDER)
+
+        command = f"record legal case {case_id} as continue within budget because Counsel reviewed the proposed terms."
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "record_legal_disposition")
+        self.assertEqual(parsed.legal_case_id, case_id)
+        self.assertEqual(parsed.legal_disposition, "continue_within_budget")
+        self.store.rpc.return_value = {
+            "case_id": case_id, "status": "reviewed", "disposition": "continue_within_budget",
+            "project_id": "project-1", "project_status": "paused",
+        }
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("Founder disposition recorded", reply)
+        self.assertIn("initiative remains paused", reply)
+        self.assertIn("does not restart work", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_record_legal_disposition", {
+            "p_founder_telegram_user_id": FOUNDER, "p_case_id": case_id,
+            "p_disposition": "continue_within_budget",
+            "p_reason": "Counsel reviewed the proposed terms",
+        })
+
+    def test_legal_escalation_command_fails_closed_for_nonfounder_and_bad_disposition(self):
+        command = "CEO, show legal escalations."
+        reply = self.router.handle("other-user", "other-user", command).text
+        self.assertIn("restricted", reply)
+        self.store.founder_legal_escalations.assert_not_called()
+        self.store.rpc.assert_not_called()
+        case_id = "00000000-0000-4000-8000-000000000019"
+        for malformed in (
+            f"record legal case {case_id} as sign because this must never be accepted",
+            "record legal case not-a-uuid as stop because the input is malformed",
+        ):
+            with self.subTest(malformed=malformed):
+                self.assertEqual(parse_founder_command(malformed).kind, "unsupported")
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command(f"record legal case {case_id} as stop because short")
+        self.store.rpc.side_effect = IntegrationError("case already closed")
+        reply = self.router.handle(
+            FOUNDER, FOUNDER,
+            f"record legal case {case_id} as stop because the initiative should not proceed.",
+        ).text
+        self.assertIn("case remains open", reply)
+        self.assertIn("only the configured founder", reply)
 
     def test_board_status_explains_blocked_work_waiting_on_proposed_project_approval(self):
         snapshot = status_fixture()
@@ -277,6 +338,7 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("CFO operating brief — board update", reply)
         self.assertIn("Active/approved/paused projects: 1", reply)
         self.assertIn("AI QA opportunity", reply)
+        self.assertIn("Legal escalations requiring founder review: 0", reply)
 
     def test_board_status_includes_objectives_campaigns_and_customer_pipeline(self):
         reply = render_status_brief(status_fixture(), "ceo")
@@ -285,6 +347,31 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("[draft] QA pilot positioning — internal", reply)
         self.assertIn("Customer and lead pipeline", reply)
         self.assertIn("[qualified] Synthetic lead (Example Co) — test fixture", reply)
+
+    def test_board_status_includes_legal_escalations_and_scopes_them_to_department(self):
+        snapshot = status_fixture()
+        snapshot["agents"].append({
+            "id": "cpo-id", "slug": "cpo", "display_name": "CPO", "department_id": "product-dept",
+        })
+        snapshot["projects"].append({
+            "id": "product-project", "name": "Product initiative", "status": "paused",
+            "requested_budget": 500, "currency": "EUR", "department_id": "product-dept",
+            "owner_agent_id": "cpo-id",
+        })
+        snapshot["legal_escalations"] = [{
+            "id": "legal-case-1", "project_id": "product-project", "project_name": "Product initiative",
+            "summary": "CFO flagged proposed binding terms for founder review.",
+        }, {
+            "id": "legal-case-2", "project_id": "another-project", "project_name": "Other project",
+            "summary": "Different department case.",
+        }]
+        company = render_status_brief(snapshot, "ceo")
+        self.assertIn("Legal escalations requiring founder review: 2", company)
+        self.assertIn("legal-case-1", company)
+        self.assertIn("legal-case-2", company)
+        product = render_status_brief(snapshot, "cpo")
+        self.assertIn("Product initiative — CFO flagged proposed binding terms", product)
+        self.assertNotIn("Other project", product)
 
     def test_marketing_and_sales_statuses_include_their_operating_pipelines(self):
         snapshot = status_fixture()
@@ -464,6 +551,7 @@ class FounderCommandTests(unittest.TestCase):
         store = SupabaseREST("https://sutra.example", "server-key")
         store.request = Mock(side_effect=[expected[key] for key in expected if key != "github_dispatches"])
         store.rpc = Mock(return_value={"dispatches": expected["github_dispatches"]})
+        expected.pop("legal_escalations")
         self.assertEqual(store.company_status(), expected)
         requested_paths = [call.args[0] for call in store.request.call_args_list]
         self.assertTrue(any(path.startswith("projects?") and "requested_budget" in path for path in requested_paths))
@@ -489,6 +577,17 @@ class FounderCommandTests(unittest.TestCase):
         store.rpc = Mock(return_value={"dispatches": []})
         with self.assertRaises(IntegrationError):
             store.company_status()
+
+    def test_founder_legal_escalation_adapter_validates_database_response(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        store.rpc = Mock(return_value={"escalations": [{"id": "legal-case-1"}]})
+        self.assertEqual(store.founder_legal_escalations(FOUNDER), [{"id": "legal-case-1"}])
+        store.rpc.assert_called_once_with("sutra_founder_list_legal_escalations", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+        store.rpc.return_value = {"escalations": {"bad": "shape"}}
+        with self.assertRaises(IntegrationError):
+            store.founder_legal_escalations(FOUNDER)
 
     def test_proposal_creates_persisted_approval_request(self):
         self.store.rpc.return_value = {"project_id": "project-1", "approval_id": "approval-1"}
@@ -837,6 +936,47 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("waiting for cfo", reply)
         self.assertIn(APPROVAL, reply)
         self.store.founder_pending_approvals.assert_called_once_with(FOUNDER)
+        self.store.rpc.assert_not_called()
+
+    def test_founder_can_review_and_revoke_standing_code_authority(self):
+        authorization_id = "00000000-0000-4000-8000-0000000000ab"
+        parsed = parse_founder_command("CEO, show standing code authority.")
+        self.assertEqual(parsed.kind, "code_authority_status")
+        self.store.rpc.return_value = {
+            "authorization_id": authorization_id, "active": True,
+            "repository": "anupdalvi86-oss/sutra",
+            "capabilities": ["create_developer_tasks", "create_branches", "open_pull_requests",
+                             "merge_pull_requests", "run_qa", "run_security", "deploy"],
+        }
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show standing code authority.").text
+        self.assertIn("Standing code authority is active", reply)
+        self.assertIn("does not change spending limits or budgets", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_code_authorization_status", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
+        command = f"CEO, revoke standing code authority {authorization_id} because Founder is ending this grant."
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "revoke_code_authority")
+        self.assertEqual(parsed.authorization_id, authorization_id)
+        self.assertEqual(parsed.authorization_reason, "Founder is ending this grant")
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"authorization_id": authorization_id, "active": False}
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("is revoked and the change is audit logged", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_revoke_code_authorization", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_authorization_id": authorization_id,
+            "p_reason": "Founder is ending this grant",
+        })
+
+    def test_standing_code_authority_commands_reject_malformed_or_nonfounder_requests(self):
+        self.assertEqual(parse_founder_command("revoke code authority not-a-uuid because invalid").kind, "unsupported")
+        authorization_id = "00000000-0000-4000-8000-0000000000ab"
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command(f"revoke standing code authority {authorization_id} because short")
+        reply = self.router.handle("other-user", "other-user", "CEO, show standing code authority.").text
+        self.assertIn("restricted", reply)
         self.store.rpc.assert_not_called()
 
     def test_ready_founder_approval_queue_includes_inline_decision_buttons(self):
