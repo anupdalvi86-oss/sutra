@@ -353,6 +353,37 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Architect task was not retried", reply)
         self.store.rpc.assert_called_once()
 
+    def test_founder_can_retry_the_same_cpo_research_task(self):
+        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "ready", "model": "gpt-6-luna"}
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry CPO research {APPROVAL}").text
+        self.assertIn("CPO research task queued", reply)
+        self.assertIn("OpenAI GPT-6 Luna", reply)
+        self.assertIn("prior unknown reservation remains held", reply)
+        self.assertIn("monthly hard cap", reply)
+        self.assertIn("no project spending, merge, or release authority", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_retry_cpo_research_task", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_task_id": APPROVAL,
+        })
+
+    def test_cpo_research_retry_rejects_wrong_founder_or_group_chat(self):
+        for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):
+            with self.subTest(user_id=user_id, chat_id=chat_id):
+                reply = self.router.handle(user_id, chat_id, f"retry CPO research {APPROVAL}").text
+                self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+    def test_cpo_research_retry_rejects_malformed_task_id(self):
+        self.assertEqual(parse_founder_command("retry CPO research not-a-uuid").kind, "unsupported")
+        self.router.handle(FOUNDER, FOUNDER, "retry CPO research 00000000-0000-4000-8000-00000000000z")
+        self.store.rpc.assert_not_called()
+
+    def test_cpo_research_retry_database_rejection_is_fail_closed(self):
+        self.store.rpc.side_effect = IntegrationError("not eligible")
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry CPO research {APPROVAL}").text
+        self.assertIn("CPO research was not retried", reply)
+        self.store.rpc.assert_called_once()
+
     def test_founder_can_request_bounded_github_dispatch_retry(self):
         self.store.rpc.return_value = {"task_id": APPROVAL, "status": "queued", "founder_retry_number": 1}
         reply = self.router.handle(FOUNDER, FOUNDER, f"retry GitHub dispatch {APPROVAL}").text
