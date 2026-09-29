@@ -86,7 +86,9 @@ jobs:
       - name: Start local Auth/PostgREST stack and apply migrations
         run: |
           umask 077
-          supabase start --exclude realtime,storage-api,imgproxy,mailpit,studio,postgres-meta,edge-runtime,logflare,vector,supavisor > "$RUNNER_TEMP/sutra-supabase-start.log" 2>&1
+          # Service-specific integration and SQL checks below determine readiness;
+          # unrelated local containers must not block those checks at startup.
+          supabase start --exclude realtime,storage-api,imgproxy,mailpit,studio,postgres-meta,edge-runtime,logflare,vector,supavisor --ignore-health-check > "$RUNNER_TEMP/sutra-supabase-start.log" 2>&1
           python3 - <<'PY'
           import json, subprocess
           result = subprocess.run(["supabase", "status", "--output", "json"], capture_output=True, text=True, check=True)
