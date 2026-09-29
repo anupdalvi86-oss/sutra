@@ -670,6 +670,11 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     objectives = snapshot.get("objectives", [])
     tasks = snapshot["tasks"]
     approvals = snapshot["approvals"]
+    dispatch_rows = snapshot.get("github_dispatches", [])
+    dispatch_by_task = {
+        str(row.get("task_id")): row for row in dispatch_rows
+        if isinstance(row, dict) and row.get("task_id")
+    }
     runs_by_task: dict[str, dict[str, Any]] = {}
     for run in snapshot["agent_runs"]:
         task_id = run.get("task_id")
@@ -777,6 +782,13 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             explanation = "the task is blocked, but its run did not persist a specific failure reason"
         else:
             explanation = "no execution run is linked to this task, so there is no recorded completion or blocker evidence"
+        dispatch = dispatch_by_task.get(str(task.get("id")), {})
+        pull_request_number = dispatch.get("pull_request_number")
+        if isinstance(pull_request_number, int) and not isinstance(pull_request_number, bool):
+            pull_request_state = "merged" if dispatch.get("pull_request_merged") is True else "not merged"
+            explanation += f"; GitHub PR #{pull_request_number} is {pull_request_state}"
+            if not dispatch.get("ci_conclusion"):
+                explanation += " and CI evidence has not been recorded"
         cause = "; " + explanation
         lines.append(f"• {title} — owned by {owner}{cause}.")
     for task in failed_codex_tasks[:6]:
@@ -791,8 +803,13 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             explanation = "provider usage was reconciled"
         else:
             explanation = "usage or its settlement could not be confirmed; the spend reservation remains under database control"
-        lines.append(f"• {title} — Codex execution failed{detail}{safe_detail}; {explanation}, no PR was produced, and no automatic retry is queued.")
-    dispatch_rows = snapshot.get("github_dispatches", [])
+        dispatch = dispatch_by_task.get(str(task.get("id")), {})
+        pull_request_number = dispatch.get("pull_request_number")
+        if isinstance(pull_request_number, int) and not isinstance(pull_request_number, bool):
+            delivery = f"GitHub PR #{pull_request_number} exists"
+        else:
+            delivery = "no PR was produced"
+        lines.append(f"• {title} — Codex execution failed{detail}{safe_detail}; {explanation}, {delivery}, and no automatic retry is queued.")
     include_delivery = is_company_wide or agent_slug in {"cto", "developer", "devops"}
     visible_dispatches = dispatch_rows[:6] if include_delivery else []
     if visible_dispatches:
@@ -812,7 +829,29 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
                 explanation = "GitHub delivery needs attention"
             attempts = dispatch.get("attempts")
             attempt_text = f"; attempt {attempts}/3" if isinstance(attempts, int) else ""
-            lines.append(f"• [{dispatch.get('status', 'unknown')}] {title}{attempt_text} — {explanation}.")
+            pull_request_number = dispatch.get("pull_request_number")
+            pull_request_line = ""
+            if isinstance(pull_request_number, int) and not isinstance(pull_request_number, bool):
+                pull_request_state = "merged" if dispatch.get("pull_request_merged") is True else "not merged"
+                pull_request_line = f"; PR #{pull_request_number} {pull_request_state}"
+                pull_request_url = dispatch.get("pull_request_url")
+                if isinstance(pull_request_url, str) and re.fullmatch(
+                    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*",
+                    pull_request_url,
+                ):
+                    pull_request_line += f" ({pull_request_url})"
+                conclusion = dispatch.get("ci_conclusion")
+                if isinstance(conclusion, str) and re.fullmatch(r"[a-z_]{1,24}", conclusion):
+                    pull_request_line += f"; CI: {conclusion}"
+                    ci_run_url = dispatch.get("ci_run_url")
+                    if isinstance(ci_run_url, str) and re.fullmatch(
+                        r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[1-9][0-9]*",
+                        ci_run_url,
+                    ):
+                        pull_request_line += f" ({ci_run_url})"
+                else:
+                    pull_request_line += "; CI evidence not recorded"
+            lines.append(f"• [{dispatch.get('status', 'unknown')}] {title}{attempt_text}{pull_request_line} — {explanation}.")
     include_campaigns = is_company_wide or agent_slug == "cmo"
     campaign_rows = snapshot.get("campaigns", []) if include_campaigns else []
     if include_campaigns:
