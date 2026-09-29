@@ -29,6 +29,7 @@ def status_fixture():
                         "owner_agent_id": "cpo-id"}],
         "tasks": [{"id": "task-1", "title": "Review product plan", "status": "blocked",
                    "project_id": "project-1", "owner_agent_id": "pm-id"}],
+        "completed_tasks": [],
         "approvals": [{"id": APPROVAL, "project_id": "project-1", "summary": "Approval waiting for CFO",
                         "amount": 500, "currency": "EUR", "status": "pending",
                         "required_roles": ["cfo", "founder"], "decisions": {"cfo": {"decision": "approve"}}}],
@@ -233,9 +234,9 @@ class FounderCommandTests(unittest.TestCase):
 
     def test_board_status_lists_recent_completions_without_counting_them_as_open(self):
         snapshot = status_fixture()
-        snapshot["tasks"].append({"id": "done-task", "title": "Prepare sales handoff",
-                                  "status": "done", "project_id": "project-1",
-                                  "owner_agent_id": "sales-id", "updated_at": "2026-09-29T10:00:00Z"})
+        snapshot["completed_tasks"].append({"id": "done-task", "title": "Prepare sales handoff",
+                                            "status": "done", "project_id": "project-1",
+                                            "owner_agent_id": "sales-id", "updated_at": "2026-09-29T10:00:00Z"})
         snapshot["agents"].append({"id": "sales-id", "slug": "sales", "display_name": "Sales",
                                    "department_id": "sales-dept"})
 
@@ -391,8 +392,10 @@ class FounderCommandTests(unittest.TestCase):
         self.assertTrue(any(path.startswith("projects?") and "requested_budget" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("objectives?") and "title" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("tasks?") and "owner_agent_id" in path
-                            and "deferred_reason" in path and "deferred" in path and "done" in path
+                            and "deferred_reason" in path and "deferred" in path and "done" not in path
                             for path in requested_paths))
+        self.assertTrue(any(path.startswith("tasks?") and "status=eq.done" in path
+                            and "limit=20" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("approvals?") and "required_roles" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("budgets?") and "hard_stop" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("campaigns?") and "budget_amount" in path for path in requested_paths))
@@ -401,7 +404,7 @@ class FounderCommandTests(unittest.TestCase):
 
     def test_status_snapshot_rejects_partial_or_malformed_database_responses(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        malformed_responses = [[] for _ in range(11)]
+        malformed_responses = [[] for _ in range(12)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
         store.rpc = Mock(return_value={"dispatches": []})
