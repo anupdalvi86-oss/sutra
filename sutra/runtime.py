@@ -1119,10 +1119,49 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     if totals:
         lines.append("• Recorded requested/approved/paid expenses (all time): " + ", ".join(f"{currency} {amount:.2f}" for currency, amount in sorted(totals.items())))
     lines.extend(["", "Next focus", "• Resolve the listed blocked tasks and outstanding approvals; confirm each project owner’s next milestone."])
-    output = "\n".join(lines)
-    if len(output) > 3800:
-        output = output[:3760].rsplit("\n", 1)[0] + "\n… Brief truncated to fit Telegram; consult Supabase for the full work queue."
-    return output
+    return "\n".join(lines)
+
+
+def telegram_message_parts(text: str, max_chars: int = 3900) -> list[str]:
+    """Split a long plain-text Telegram response into labeled, bounded messages."""
+    if not isinstance(text, str) or not text:
+        return [""]
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 128:
+        raise ValueError("Telegram message limit must be at least 128 characters")
+    if len(text) <= max_chars:
+        return [text]
+
+    # Reserve enough room for a part label, then keep whole report lines together
+    # whenever possible. A pathological single line is split on word boundaries.
+    content_limit = max_chars - 32
+    content_parts: list[str] = []
+    current_lines: list[str] = []
+    current_length = 0
+    for line in text.splitlines():
+        segments: list[str] = []
+        remaining = line
+        while len(remaining) > content_limit:
+            split_at = remaining.rfind(" ", 0, content_limit + 1)
+            if split_at <= 0:
+                split_at = content_limit
+            segments.append(remaining[:split_at])
+            remaining = remaining[split_at:].lstrip()
+        segments.append(remaining)
+        for segment in segments:
+            added_length = len(segment) + (1 if current_lines else 0)
+            if current_lines and current_length + added_length > content_limit:
+                content_parts.append("\n".join(current_lines))
+                current_lines = []
+                current_length = 0
+                added_length = len(segment)
+            current_lines.append(segment)
+            current_length += added_length
+    if current_lines:
+        content_parts.append("\n".join(current_lines))
+
+    total = len(content_parts)
+    return [f"Status update — part {index} of {total}\n{part}"
+            for index, part in enumerate(content_parts, start=1)]
 
 def telegram_call(token: str, method: str, payload: dict[str, Any], timeout: float = 35.0) -> Any:
     request = urllib.request.Request(
@@ -1204,10 +1243,12 @@ def telegram_poll_loop(token: str, router: FounderCommandRouter, stop: threading
                     continue
                 try:
                     reply = router.handle(sender, chat, text)
-                    payload = {"chat_id": chat, "text": reply.text[:3900]}
-                    if reply.reply_markup:
-                        payload["reply_markup"] = reply.reply_markup
-                    telegram_call(token, "sendMessage", payload, timeout=10)
+                    parts = telegram_message_parts(reply.text)
+                    for index, part in enumerate(parts):
+                        payload = {"chat_id": chat, "text": part}
+                        if reply.reply_markup and index == len(parts) - 1:
+                            payload["reply_markup"] = reply.reply_markup
+                        telegram_call(token, "sendMessage", payload, timeout=10)
                 except IntegrationError:
                     # Keep the polling loop alive; do not log command content or secrets.
                     continue
