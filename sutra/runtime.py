@@ -610,9 +610,13 @@ class FounderCommandRouter:
                 })
             except IntegrationError:
                 return FounderResponse("PM review was not retried. It must be a failed, bounded PM run with CFO review complete and the project approval still pending.")
+            recovery_note = (
+                " One founder-authorized final attempt was added after the three standard attempts because the last artifact-schema failure was reconciled; it still requires a fresh reservation under the monthly hard cap."
+                if result.get("final_recovery_attempt") is True else ""
+            )
             return FounderResponse(
                 f"PM review queued: {result.get('run_id')}. A new attempt uses the normal spend reservation and monthly hard cap. "
-                "Unknown earlier usage remains reserved; project spending is not authorized."
+                f"Unknown earlier usage remains reserved; project spending is not authorized.{recovery_note}"
             )
         if command.kind == "retry_agent_review":
             try:

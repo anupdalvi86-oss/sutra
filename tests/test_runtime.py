@@ -463,10 +463,23 @@ class FounderCommandTests(unittest.TestCase):
         reply = self.router.handle(FOUNDER, FOUNDER, f"retry PM review {APPROVAL}").text
         self.assertIn("Unknown earlier usage remains reserved", reply)
         self.assertIn("project spending is not authorized", reply)
+        self.assertNotIn("final attempt", reply)
         self.store.rpc.assert_called_once_with("sutra_founder_retry_pm_review", {
             "p_founder_telegram_user_id": FOUNDER,
             "p_run_id": APPROVAL,
         })
+
+    def test_founder_pm_final_recovery_explains_fresh_capped_reservation(self):
+        self.store.rpc.return_value = {
+            "run_id": APPROVAL, "status": "queued", "final_recovery_attempt": True,
+            "attempts_remaining": 1, "preserved_unknown_reservations": 1,
+        }
+        reply = self.router.handle(FOUNDER, FOUNDER, f"retry PM review {APPROVAL}").text
+        self.assertIn("final attempt", reply)
+        self.assertIn("fresh reservation", reply)
+        self.assertIn("monthly hard cap", reply)
+        self.assertIn("Unknown earlier usage remains reserved", reply)
+        self.assertIn("project spending is not authorized", reply)
 
     def test_pm_review_retry_rejects_wrong_founder_or_group_chat(self):
         for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):
