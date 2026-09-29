@@ -37,7 +37,13 @@ class GitHubEvidencePollingTests(unittest.TestCase):
             "head_sha": HEAD_SHA,
             "pull_requests": [{"number": 42, "head": {"sha": HEAD_SHA}}],
         }
-        self.github._request = Mock(side_effect=[[pull_request], {"workflow_runs": [workflow]}])
+        stale_workflow = {
+            **workflow,
+            "id": 36_530_327_913,
+            "html_url": f"https://github.com/{REPOSITORY}/actions/runs/36530327913",
+            "head_sha": "b" * 40,
+        }
+        self.github._request = Mock(side_effect=[[pull_request], {"workflow_runs": [workflow, stale_workflow]}])
 
         self.assertEqual(self.poller.poll_once(), 2)
         self.assertEqual(self.github._request.call_count, 2)

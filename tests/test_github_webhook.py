@@ -33,7 +33,7 @@ def workflow_run_event(**run_overrides):
         "name": "CI",
         "status": "completed",
         "conclusion": "success",
-        "head_sha": "c" * 40,
+        "head_sha": HEAD_SHA,
         "html_url": "https://github.com/acme/sutra/actions/runs/201",
         "pull_requests": [{"number": 88, "head": {"sha": HEAD_SHA}}],
     }
@@ -70,8 +70,12 @@ class GitHubWebhookTests(unittest.TestCase):
         normalized = normalize_github_event("workflow_run", REPO, workflow_run_event())
         self.assertEqual(normalized["workflow_name"], "CI")
         self.assertEqual(normalized["conclusion"], "success")
-        self.assertEqual(normalized["head_sha"], "c" * 40)
+        self.assertEqual(normalized["head_sha"], HEAD_SHA)
         self.assertEqual(normalized["pull_requests"], [{"number": 88, "head_sha": HEAD_SHA}])
+
+    def test_workflow_run_rejects_stale_run_with_current_pr_association(self):
+        stale = workflow_run_event(head_sha="b" * 40)
+        self.assertIsNone(normalize_github_event("workflow_run", REPO, stale))
 
     def test_workflow_run_accepts_real_github_64_bit_run_ids(self):
         run_id = 36_530_327_914
