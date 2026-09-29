@@ -77,7 +77,7 @@ class InternalEndpointTests(unittest.TestCase):
             with self.subTest(malformed=malformed), self.assertRaises(ValueError):
                 parse_agent_worker_concurrency(malformed)
 
-    def test_enabled_agent_worker_starts_two_isolated_workers_by_default(self):
+    def test_enabled_agent_worker_starts_one_isolated_worker_by_default(self):
         app = SutraApplication()
         app.store = FakeStore()
         profile = {"configured": True, "provider": "openai", "model": "gpt-6-luna"}
@@ -87,6 +87,31 @@ class InternalEndpointTests(unittest.TestCase):
             "SUTRA_HERMES_MODEL": "gpt-6-luna",
             "HERMES_AGENT_API_URL": "http://sutra.railway.internal:8642",
             "HERMES_AGENT_API_KEY": "worker-test-key",
+        }, clear=True), patch.object(app.store, "get_agent_model_spend_profile", return_value=profile), \
+                patch("sutra.server.HermesAgentClient"), patch("sutra.server.AgentWorker"), \
+                patch("sutra.server.threading.Thread") as thread_factory:
+            app.start()
+            self.assertEqual(app.agent_worker_status, "running")
+            self.assertEqual(len(app.agent_worker_threads), 1)
+            self.assertEqual(thread_factory.call_count, 1)
+            self.assertEqual(
+                [call.kwargs["name"] for call in thread_factory.call_args_list],
+                ["sutra-agent-worker-1"],
+            )
+            self.assertIs(app.agent_worker_thread, app.agent_worker_threads[0])
+        app.close()
+
+    def test_enabled_agent_worker_can_use_two_workers_when_explicitly_configured(self):
+        app = SutraApplication()
+        app.store = FakeStore()
+        profile = {"configured": True, "provider": "openai", "model": "gpt-6-luna"}
+        with patch.dict(os.environ, {
+            "SUTRA_ENABLE_AGENT_WORKER": "true",
+            "SUTRA_HERMES_PROVIDER": "openai",
+            "SUTRA_HERMES_MODEL": "gpt-6-luna",
+            "HERMES_AGENT_API_URL": "http://sutra.railway.internal:8642",
+            "HERMES_AGENT_API_KEY": "worker-test-key",
+            "SUTRA_AGENT_WORKER_CONCURRENCY": "2",
         }, clear=True), patch.object(app.store, "get_agent_model_spend_profile", return_value=profile), \
                 patch("sutra.server.HermesAgentClient"), patch("sutra.server.AgentWorker"), \
                 patch("sutra.server.threading.Thread") as thread_factory:

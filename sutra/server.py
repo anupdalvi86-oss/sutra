@@ -142,7 +142,7 @@ class SutraApplication:
             try:
                 role_routes = parse_role_routes(os.environ.get("SUTRA_HERMES_ROLE_ROUTES", ""))
                 worker_concurrency = parse_agent_worker_concurrency(
-                    os.environ.get("SUTRA_AGENT_WORKER_CONCURRENCY", "2"))
+                    os.environ.get("SUTRA_AGENT_WORKER_CONCURRENCY", "1"))
             except (TypeError, ValueError, json.JSONDecodeError):
                 role_routes = {}
                 worker_concurrency = 0
