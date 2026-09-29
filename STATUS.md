@@ -1,6 +1,6 @@
 # Sutra system status
 
-Updated: 2026-09-29, after PR #206 deployment and the second bounded Kimi probe
+Updated: 2026-09-29; live snapshot below is the PR #206 production state, with staged PR #210 verification added
 
 ## Staged initiative-budget change (review branch; not live)
 
@@ -18,7 +18,7 @@ The branch implements only the budget/review foundation. Parallel cross-departme
 
 Branch `feat/parallel-agent-reviews` lets CPO market research and CTO feasibility start at the same proposal stage after CEO scoping; CFO waits for both and PM remains stage 5. It also replaces the single global Hermes worker lease with two database-coordinated slots and starts two isolated workers by default, configurable only between one and two. Spend reservations remain serialized against the EUR ledger lock, unknown reservations stay held, and existing policy/budget authorization applies unchanged. No approval, project budget, merge, release or customer-contact authority is added. The branch is not merged or deployed; production still uses the serial review and single worker.
 
-Local verification for this branch: 220 Python tests passed; a fresh disposable Supabase reset applied the complete migration set; all 17 pgTAP files passed 348 assertions; Bandit, `compileall`, and `git diff --check` passed. Database lint found zero errors and only existing warnings outside the new functions. Supabase advisors reported three existing duplicate-index warnings on `agents`, `projects`, and `spending_policies`; this branch adds no indexes. Hosted CI has not run yet.
+Local verification for this branch: 220 Python tests passed; a fresh disposable Supabase reset applied the complete migration set; all 17 pgTAP files passed 348 assertions; Bandit, `compileall`, and `git diff --check` passed. Database lint found zero errors and only existing warnings outside the new functions. Supabase advisors reported three existing duplicate-index warnings on `agents`, `projects`, and `spending_policies`; this branch adds no indexes. Hosted CI for [PR #210](https://github.com/anupdalvi86-oss/sutra/pull/210) run `36631248892` passed all five jobs: change detection, Python/security, database migrations/pgTAP/lint, containers, and secret scan. Production was not changed.
 
 ## Working
 
