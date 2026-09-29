@@ -48,7 +48,14 @@ truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,
   (c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
-select is((select role from worker_claims),'cpo','CPO review follows the fixture CEO');
+create temporary table retry_parallel_claims(role text,run_id uuid,lease_token uuid,sequence_no integer) on commit drop;
+insert into retry_parallel_claims select role,run_id,lease_token,sequence_no from worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-abcdefgh') as payload)
+insert into retry_parallel_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,
+  (c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+truncate worker_claims;
+insert into worker_claims select role,run_id,lease_token,sequence_no from retry_parallel_claims where role='cpo';
+select is((select role from worker_claims),'cpo','CPO review is available at the parallel Product and technical stage');
 create temporary table cpo_unknown_reservation(payload jsonb) on commit drop;
 insert into cpo_unknown_reservation
 select public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',

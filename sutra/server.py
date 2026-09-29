@@ -51,6 +51,14 @@ def parse_role_routes(raw: str) -> dict[str, tuple[str, str]]:
     return parsed
 
 
+def parse_agent_worker_concurrency(raw: str) -> int:
+    """Limit parallel Hermes jobs to the two audited database worker slots."""
+    value = raw.strip()
+    if value not in {"1", "2"}:
+        raise ValueError("agent worker concurrency must be 1 or 2")
+    return int(value)
+
+
 class GatewayProbe:
     """Probe the separately deployed Hermes service without exposing API credentials."""
 
@@ -88,6 +96,7 @@ class SutraApplication:
         self.telegram_thread: threading.Thread | None = None
         self.telegram_status = "disabled"
         self.agent_worker_thread: threading.Thread | None = None
+        self.agent_worker_threads: list[threading.Thread] = []
         self.agent_worker_status = "disabled"
         self.github_dispatcher_thread: threading.Thread | None = None
         self.github_dispatcher_status = "disabled"
@@ -132,8 +141,11 @@ class SutraApplication:
             hermes_key = os.environ.get("HERMES_AGENT_API_KEY", "").strip()
             try:
                 role_routes = parse_role_routes(os.environ.get("SUTRA_HERMES_ROLE_ROUTES", ""))
+                worker_concurrency = parse_agent_worker_concurrency(
+                    os.environ.get("SUTRA_AGENT_WORKER_CONCURRENCY", "1"))
             except (TypeError, ValueError, json.JSONDecodeError):
                 role_routes = {}
+                worker_concurrency = 0
                 self.agent_worker_status = "blocked_runtime_configuration"
             if not self.store or not provider or not model or not hermes_url or not hermes_key:
                 self.agent_worker_status = "blocked_runtime_configuration"
@@ -149,11 +161,17 @@ class SutraApplication:
                         self.agent_worker_status = "blocked_model_profile"
                         break
                 if self.agent_worker_status not in {"blocked_model_profile", "blocked_runtime_configuration"}:
-                    hermes = HermesAgentClient(hermes_url, hermes_key, provider, model)
-                    worker = AgentWorker(self.store, hermes, provider, model, role_routes=role_routes)
-                    self.agent_worker_thread = threading.Thread(
-                        target=worker.run, args=(self.telegram_stop,), daemon=True, name="sutra-agent-worker")
-                    self.agent_worker_thread.start()
+                    for slot in range(worker_concurrency):
+                        # Each worker owns its own Hermes client because usage
+                        # diagnostics are request-local mutable state.
+                        hermes = HermesAgentClient(hermes_url, hermes_key, provider, model)
+                        worker = AgentWorker(self.store, hermes, provider, model, role_routes=role_routes)
+                        thread = threading.Thread(
+                            target=worker.run, args=(self.telegram_stop,), daemon=True,
+                            name=f"sutra-agent-worker-{slot + 1}")
+                        thread.start()
+                        self.agent_worker_threads.append(thread)
+                    self.agent_worker_thread = self.agent_worker_threads[0]
                     self.agent_worker_status = "running"
         if os.environ.get("SUTRA_ENABLE_GITHUB_DISPATCHER", "false").lower() == "true":
             github_token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -301,7 +319,9 @@ class SutraApplication:
 
     def close(self) -> None:
         self.telegram_stop.set()
-        if self.agent_worker_thread:
+        for thread in self.agent_worker_threads:
+            thread.join(timeout=2)
+        if self.agent_worker_thread and not self.agent_worker_threads:
             self.agent_worker_thread.join(timeout=2)
         if self.github_dispatcher_thread:
             self.github_dispatcher_thread.join(timeout=2)

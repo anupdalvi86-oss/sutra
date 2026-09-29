@@ -66,7 +66,11 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder' and a
   and action='founder.approvals_listed' and resource_type='approval_queue'),
   'founder approval queue reads are audit logged');
 select ok(exists(select 1 from public.agent_runs where trigger_type='founder_proposal' and status='queued'),'workflow roles receive durable queued runs');
-select ok(exists(select 1 from public.tasks where task_type='research' and status='blocked'),'execution work stays blocked before budget assessment');
+select is((select count(*)::integer from public.agent_runs where trigger_type='founder_proposal'
+  and project_id=(select project_id from public.approvals where approval_type='project_budget' limit 1)
+  and run_order=2),2,'CPO research and CTO feasibility share the parallel second stage');
+select ok(exists(select 1 from public.tasks where task_type='research' and status='blocked'),
+  'execution work stays blocked before budget assessment and founder approval');
 select is(public.sutra_claim_task_agent_run('sutra-worker-12345678')::text,null::text,
   'internal task artifact workers cannot claim tasks before founder project approval');
 select throws_ok($$select public.sutra_founder_decide_approval('12345678',(select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
@@ -264,6 +268,21 @@ select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678'
 truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+create temporary table parallel_worker_claims(role text,run_id uuid,lease_token uuid,sequence integer) on commit drop;
+insert into parallel_worker_claims select role,run_id,lease_token,sequence_no from worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-abcdefgh') as payload)
+insert into parallel_worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,
+  (c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+select is((select count(*)::integer from parallel_worker_claims),2,
+  'two workers can claim distinct reviews in the same proposal stage');
+select is((select count(*)::integer from parallel_worker_claims where role='cpo'),1,
+  'the parallel stage includes Product research');
+select is((select count(*)::integer from parallel_worker_claims where role='cto'),1,
+  'the parallel stage includes technical assessment');
+select is((select count(*)::integer from parallel_worker_claims where sequence=2),2,
+  'parallel Product and technical reviews share one prerequisite stage');
+truncate worker_claims;
+insert into worker_claims select role,run_id,lease_token,sequence from parallel_worker_claims where role='cpo';
 select is((select role from worker_claims),'cpo','Product research runs after CEO review');
 select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
   (select lease_token from worker_claims))$$,'product research provider spend is reconciled');
@@ -280,9 +299,8 @@ select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678'
   '{"summary":"A sufficiently long research summary","recommendation":"Proceed to technical review","evidence":[{"source":"Product documentation","url":"https://example.com/docs","claim":"Primary source describes a QA workflow."}]}'::jsonb)$$,
   'Product research records cited HTTPS evidence');
 truncate worker_claims;
-with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
-insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
-select is((select role from worker_claims),'cto','CTO review runs after Product research');
+insert into worker_claims select role,run_id,lease_token,sequence from parallel_worker_claims where role='cto';
+select is((select role from worker_claims),'cto','the parallel technical review remains independently leased');
 select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
   (select lease_token from worker_claims))$$,'technical review provider spend is reconciled');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',

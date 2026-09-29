@@ -1,6 +1,6 @@
 # Sutra system status
 
-Updated: 2026-09-29, after PR #206 deployment and the second bounded Kimi probe
+Updated: 2026-09-29; live snapshot below is the PR #206 production state, with staged PR #210 verification added
 
 ## Staged initiative-budget change (review branch; not live)
 
@@ -13,6 +13,24 @@ Validation of this branch on 2026-09-29: a fresh disposable Supabase database re
 Hosted verification for [PR #209](https://github.com/anupdalvi86-oss/sutra/pull/209) also passed all five required jobs: change detection, Python/security, database migration/pgTAP/lint, container builds, and secret scan. GitHub emitted existing Node.js 20 action deprecation notices; they did not fail the run.
 
 The branch implements only the budget/review foundation. Parallel cross-department delegation, autonomous GitHub merge and release, deployment authorization, CRM/customer support integrations, and live marketing/sales execution still need separate stages. Legal escalation currently pauses and records the issue; a clear founder Telegram decision flow and legal document review path remain future work. Required founder setup to activate customer work includes selecting the CRM/support provider, supplying credentials privately, and defining approved customer-contact terms and limits. No live outreach or legal commitment is authorized by this change.
+
+## Staged parallel-agent change (review branch; not live)
+
+Branch `feat/parallel-agent-reviews` lets CPO market research and CTO feasibility start at the same proposal stage after CEO scoping; CFO waits for both and PM remains stage 5. It also replaces the single global Hermes worker lease with two database-coordinated slots. The API defaults to one worker and accepts an explicit concurrency of two only when configured, because the OpenAI account's observed provider limit is one concurrent request. Spend reservations remain serialized against the EUR ledger lock, unknown reservations stay held, and existing policy/budget authorization applies unchanged. No approval, project budget, merge, release or customer-contact authority is added. The branch is not merged or deployed; production still uses the serial review and single worker.
+
+Local verification for this branch before the worker-default follow-up: 220 Python tests passed; a fresh disposable Supabase reset applied the complete migration set; all 17 pgTAP files passed 348 assertions; Bandit, `compileall`, and `git diff --check` passed. Database lint found zero errors and only existing warnings outside the new functions. Supabase advisors reported three existing duplicate-index warnings on `agents`, `projects`, and `spending_policies`; this branch adds no indexes. Hosted CI runs `36631248892` and `36631703249` passed all five jobs before the worker-default follow-up. The follow-up adds two unit tests; Python passes 221 tests locally, compile checks and Bandit at medium severity pass, and `git diff --check` passes. Hosted CI run `36632390126` passed all five jobs on the latest code commit. Production was not changed.
+
+Read-only Railway inspection on 2026-09-29 showed `sutra-api` and Hermes online with the persistent volume; an API build for PR #208 was in progress while PR #206 remained the last active API deployment. Hermes logs reported an OpenAI organization concurrency limit of one and warned that its API listener binds `0.0.0.0` while the terminal backend is local and unsandboxed. These observations are not configuration changes. Keep worker concurrency at one; resolve and review the Hermes warning before broadening runtime access.
+
+## Gaps against the expanded operating model
+
+- [PR #209](https://github.com/anupdalvi86-oss/sutra/pull/209) adds an initiative-level all-in budget and shared spend checks. It remains open and is not live. The company has no overall operating budget configured.
+- [PR #210](https://github.com/anupdalvi86-oss/sutra/pull/210) stages CPO and CTO reviews together and allows two database lease slots; it remains open and is not live. Provider concurrency currently supports one worker, so the safe default is one.
+- Current delegation is a fixed proposal/task workflow, not a general-purpose DAG that dynamically assigns arbitrary tasks to agents.
+- The Codex workflow can open branches and PRs and collect CI evidence, but cannot merge or deploy releases. QA and Security remain deferred by founder direction.
+- Marketing and Sales persist internal drafts. No CRM, customer support, email, advertising, or outbound messaging provider is connected. No live customer messages have been sent.
+- There is no complete legal case/document review queue. Sutra can pause on flagged budget/legal blockers, but legal questions and proposed commitments still need a founder workflow.
+- These implementation changes did not alter production, send customer messages, spend money, or start live business activity. Production activation is intentionally left for a reviewed deployment after the remaining release, customer, and legal controls are built and configured.
 
 ## Working
 
