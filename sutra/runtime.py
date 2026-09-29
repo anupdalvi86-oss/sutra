@@ -230,6 +230,36 @@ class SupabaseREST:
             "p_issue_number": issue_number, "p_issue_url": issue_url,
         })
 
+    def claim_ready_code_release(self, worker_id: str) -> dict[str, Any] | None:
+        result = self.rpc("sutra_claim_ready_code_release", {"p_worker_id": worker_id})
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise IntegrationError("Supabase returned an invalid code release claim")
+        return result
+
+    def validate_code_release_claim(self, worker_id: str, attempt_id: str,
+                                    claim_token: str) -> bool:
+        result = self.rpc("sutra_validate_code_release_claim", {
+            "p_worker_id": worker_id, "p_attempt_id": attempt_id,
+            "p_claim_token": claim_token,
+        })
+        if not isinstance(result, bool):
+            raise IntegrationError("Supabase returned an invalid code release authorization")
+        return result
+
+    def finish_code_release(self, worker_id: str, attempt_id: str, claim_token: str,
+                            status: str, merge_commit_sha: str | None = None,
+                            detail_code: str | None = None) -> dict[str, Any]:
+        result = self.rpc("sutra_finish_code_release", {
+            "p_worker_id": worker_id, "p_attempt_id": attempt_id,
+            "p_claim_token": claim_token, "p_status": status,
+            "p_merge_commit_sha": merge_commit_sha, "p_detail_code": detail_code,
+        })
+        if not isinstance(result, dict) or result.get("status") != status:
+            raise IntegrationError("Supabase returned an invalid code release result")
+        return result
+
     def fail_github_task(self, worker_id: str, task_id: str, lease_token: str,
                          error_code: str) -> dict[str, Any]:
         return self.rpc("sutra_fail_github_task_dispatch", {
@@ -260,6 +290,10 @@ class SupabaseREST:
         if not isinstance(dispatches, list):
             raise IntegrationError("Supabase returned an invalid GitHub dispatch status response")
         snapshot["github_dispatches"] = dispatches
+        release_status = self.rpc("sutra_company_code_release_status", {})
+        if not isinstance(release_status, list) or not all(isinstance(item, dict) for item in release_status):
+            raise IntegrationError("Supabase returned an invalid code release status response")
+        snapshot["code_releases"] = release_status
         if not all(isinstance(rows, list) for rows in snapshot.values()):
             raise IntegrationError("Supabase returned an invalid company status response")
         return snapshot
@@ -1001,6 +1035,11 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     completed_tasks = snapshot["completed_tasks"]
     approvals = snapshot["approvals"]
     dispatch_rows = snapshot.get("github_dispatches", [])
+    release_rows = snapshot.get("code_releases", [])
+    release_by_task = {
+        str(row.get("task_id")): row for row in release_rows
+        if isinstance(row, dict) and row.get("task_id")
+    }
     dispatch_by_task = {
         str(row.get("task_id")): row for row in dispatch_rows
         if isinstance(row, dict) and row.get("task_id")
@@ -1229,6 +1268,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         for dispatch in visible_dispatches:
             title = re.sub(r"\s+", " ", str(dispatch.get("task_title") or "Engineering task"))[:90]
             code = dispatch.get("last_error")
+            release = release_by_task.get(str(dispatch.get("task_id")), {})
             if code == "github_permission_denied":
                 explanation = "GitHub rejected the issue write using the configured repository token; verify its Issues write permission is active"
             elif code == "github_rate_limited":
@@ -1259,7 +1299,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
                     and isinstance(dispatch.get("pull_request_head_sha"), str)
                     and dispatch.get("pull_request_head_sha") == dispatch.get("ci_head_sha")
                 ):
-                    explanation = "open PR passed CI on the same commit; merge is pending"
+                    explanation = "open PR passed CI on the same commit; QA/Security review or merge is pending"
                 else:
                     explanation = "GitHub PR is open; matching successful CI or merge evidence is pending"
             elif dispatch.get("status") == "created":
@@ -1268,6 +1308,17 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
                 explanation = "GitHub dispatch failed without a recorded error code"
             else:
                 explanation = f"GitHub dispatch state is {str(dispatch.get('status') or 'unknown')[:24]}"
+            if release:
+                release_status = str(release.get("status") or "unknown")
+                if release_status == "merged":
+                    explanation = "merged after CI, QA and Security passed for the same commit"
+                elif release_status == "blocked":
+                    detail_code = release.get("detail_code")
+                    detail = (f" ({detail_code})" if isinstance(detail_code, str)
+                              and re.fullmatch(r"[a-z0-9_]{1,48}", detail_code) else "")
+                    explanation = f"automatic merge is blocked{detail}"
+                elif release_status == "claimed":
+                    explanation = "CI, QA and Security passed; automatic merge is in progress"
             attempts = dispatch.get("attempts")
             attempt_text = f"; dispatch attempts {attempts}/3" if isinstance(attempts, int) else ""
             pull_request_number = dispatch.get("pull_request_number")

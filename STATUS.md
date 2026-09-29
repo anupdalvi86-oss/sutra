@@ -4,48 +4,41 @@ Updated: 2026-09-30
 
 ## Current state
 
-Sutra is a working internal, budget-gated agent workflow, not yet an autonomous operating business. Production Supabase remains the company-state authority. Telegram is the founder command interface. Railway hosts the private API and Hermes runtime. GitHub Actions validates changes and the Codex runner can open issues, branches, and PRs.
+Sutra runs a budget-gated internal workflow with Supabase as company-state authority, Telegram as the founder interface, and a private Railway API/Hermes deployment. It is not yet a fully autonomous operating business. CRM, customer support, and email integrations are not configured, and this implementation has not sent customer messages or launched live marketing.
 
-The founder has granted standing authority for real code work in anupdalvi86-oss/sutra, including task creation, branches, PRs, merges, QA, Security, and deployment. It does not increase any initiative budget or authorize customer contact, paid work without a budget, contracts, or legal commitments. Supabase records the grant with a fixed repository/capability scope, founder-only revocation, and audit events. Authorization ID: 81b2da23-be8a-4b54-878c-be9071024b5f. Fresh Developer task a28aee0d-b55b-4ab2-bf4e-cc775382b0db is in progress in project 9b075194-d400-4bc6-9d16-88a50fe4978d under an explicit EUR 0 all-in budget; paid provider execution must remain blocked until a non-zero budget is separately authorized. Task #107 is exhausted and is not retried.
+The founder's standing authorization for real work in `anupdalvi86-oss/sutra` covers scoped Developer tasks, branches, PRs, merges, QA, Security, and deployment. It does not grant spending authority. Supabase records the active grant and audits actions. The fresh Sutra Developer task is scoped to an explicit EUR 0 initiative budget; paid provider work remains blocked until the founder sets a budget. Exhausted task #107 was not retried. Unknown reservations remain held and unchanged.
 
-## Verified production state
+## Verified production state before this sprint PR
 
-- **Supabase:** Project smqsrigsugjuvuombetq is reachable. Initiative-ledger, two-slot worker leases, legal escalation, and standing-authorization schemas are present. Migration history contains 59 versions through founder_standing_code_authorization. There are 40 actual ledger rows and 16 unknown reservations; the unknown reservations total EUR 1.06 and remain held. Reconciled actual ledger amounts total EUR 0.40.
-- **Company records:** 5 approved and 1 rejected project; 13 done, 8 backlog, 2 blocked, 4 deferred, and 1 cancelled task. There are 5 approved and 1 rejected approval records, with no pending approvals.
-- **Financial controls:** Configurable Supabase policies govern spend approval bands and company/project/department/agent/category/vendor/time limits. The AI inference monthly hard stop is EUR 8. The initiative ledger covers model use and operating costs, preserves unknown amounts, and enforces each initiative's explicit all-in ceiling.
-- **Railway:** sutra-api is Online in production and remains private/unexposed; /health returned 200 for the active PR #210 deployment. Hermes is Online and uses the persistent sutra-volume at /opt/data. Keep API worker concurrency at one because the provider account was observed to allow one concurrent request.
-- **GitHub:** PR [#209](https://github.com/anupdalvi86-oss/sutra/pull/209) (all-in initiative budget) and PR [#210](https://github.com/anupdalvi86-oss/sutra/pull/210) (parallel proposal reviews and bounded worker slots) are merged. Their required checks passed. Both production migrations are applied.
-- **Telegram:** Founder ID 8776723105 is the configured founder. Existing status and approval commands are implemented. The founder grant and Developer task are active in Supabase; legal inbox and standing-code-authority commands from PR #211 will be live after its API code deploys.
-- **Usage preservation:** The existing 16 unknown ledger reservations remain unknown and held. No retry of task #107 was performed.
+- **Supabase:** Production project `smqsrigsugjuvuombetq` is reachable and healthy. Production history includes the all-in initiative ledger, bounded agent leases, legal escalation, and founder standing code authorization. The new pre-merge release-gate migration is not yet applied.
+- **Financial controls:** Database-configured limits and the EUR 8 monthly AI-inference hard stop are active. The Sutra implementation initiative has EUR 0 paid-work authority. Existing unknown reservations have not been changed.
+- **Railway:** After merged PR #211, `sutra-api` and Hermes were Online; `/health` returned 200 and the founder's standing-authority Telegram command worked. The API and Hermes services are private. The new release worker is not yet deployed or enabled.
+- **GitHub:** PR #209 (all-in initiative budget), #210 (bounded parallel proposal reviews), and #211 (standing founder code authorization) are already merged. Do not recreate them. There was no open PR before this sprint branch.
+- **Telegram:** The registered founder identity remains restricted to Telegram user `8776723105`. Board-style status, approval, governance, and bounded recovery commands are available.
+
+## This sprint release gate
+
+The branch adds pre-merge QA and Security tasks tied to the exact open PR head, plus a separate opt-in merge worker. Matching successful CI releases QA; passing QA releases Security; merge requires both passing records, the same tested SHA, an active standing founder grant, an approved in-scope task/project, and a last-moment policy check. A changed PR head invalidates old review evidence. The GitHub merge request is squash-only to `main` with the expected head SHA. Database claims, outcomes, and the company status snapshot are audited. The worker has no model-provider access and defaults off until explicitly enabled.
+
+This stage does not provide CRM, customer support, or email integrations. It does not send real customer messages or run paid operations.
 
 ## Verification in this stage
 
-- Python suite: 233 tests passed.
-- SQL suite on a fresh disposable Supabase database: 20 pgTAP files, 574 assertions passed.
-- Bandit at medium/high severity: no findings; one existing B104 test-code warning remains.
-- Python compilation and git diff --check: passed.
-- GitHub CI for PR #210: all five jobs passed (changes, secret scan, Python, database, containers).
-- Production Supabase read-only connectivity and ledger counts: verified.
-- Railway browser session: production sutra-api and Hermes Online; /health returned 200 on the active PR #209 deployment; PR #210 then became the active successful deployment.
-- Production migrations, standing-authority grant, fresh Developer task, zero-budget project approval, audit events, and unchanged unknown reservations: verified.
-- Standing-authority and legal-inbox Telegram commands: pending PR #211 deployment.
+- Python suite: **246 passed**.
+- Bandit (`-ll`): passed; one existing B104 bind-address warning is reported as a test-code warning.
+- Python compilation: passed.
+- `git diff --check`: passed.
+- Fresh disposable Supabase local reset: attempted but the Docker/Postgres container did not become reachable; local pgTAP and database lint are **not verified** in this environment. The final hosted PR database workflow must pass before merge.
+- Railway state for this new release-gate PR: not yet deployed or checked.
 
-## Pending after this code-control stage
+## Remaining work and blockers
 
-1. Merge PR #211 after the integrated branch's required checks pass.
-2. Verify the resulting Railway deployment once and smoke-check the API health path.
-3. Verify the grant and task in Telegram after its API code deploys; no approval queue item was added.
-4. Complete autonomous engineering release gates and evidence handoffs, including real QA and Security execution. The user authorized these; they are not yet a complete automatic code-to-release path.
-5. Add CRM, customer support, and email adapters and verify credentials privately. No real customer/prospect messages or live marketing/sales are authorized by the implementation request.
-6. Extend company-wide coordination beyond the fixed proposal/task workflow. Sales, marketing, support, campaign execution, and legal escalation still need provider-specific integration and operating limits.
-7. Review earlier provider credentials and rotate any user-shared secrets through their respective providers when convenient; secrets are not included in Git.
-
-## Human-only blockers
-
-- A paid Sutra platform/model task needs a founder-approved non-zero all-in implementation budget. Existing EUR 500 AI QA initiative budgets are reserved for those separate initiatives and cannot be used for Sutra platform work.
-- CRM/support/email work will need the founder to choose providers and supply any account credentials privately. No credentials are needed to merge and activate this code-control stage.
-- Legal judgment, contracts, and binding commitments remain founder/legal-counsel matters.
+1. Pass hosted CI, including full Python, security, migration/pgTAP, database lint, container, and secret checks.
+2. Apply the reviewed migration, merge the consolidated sprint PR, then check Railway once if the merge triggers a deployment; confirm health and a quick smoke check.
+3. Enable the release worker only after the migration is live and deployment health is confirmed. The worker is opt-in and uses existing private GitHub/Supabase credentials; enabling it does not authorize paid model work.
+4. CRM, customer-support, and email providers still need implementation and founder-provided credentials. Until then, Sutra cannot execute real customer lifecycle work.
+5. Paid implementation work needs a separate non-zero, all-in initiative budget; the current Sutra project budget is EUR 0. No budget authority was changed.
 
 ## Next steps
 
-Proceed with PR #211, merge after required checks pass, verify the deployment and founder commands, then continue free code, tests, and documentation work. Do not dispatch paid provider work or contact external customers until the required budget/integration setup exists.
+Finish SQL verification through hosted CI, open one consolidated sprint PR, merge only after required checks pass, apply/verify the production migration, and perform the one-time Railway health/smoke check if a deployment occurs. Then continue free implementation within the current zero-spend boundary and report provider credentials or budget decisions only where they are actually needed.
