@@ -1,10 +1,10 @@
 # Sutra status
 
-Updated: 2026-09-29 02:22 Europe/Stockholm
+Updated: 2026-09-29 02:54 Europe/Stockholm
 
 ## Working
 
-- **Production runtime:** Railway project `valiant-liberation` has both private services Online. The latest `main` deployment is PR [#150](https://github.com/anupdalvi86-oss/sutra/pull/150), marked successful for both `sutra-api` and Hermes `sutra`. Hermes keeps state on the persistent `/opt/data` volume.
+- **Production runtime:** Railway project `valiant-liberation` has both private services Online. The latest verified `main` deployment is PR [#153](https://github.com/anupdalvi86-oss/sutra/pull/153), marked successful for both `sutra-api` and Hermes `sutra`. Hermes keeps state on the persistent `/opt/data` volume.
 - **Supabase:** project `smqsrigsugjuvuombetq` is `ACTIVE_HEALTHY`. Latest production migration is `20260929001756_codex_terminal_task_state`; the checked-in filename now matches that version. Supabase remains authoritative for tasks, approvals, spending policy, reservations, and audit records.
 - **Founder controls:** the Codex no-request retry limit is set to 3 total attempts, with a hard maximum of 3. The configured founder can read or set it from Telegram; changes are founder-only and audit logged, and changing the value does not create an agent run or retry. Retries still require the same approved Developer task and scope, a terminal previous attempt with zero provider requests and tokens, preservation of unknown reservations, and a fresh reservation through the central spend policy and monthly hard cap.
 - **Telegram:** [@sutra86bot](https://t.me/sutra86bot) is restricted to founder ID `8776723105`. CEO and department status commands report persisted projects, tasks, blockers, approvals, and financial controls. The founder approval queue and retry-limit commands are available.
@@ -17,14 +17,14 @@ Live Supabase counts: 1 approved project, 2 proposed projects; 2 completed tasks
 
 Developer task [`269cd305-2a8c-46a7-abb7-3d00f271d78f`](https://github.com/anupdalvi86-oss/sutra/issues/107) is `blocked`. Its first two executions ended with zero provider requests/tokens; their unknown €0.03 reservations remain held. The third execution used 3 provider requests (30,758 input tokens and 520 output tokens), reconciled at €0.01, and the Codex process exited with code 1 before producing a PR. The reservation remains reconciled, and an audit event records the blocked task state. No retry is eligible: the third attempt had provider usage and the three-attempt total limit is exhausted. Raising or changing that limit cannot make this execution eligible.
 
-The approved CPO market-research task is blocked after unknown Kimi usage. Its €0.28 reservation remains held. There are 8 unknown reservations totaling €0.74 across the company; none has been estimated or released. QA and Security role handoffs remain deferred by founder direction.
+The approved CPO market-research task is blocked after unknown Kimi usage. Its €0.28 reservation remains held. There are 8 unknown reservations totaling €0.74 across the company; none has been estimated or released. PRs [#152](https://github.com/anupdalvi86-oss/sutra/pull/152) and [#153](https://github.com/anupdalvi86-oss/sutra/pull/153) deployed bounded usage-envelope shape diagnostics for future failures; they cannot recover evidence missing from this historical run. Kimi remains disabled for production role routes. QA and Security role handoffs remain deferred by founder direction.
 
 ## Latest verification
 
-- PR #150 merged at `35dc06d` and CI run [36502138333](https://github.com/anupdalvi86-oss/sutra/actions/runs/36502138333) passed Python, database/pgTAP/lint, container/runtime, and secret-scan jobs.
-- Local validation for PR #150: 170 Python tests passed; `compileall` and Bandit (`-ll`) passed; local Supabase `test db` passed 362 assertions and database lint passed.
+- PRs #152 and #153 passed all four pull-request CI jobs: Python tests/security analysis, database policy tests/lint, container checks, and secret scan. PR #153's full end-to-end diagnostic test confirms a missing Hermes usage envelope stays unverified, passes no guessed usage to settlement, preserves the reservation, and stores no response content.
+- Local validation after PR #152: 170 Python tests passed; `compileall` and Bandit (`-ll`) passed. Local Supabase `test db` passed 362 assertions and database lint passed after PR #151; no schema changed in PRs #152–153.
 - Production Supabase reports `ACTIVE_HEALTHY`, migration `20260929001756` is applied, the retry limit is 3, and the Developer task has one `codex.task_blocked_after_terminal_failure` audit record. The current task execution has 3 requests and nonzero token usage, so the no-request retry RPC must reject it.
-- Chrome Railway dashboard verification after PR #150 showed `sutra-api` and Hermes `sutra` Online, with both latest deployments marked successful.
+- Chrome Railway dashboard verification after PR #153 showed `sutra-api` and Hermes `sutra` Online, with both latest deployments marked successful.
 - Founder interface commands: `CEO, show Codex no-request retry limit.` and `CEO, set Codex no-request retry limit to 3 total attempts.` The latter changes only the audited database control; it does not trigger a retry.
 
 ## Remaining work and blockers
