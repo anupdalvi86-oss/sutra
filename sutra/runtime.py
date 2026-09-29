@@ -242,7 +242,8 @@ class SupabaseREST:
         paths = {
             "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
             "objectives": "objectives?select=id,project_id,title,status,owner_agent_id&status=in.(proposed,active)&order=created_at&limit=100",
-            "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at,deferred_reason&status=in.(backlog,ready,in_progress,blocked,review,deferred,done)&order=updated_at.desc&limit=100",
+            "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at,deferred_reason&status=in.(backlog,ready,in_progress,blocked,review,deferred)&order=updated_at.desc&limit=100",
+            "completed_tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at&status=eq.done&order=updated_at.desc&limit=20",
             "approvals": "approvals?select=id,project_id,summary,amount,currency,status,required_roles,decisions,created_at&status=eq.pending&order=created_at.desc&limit=50",
             "agent_runs": "agent_runs?select=task_id,status,output,finished_at&status=in.(failed,blocked)&order=finished_at.desc&limit=200",
             "agents": "agents?select=id,slug,display_name,department_id,active&active=eq.true&limit=100",
@@ -786,6 +787,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     projects = snapshot["projects"]
     objectives = snapshot.get("objectives", [])
     tasks = snapshot["tasks"]
+    completed_tasks = snapshot["completed_tasks"]
     approvals = snapshot["approvals"]
     dispatch_rows = snapshot.get("github_dispatches", [])
     dispatch_by_task = {
@@ -813,11 +815,13 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     is_company_wide = agent_slug is None or requested_role in {"ceo", "cfo", "coo"}
     if is_company_wide:
         scoped_projects, scoped_tasks, scoped_approvals = projects, tasks, approvals
+        scoped_completed_tasks = completed_tasks
     else:
         team_agent_ids = {agent_id for agent_id, row in agents.items()
                           if row.get("slug") == agent_slug or (dept_id and row.get("department_id") == dept_id)}
         scoped_projects = [row for row in projects if row.get("department_id") == dept_id or row.get("owner_agent_id") in team_agent_ids]
         scoped_tasks = [row for row in tasks if row.get("owner_agent_id") in team_agent_ids]
+        scoped_completed_tasks = [row for row in completed_tasks if row.get("owner_agent_id") in team_agent_ids]
         scoped_project_ids = {row.get("id") for row in scoped_projects}
         scoped_approvals = [row for row in approvals if row.get("project_id") in scoped_project_ids]
     task_statuses = ("backlog", "ready", "in_progress", "blocked", "review")
@@ -870,7 +874,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     if len(visible_tasks) > 12:
         lines.append(f"• {len(visible_tasks) - 12} more open tasks omitted; see the Supabase task list.")
     recent_completions = sorted(
-        (task for task in scoped_tasks if task.get("status") == "done"),
+        scoped_completed_tasks,
         key=lambda task: str(task.get("updated_at") or ""),
         reverse=True,
     )
