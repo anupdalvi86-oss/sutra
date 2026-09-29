@@ -18,6 +18,8 @@ When a Codex process or usage settlement ends in a terminal failure, the databas
 
 The leased proposal/review/task-artifact worker is deployed and enabled. A service-role-only Supabase execution lease serializes the worker across overlapping Railway replicas before it claims work or reserves model spend; the lease expires after ten minutes if a process crashes. Before each provider request the worker reserves the profile's maximum three-iteration cost, waits for approval if required, begins the reservation, passes Hermes a bounded output-token cap and exact route lock, and reconciles observed usage before success. Unknown or out-of-profile usage keeps the full reserve and fails the run. The task-artifact reservation path additionally requires an assigned in-progress task in an approved project. The live database has founder-audited OpenAI GPT-6 Luna and Kimi K2.6 price profiles and an €8 monthly AI inference hard stop. A production AI QA proposal completed CEO → CPO → CTO → CFO → PM; all five stages persisted successful runs and role artifacts. Three proposal records now exist: one was rejected, one €500 request is approved, and one duplicate remains pending. A CPO-only Kimi K2.6 route is configured in Railway. Its first live research attempt failed with provider HTTP 429 and usage could not be verified; the €0.28 reservation remains held and the task is blocked. Unknown usage is never estimated or released. All other production roles use the OpenAI GPT-6 Luna default. See [STATUS.md](STATUS.md) for current evidence and blockers.
 
+An approved Developer scope has a local, draft-only implementation. It produces an offline synthetic manual test plan, rationale and warnings, and stores append-only reviewer decisions in an RLS-protected Supabase schema. It makes no model calls, runs no browser tests, and cannot write to GitHub or release software. The migrations are applied and validated only in the local Supabase database; they have not been applied to production. Its API is disabled unless `SUTRA_ENV=development` and `SUTRA_ENABLE_DRAFT_API=true` are both explicitly set; it requires a Supabase user JWT and publishable/anon key so table access remains scoped by RLS. Drafts are retained until their owner deletes them or the account is deleted; deletion removes the associated review history, which is otherwise append-only. There is no automatic retention period. Use synthetic, non-sensitive inputs only until a founder-approved lifecycle policy exists.
+
 PM review requests use provider JSON mode and a strict single-object contract for the product plan. The founder can request a bounded retry from Telegram only while the project budget request is pending; each attempt still passes the database spend reservation and monthly hard stop. Unknown earlier usage remains reserved.
 
 ## Local verification
@@ -35,12 +37,17 @@ GitHub Actions skips Python, database and container jobs for README, `STATUS.md`
 Install Docker and the Supabase CLI, then run:
 
 ```sh
-supabase start
+supabase stop --workdir .
+supabase start --exclude realtime,storage-api,imgproxy,mailpit,studio,postgres-meta,edge-runtime,logflare,vector,supavisor
 supabase db reset
 supabase test db
 ```
 
+`supabase stop` preserves the local database backup volume. The reduced service set starts the database, Auth, REST, and API gateway used by tests without optional analytics/vector services that may fail local health checks.
+
 For the API, copy `.env.example` to `.env`, fill only the server-side integration values, then run `python3 -m sutra.server`. Never commit `.env` or place a Supabase service-role key in Hermes, a Telegram message, GitHub, or an agent prompt.
+
+The local draft prototype exposes `POST /v1/drafts`, `GET /v1/drafts/{draft-id}`, `PATCH /v1/drafts/{draft-id}/review`, and owner-only `DELETE /v1/drafts/{draft-id}`. It is off by default and requires `SUTRA_ENV=development`, `SUTRA_ENABLE_DRAFT_API=true`, `SUPABASE_URL`, and `SUPABASE_ANON_KEY`; each request must carry a signed-in Supabase user's access token as `Authorization: Bearer <user-jwt>`. The API routes enable only when `SUTRA_ENV=development`, `SUTRA_ENABLE_DRAFT_API=true`, and the Supabase URL is local loopback; a hosted/production Supabase URL cannot activate this prototype. Local HTTP redirects cannot leave loopback. Do not enable this prototype in production. Run the Supabase commands above, then `python3 scripts/draft_auth_e2e.py` for a live local Auth/PostgREST check. It refuses non-loopback URLs, gives the Sutra API only the publishable/anon key, checks two-user isolation, draft deletion and append-only reviews, and removes its temporary Auth users. CI runs this integration against a disposable local Supabase stack.
 
 ## Railway services
 

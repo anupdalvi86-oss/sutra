@@ -166,6 +166,24 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Active/approved/paused projects: 1", reply)
         self.assertIn("AI QA opportunity", reply)
 
+    def test_board_status_includes_objectives_campaigns_and_customer_pipeline(self):
+        reply = render_status_brief(status_fixture(), "ceo")
+        self.assertIn("Objective [active]: Validate buyer demand", reply)
+        self.assertIn("Marketing pipeline", reply)
+        self.assertIn("[draft] QA pilot positioning — internal", reply)
+        self.assertIn("Customer and lead pipeline", reply)
+        self.assertIn("[qualified] Synthetic lead (Example Co) — test fixture", reply)
+
+    def test_marketing_and_sales_statuses_include_their_operating_pipelines(self):
+        snapshot = status_fixture()
+        marketing = render_status_brief(snapshot, "cmo")
+        self.assertIn("Marketing pipeline", marketing)
+        self.assertNotIn("Customer and lead pipeline", marketing)
+        sales = render_status_brief(snapshot, "sales")
+        self.assertIn("Customer and lead pipeline", sales)
+        self.assertNotIn("Marketing pipeline", sales)
+        self.assertNotIn("Engineering delivery", sales)
+
     def test_board_status_lists_backlog_work_and_project_owners(self):
         snapshot = status_fixture()
         snapshot["tasks"].append({"id": "backlog-task", "title": "Prepare user interview plan",

@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .codex_runner import CodexTaskRunner
+from .drafts import DraftNotFound, DraftRequestError, DraftService, UserScopedSupabase
 from .github_webhook import normalize_github_event, verify_github_signature
 from .runtime import (
     FounderCommandRouter,
@@ -93,6 +94,26 @@ class SutraApplication:
         self.codex_runner_status = "disabled"
         self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+        # Keep the synthetic prototype local-only, even if a hosted service is mislabeled.
+        draft_supabase = urlsplit(self.supabase_url)
+        local_draft_database = (
+            draft_supabase.scheme == "http"
+            and draft_supabase.hostname in {"127.0.0.1", "localhost", "::1"}
+        )
+        self.draft_api_enabled = (
+            os.environ.get("SUTRA_ENV", "").lower() == "development"
+            and os.environ.get("SUTRA_ENABLE_DRAFT_API", "false").lower() == "true"
+            and local_draft_database
+        )
+        self.draft_service: DraftService | None = None
+        if self.draft_api_enabled and self.supabase_url and os.environ.get("SUPABASE_ANON_KEY", ""):
+            try:
+                self.draft_service = DraftService(UserScopedSupabase(
+                    self.supabase_url, os.environ["SUPABASE_ANON_KEY"],
+                    allow_local_http=True,
+                ))
+            except ValueError:
+                self.draft_service = None
 
     def start(self) -> None:
         if self.store and self.founder_id:
@@ -306,6 +327,9 @@ class SutraHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlsplit(self.path).path
+        if path.startswith("/v1/drafts/"):
+            self._draft_request("GET", path)
+            return
         if path == "/health":
             status = self.app.health()
             self._json(200, status)
@@ -343,6 +367,9 @@ class SutraHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/webhooks/github":
             self._github_webhook()
+            return
+        if path == "/v1/drafts":
+            self._draft_request("POST", path)
             return
         if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update", "/internal/task-review"}:
             self._json(404, {"error": "not_found"})
@@ -450,6 +477,61 @@ class SutraHandler(BaseHTTPRequestHandler):
             self._json(503, {"error": "policy_service_unavailable"})
             return
         self._json(200, result)
+
+    def do_PATCH(self) -> None:  # noqa: N802 - stdlib handler API
+        path = urlsplit(self.path).path
+        if path.startswith("/v1/drafts/") and path.endswith("/review"):
+            self._draft_request("PATCH", path)
+            return
+        self._json(404, {"error": "not_found"})
+
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib handler API
+        path = urlsplit(self.path).path
+        if path.startswith("/v1/drafts/"):
+            self._draft_request("DELETE", path)
+            return
+        self._json(404, {"error": "not_found"})
+
+    def _draft_request(self, method: str, path: str) -> None:
+        if not self.app.draft_api_enabled:
+            self._json(404, {"error": "not_found"})
+            return
+        if self.app.draft_service is None:
+            self._json(503, {"error": "draft_api_unconfigured"})
+            return
+        authorization = self.headers.get("Authorization", "")
+        if not authorization.startswith("Bearer "):
+            self._json(401, {"error": "unauthorized"})
+            return
+        access_token = authorization[7:]
+        try:
+            if method == "POST" and path == "/v1/drafts":
+                result = self.app.draft_service.create(access_token, self._read_json())
+                self._json(201, result)
+                return
+            parts = path.strip("/").split("/")
+            if len(parts) == 3 and parts[:2] == ["v1", "drafts"] and method == "GET":
+                result = self.app.draft_service.get(access_token, parts[2])
+                self._json(200, result)
+                return
+            if len(parts) == 4 and parts[:2] == ["v1", "drafts"] and parts[3] == "review" and method == "PATCH":
+                result = self.app.draft_service.review(access_token, parts[2], self._read_json())
+                self._json(201, result)
+                return
+            if len(parts) == 3 and parts[:2] == ["v1", "drafts"] and method == "DELETE":
+                self.app.draft_service.delete(access_token, parts[2])
+                self.send_response(204)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._json(404, {"error": "not_found"})
+        except (DraftRequestError, ValueError):
+            self._json(400, {"error": "invalid_request"})
+        except DraftNotFound:
+            self._json(404, {"error": "not_found"})
+        except IntegrationError:
+            self._json(503, {"error": "draft_service_unavailable"})
 
     def _github_webhook(self) -> None:
         if self.app.store is None or not self.app.github_webhook_secret or not self.app.github_repository:
