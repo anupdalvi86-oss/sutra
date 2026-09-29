@@ -10,6 +10,7 @@ from sutra.runtime import (
     parse_founder_command,
     proposal_name,
     render_status_brief,
+    telegram_message_parts,
     telegram_poll_loop,
     validate_outbound_request,
 )
@@ -1001,6 +1002,49 @@ class TaskReviewStoreTests(unittest.TestCase):
 
 
 class TelegramPollingTests(unittest.TestCase):
+    def test_long_status_is_sent_as_bounded_messages_with_markup_on_last_part(self):
+        class StopAfterOneUpdate:
+            def __init__(self):
+                self.checks = 0
+
+            def is_set(self):
+                self.checks += 1
+                return self.checks > 1
+
+            def wait(self, _seconds):
+                return None
+
+        router = Mock()
+        router.handle.return_value = type("Reply", (), {
+            "text": "Projects\n" + "x" * 5000 + "\nFinancial controls\n€8 monthly hard cap",
+            "reply_markup": {"inline_keyboard": []},
+        })()
+        update = {"update_id": 13, "message": {
+            "from": {"id": int(FOUNDER)}, "chat": {"id": int(FOUNDER)}, "text": "CEO status",
+        }}
+        with patch("sutra.runtime.telegram_call", side_effect=[[], [update], {"ok": True}, {"ok": True}, {"ok": True}]) as call:
+            telegram_poll_loop("unit-test-token", router, StopAfterOneUpdate())
+
+        sends = [item.args[2] for item in call.call_args_list if item.args[1] == "sendMessage"]
+        self.assertEqual(len(sends), 3)
+        self.assertTrue(all(len(item["text"]) <= 3900 for item in sends))
+        self.assertIn("part 1 of 3", sends[0]["text"])
+        self.assertIn("part 3 of 3", sends[2]["text"])
+        self.assertNotIn("reply_markup", sends[0])
+        self.assertNotIn("reply_markup", sends[1])
+        self.assertEqual(sends[2]["reply_markup"], {"inline_keyboard": []})
+        self.assertIn("Financial controls", sends[2]["text"])
+        self.assertIn("€8 monthly hard cap", sends[2]["text"])
+
+    def test_telegram_message_parts_keep_short_text_and_bound_long_text(self):
+        self.assertEqual(telegram_message_parts("short report"), ["short report"])
+        parts = telegram_message_parts("first\n" + ("long detail " * 1000) + "\nlast", max_chars=256)
+        self.assertGreater(len(parts), 2)
+        self.assertTrue(all(len(part) <= 256 for part in parts))
+        self.assertIn("first", parts[0])
+        self.assertIn("last", parts[-1])
+        self.assertTrue(all(part.startswith("Status update — part ") for part in parts))
+
     def test_polling_routes_founder_approval_buttons_and_clears_them(self):
         class StopAfterOneUpdate:
             def __init__(self):
