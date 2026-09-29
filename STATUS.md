@@ -1,48 +1,51 @@
 # Sutra status
 
-Updated: 2026-09-29 11:42 Europe/Stockholm
+Updated: 2026-09-29, after production verification of PR #177
 
 ## Working
 
-- **Production runtime:** Railway project `valiant-liberation` has the private Hermes `sutra` and `sutra-api` services online. The API deployment for PR [#174](https://github.com/anupdalvi86-oss/sutra/pull/174) is active and successful (deployment `53554713-c92f-42a1-8a72-0c17c594cd70`). A live Telegram status request completed through the deployed worker. Hermes state is on the persistent `/opt/data` volume.
-- **Supabase:** project `smqsrigsugjuvuombetq` is `ACTIVE_HEALTHY`. The founder-only CPO recovery migration is applied. Supabase remains authoritative for company tasks, project approvals, model spend reservations, spending policy, and audit history.
-- **Telegram:** [@sutra86bot](https://t.me/sutra86bot) responds to the configured founder ID `8776723105`. CEO and department briefs include projects, objectives, task queues, blockers, approvals, and budget controls. The founder-adjustable Codex no-request retry limit is 3 total attempts (hard maximum 3); changing it is audited and does not retry work.
-- **Financial controls:** database policies enforce configurable thresholds: automatic at/below €10, department head above €10 through €50, CFO + CEO above €50 and below €200, and founder at/above €200. The €10–50 band fails closed until a department approver is assigned. AI inference has an €8 monthly hard stop and 80% warning. No company-wide operating budget is configured.
-- **GitHub:** repository is public. Sutra dispatches founder-approved engineering tasks to GitHub and Codex can open a branch and PR, but cannot merge or release. CI requires Python, database/pgTAP/lint, container/runtime and secret-scan jobs.
+- **Railway:** Production project `valiant-liberation` runs private `sutra` and `sutra-api` services. The API is Online; Railway shows the PR #177 deployment as ACTIVE and successful (deployment `b7b94383-410b-4c6e-8fdd-e872cc07df72`). Hermes data is stored on the persistent `/opt/data` volume.
+- **Supabase:** Project `smqsrigsugjuvuombetq` is the authoritative company state and is `ACTIVE_HEALTHY`. The production migration `founder_sales_artifact_retry` is applied (server migration version `20260929103538`).
+- **Telegram:** [@sutra86bot](https://t.me/sutra86bot) accepts private commands from founder ID `8776723105`. Live founder retry and CEO board-status commands both succeeded after the PR #177 deployment.
+- **Founder review/recovery controls:** QA/Security deferral is founder-only, atomic, and audited. The Sales schema-failure recovery is founder-only, audit-logged, and limited to one requeue for the same already-approved task after three terminal schema failures and fully reconciled prior reservations. Each new model attempt still uses normal spend preflight.
+- **Financial controls:** Database policy enforces configurable approval thresholds: automatic at/below €10, department head above €10 through €50, CFO + CEO above €50 and below €200, and founder at/above €200. The €10–50 band fails closed until a department approver is assigned. AI inference has an €8 monthly hard stop and 80% warning. No company-wide operating budget is configured.
+- **GitHub:** Repository is public. Engineering tasks can dispatch to GitHub and Codex can open branches/PRs; Sutra cannot merge or release. CI requires Python, database/pgTAP/lint, container/runtime, and secret-scan jobs.
 
 ## Current operating state
 
-Supabase currently has 1 approved project and 2 proposed projects. Of 11 tasks, 4 are done and 7 are open: 4 backlog and 3 blocked. One €500 project-budget approval is pending for a proposed duplicate project. No campaign or customer/lead records are present.
+Supabase has 1 approved project and 2 proposed projects. Across 11 tasks, 7 are done, 2 are blocked, and 2 are deferred. The approved project is **AI QA product opportunity**, with a €500 project ceiling. The two proposed-project CPO research tasks remain blocked; one €500 project-budget approval for a proposed duplicate is pending. Do not approve that duplicate unless the founder wants it.
 
-The approved CPO research task `9033583d-0867-4dde-9f55-df9f58d51c71` completed through the Telegram retry command. Its market-research artifact is persisted. The new OpenAI GPT-6 Luna reservation was €0.03 and reconciled to €0.01 for 52,154 input and 1,991 output tokens. The earlier malformed Kimi response remains unverified; its €0.28 reservation is still held and has not been estimated or released. Across the company, 8 unknown reservations totaling €0.74 remain held. Reconciled AI-inference spend this month is €0.21 against the €8 cap.
+Completed approved-project work includes CPO research, PM product plan, Architect design, Developer task #107 and merged PR #160, internal DevOps release/rollback plan, internal Marketing campaign draft, and internal Sales handoff. PR #160's merge CI evidence matched its exact head commit. Marketing and Sales outputs are drafts only; no external outreach, publication, expense beyond authorized model inference, or product release occurred.
 
-Developer task [#107](https://github.com/anupdalvi86-oss/sutra/issues/107) is now `done`. PR [#160](https://github.com/anupdalvi86-oss/sutra/pull/160) is merged, and its successful CI run `36541235879` used the same head SHA as the merged PR. The task was reconciled through the guarded `sutra_update_task` workflow and the change was audit logged. Its earlier Codex process used three metered requests and failed, so that execution remains in history and is not retry eligible.
+QA and Security tasks remain deferred and incomplete by founder direction. Therefore the product has **not** passed QA/Security and is **not release-ready**. The DevOps plan is internal planning only.
 
-The founder deferred QA and Security handoffs. The QA task is blocked at spend preflight (`spend_preflight_unavailable`), before any provider request or reservation; no QA model call occurred. Security, DevOps release/rollback, Marketing, and Sales handoffs remain in backlog. Two proposed-project CPO research tasks are blocked without linked execution evidence; do not treat these as completed research. The approved AI QA product is not released. No real sales/marketing messages, purchases, agreements or product release were made.
+The Sales handoff recovery is verified live. The initial artifact run ended after three schema-validation attempts. After the founder command `retry Sales task 8cb051cb-22c8-4a0d-b12f-9f57c39e9d61 after artifact schema fix`, the task completed and persisted a `sales_handoff` artifact. The new attempt reconciled at €0.01; all four attempts for that task total €0.04 actual spend. The founder retry is audit-logged against the founder ID; the retry granted no project-spend, merge, or release authority.
+
+Eight unknown model-spend reservations totaling €0.74 remain held; none were changed by the Sales retry. Reconciled AI-inference spend this month is €0.27 against the €8 cap.
 
 ## Latest verification
 
-- PR #174 passed all five CI jobs: Python, database/pgTAP/lint, containers, secret scan and change detection. Its 73 focused runtime tests and the full CI Python suite passed; `compileall` and `git diff --check` passed locally.
-- Local validation for the CPO recovery change passed 193 Python tests, 406 database assertions, database lint, `compileall`, and `git diff --check`.
-- Production Supabase accepted the recovery migration. Live CPO execution completed, persisted the artifact, and reconciled known usage while preserving the earlier unknown Kimi reservation.
-- PR #160 is merged with successful CI evidence bound to its exact head SHA. Its linked Developer task is complete in Supabase.
-- Railway reports `sutra-api` Online on PR #174’s successful deployment. A live Telegram founder status request returned the updated board brief, including PR #160 merged and CI success on the same commit, with no false GitHub delivery warning. Hermes remains Online with its persistent volume configured.
-- Live financial state: €0.21 reconciled AI-inference spend this month, €8 hard stop, 8 unknown reservations totaling €0.74 still held, and 1 pending project-budget approval.
+- PR [#177](https://github.com/anupdalvi86-oss/sutra/pull/177) merged as `9db8f9279055ad6814ed0e43acae559f9f8293c3`. All five CI jobs passed: Python, database, containers, secret scan, and change detection.
+- Local verification for PR #177: **204 Python tests passed**, **441 pgTAP assertions across 15 files passed**, Supabase database lint was clean, Bandit reported no medium/high findings, `compileall` passed, and `git diff --check` passed.
+- Production verification for PR #177: Railway deployment is Online/ACTIVE/successful; the migration is applied; the founder-only retry function is unavailable to `anon` and `authenticated` and executable by `service_role` only.
+- Live Telegram-to-Supabase verification: founder Sales recovery command returned success; task is `done`; exactly one `sales_handoff` artifact is persisted; new and prior reservations are reconciled; audit log names founder `8776723105` and records no added spend, merge, or release authority.
+- Live CEO board status reflects 2 blocked CPO tasks, 2 deferred QA/Security reviews, the pending project approval, project budget controls, and the merged PR/CI evidence.
 
 ## Remaining work and blockers
 
-1. Complete remaining CEO/department work and internal Marketing/Sales drafts. Keep all outreach internal until the founder explicitly authorizes external messages.
-2. Resolve the pending €500 project-budget approval only if the founder wants the proposed duplicate project; the already-approved project remains separately capped at €500.
-3. QA and Security agent reviews remain deferred by founder direction. QA was blocked before making a provider request. Two proposed-project CPO research tasks also need a founder decision on whether those duplicate proposals should proceed.
-4. Railway logs warn that the internal API is bound to `0.0.0.0` while Hermes uses a local, unsandboxed terminal backend. Railway lists the API as unexposed, but this runtime hardening remains outstanding.
-5. Rotate credentials previously shared in chat after base-flow validation and replace them directly in private Railway variables. The €8 cap covers AI inference only, not all company operations.
-6. Unknown reservations must stay held unless provider evidence permits exact reconciliation.
+1. The approved product is not release-ready until the founder restores and completes QA and Security reviews. Current deferral commands and restore IDs are available through the CEO Telegram brief.
+2. Decide whether the two proposed duplicate projects should proceed. One €500 budget approval is pending; do not approve it automatically.
+3. Resolve why the proposed-project CPO research tasks are blocked, or close those proposals if they are unwanted.
+4. Railway logs previously warned that the internal API binds to `0.0.0.0` while Hermes uses a local, unsandboxed terminal backend. Railway currently lists the API as unexposed; runtime hardening remains outstanding.
+5. Rotate credentials previously pasted into chat and replace them directly in private Railway variables. Do not commit credentials. The €8 cap covers AI inference, not all company operations.
+6. Keep all 8 unknown reservations totaling €0.74 held until provider evidence supports exact reconciliation.
+7. CEO and department Telegram reports give board-style portfolio, open-work, blocker, approval, and control details. A follow-up improvement is in progress to include recent completed tasks in these briefs.
 
 ## Deployment and links
 
 - Railway production project: [valiant-liberation](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce)
 - API service: [sutra-api](https://railway.com/project/462f22f9-9a79-4259-baf6-46af692c994b/service/9446fcb9-cf68-49d8-b998-3e1d4bef3019?environmentId=79e08b42-8d33-4cf2-a61c-08efa16075ce), private
-- Hermes service: `sutra`, private, persistent volume mounted at `/opt/data`
+- Hermes service: `sutra`, private; persistent volume mounted at `/opt/data`
 - Telegram: [@sutra86bot](https://t.me/sutra86bot)
 - GitHub: [anupdalvi86-oss/sutra](https://github.com/anupdalvi86-oss/sutra)
 - Supabase: `smqsrigsugjuvuombetq`, `ACTIVE_HEALTHY`

@@ -242,7 +242,7 @@ class SupabaseREST:
         paths = {
             "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
             "objectives": "objectives?select=id,project_id,title,status,owner_agent_id&status=in.(proposed,active)&order=created_at&limit=100",
-            "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at,deferred_reason&status=in.(backlog,ready,in_progress,blocked,review,deferred)&order=updated_at.desc&limit=100",
+            "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at,deferred_reason&status=in.(backlog,ready,in_progress,blocked,review,deferred,done)&order=updated_at.desc&limit=100",
             "approvals": "approvals?select=id,project_id,summary,amount,currency,status,required_roles,decisions,created_at&status=eq.pending&order=created_at.desc&limit=50",
             "agent_runs": "agent_runs?select=task_id,status,output,finished_at&status=in.(failed,blocked)&order=finished_at.desc&limit=200",
             "agents": "agents?select=id,slug,display_name,department_id,active&active=eq.true&limit=100",
@@ -869,6 +869,24 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         lines.append(f"• [{task.get('status', 'unknown')}] {title} — {owner}")
     if len(visible_tasks) > 12:
         lines.append(f"• {len(visible_tasks) - 12} more open tasks omitted; see the Supabase task list.")
+    recent_completions = sorted(
+        (task for task in scoped_tasks if task.get("status") == "done"),
+        key=lambda task: str(task.get("updated_at") or ""),
+        reverse=True,
+    )
+    if recent_completions:
+        project_names = {str(project.get("id")): str(project.get("name") or "project")
+                         for project in scoped_projects}
+        lines.extend(["", "Recent completions"])
+        for task in recent_completions[:5]:
+            owner = agents.get(str(task.get("owner_agent_id")), {}).get("display_name", "Unassigned")
+            title = re.sub(r"\s+", " ", str(task.get("title") or "Completed task"))[:84]
+            project = project_names.get(str(task.get("project_id")))
+            project_name = re.sub(r"\s+", " ", project)[:72] if project else ""
+            project_note = f" — {project_name}" if project_name else ""
+            lines.append(f"• {title} — {owner}{project_note}")
+        if len(recent_completions) > 5:
+            lines.append(f"• {len(recent_completions) - 5} earlier completions omitted; see Supabase.")
     if deferred_reviews:
         lines.extend(["", "Deferred quality reviews"])
         for task in deferred_reviews[:6]:

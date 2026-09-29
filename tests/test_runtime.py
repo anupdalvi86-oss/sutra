@@ -231,6 +231,21 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("[backlog] Prepare user interview plan — Product Manager", reply)
         self.assertIn("[blocked] Review product plan — Product Manager", reply)
 
+    def test_board_status_lists_recent_completions_without_counting_them_as_open(self):
+        snapshot = status_fixture()
+        snapshot["tasks"].append({"id": "done-task", "title": "Prepare sales handoff",
+                                  "status": "done", "project_id": "project-1",
+                                  "owner_agent_id": "sales-id", "updated_at": "2026-09-29T10:00:00Z"})
+        snapshot["agents"].append({"id": "sales-id", "slug": "sales", "display_name": "Sales",
+                                   "department_id": "sales-dept"})
+
+        reply = render_status_brief(snapshot, "ceo")
+
+        self.assertIn("1 tasks — 0 backlog, 0 ready, 0 in progress, 0 in review, 1 blocked", reply)
+        self.assertIn("Recent completions", reply)
+        self.assertIn("Prepare sales handoff — Sales — AI QA opportunity", reply)
+        self.assertNotIn("[done] Prepare sales handoff", reply)
+
     def test_board_status_reports_how_many_open_tasks_are_omitted(self):
         snapshot = status_fixture()
         snapshot["tasks"].extend({"id": f"backlog-{index}", "title": f"Backlog task {index}",
@@ -376,7 +391,8 @@ class FounderCommandTests(unittest.TestCase):
         self.assertTrue(any(path.startswith("projects?") and "requested_budget" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("objectives?") and "title" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("tasks?") and "owner_agent_id" in path
-                            and "deferred_reason" in path and "deferred" in path for path in requested_paths))
+                            and "deferred_reason" in path and "deferred" in path and "done" in path
+                            for path in requested_paths))
         self.assertTrue(any(path.startswith("approvals?") and "required_roles" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("budgets?") and "hard_stop" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("campaigns?") and "budget_amount" in path for path in requested_paths))
