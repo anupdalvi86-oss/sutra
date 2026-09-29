@@ -110,7 +110,42 @@ class FounderCommandTests(unittest.TestCase):
         reply = render_status_brief(snapshot, "ceo")
         self.assertIn("Engineering delivery", reply)
         self.assertIn("GitHub rejected the issue write using the configured repository token; verify its Issues write permission is active", reply)
-        self.assertIn("attempt 3/3", reply)
+        self.assertIn("dispatch attempts 3/3", reply)
+
+    def test_company_status_reports_verified_merged_delivery_without_false_blocker(self):
+        snapshot = status_fixture()
+        sha = "a" * 40
+        snapshot["github_dispatches"] = [{
+            "task_id": "developer-task", "task_title": "Implement approved product tasks",
+            "status": "created", "attempts": 1, "last_error": None,
+            "pull_request_number": 160,
+            "pull_request_url": "https://github.com/anupdalvi86-oss/sutra/pull/160",
+            "pull_request_merged": True, "pull_request_head_sha": sha,
+            "ci_conclusion": "success", "ci_head_sha": sha,
+        }]
+
+        reply = render_status_brief(snapshot, "ceo")
+
+        self.assertIn("merged PR passed CI on the same commit", reply)
+        self.assertIn("PR #160 merged", reply)
+        self.assertIn("CI: success", reply)
+        self.assertNotIn("GitHub delivery needs attention", reply)
+        self.assertNotIn("attempt 1/3", reply)
+        self.assertIn("dispatch attempts 1/3", reply)
+
+    def test_company_status_does_not_call_ci_success_matching_if_commit_differs(self):
+        snapshot = status_fixture()
+        snapshot["github_dispatches"] = [{
+            "task_id": "developer-task", "task_title": "Implement approved product tasks",
+            "status": "created", "pull_request_number": 160,
+            "pull_request_merged": False, "pull_request_head_sha": "a" * 40,
+            "ci_conclusion": "success", "ci_head_sha": "b" * 40,
+        }]
+
+        reply = render_status_brief(snapshot, "ceo")
+
+        self.assertIn("matching successful CI or merge evidence is pending", reply)
+        self.assertNotIn("open PR passed CI on the same commit", reply)
 
     def test_company_status_surfaces_metered_codex_process_failure(self):
         snapshot = status_fixture()
