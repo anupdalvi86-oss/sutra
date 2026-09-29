@@ -620,8 +620,13 @@ class FounderCommandTests(unittest.TestCase):
         expected["code_releases"] = []
         expected["status_errors"] = []
         store = SupabaseREST("https://sutra.example", "server-key")
-        store.request = Mock(side_effect=[expected[key] for key in expected if key != "github_dispatches"])
-        store.rpc = Mock(side_effect=[{"dispatches": expected["github_dispatches"]}, []])
+        request_order = (
+            "projects", "objectives", "tasks", "completed_tasks", "approvals", "agent_runs",
+            "agents", "departments", "budgets", "expenses", "budget_ledger", "campaigns",
+            "customers", "customer_email_actions",
+        )
+        store.request = Mock(side_effect=[expected[key] for key in request_order] + [expected["code_releases"]])
+        store.rpc = Mock(return_value={"dispatches": expected["github_dispatches"]})
         expected.pop("legal_escalations")
         self.assertEqual(store.company_status(), expected)
         requested_paths = [call.args[0] for call in store.request.call_args_list]
@@ -640,17 +645,18 @@ class FounderCommandTests(unittest.TestCase):
         self.assertTrue(any(path.startswith("customers?") and "email" not in path for path in requested_paths))
         self.assertTrue(any(path.startswith("customer_email_actions?") and "body_text" not in path
                             and "recipient_email" not in path for path in requested_paths))
+        self.assertEqual(store.request.call_args_list[-1], unittest.mock.call(
+            "rpc/sutra_company_code_release_status", "POST", {}))
         self.assertEqual(store.rpc.call_args_list, [
             unittest.mock.call("sutra_company_github_dispatch_status", {}),
-            unittest.mock.call("sutra_company_code_release_status", {}),
         ])
 
     def test_status_snapshot_keeps_healthy_sections_when_one_source_is_unavailable(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        malformed_responses = [[] for _ in range(14)]
+        malformed_responses = [[] for _ in range(15)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
-        store.rpc = Mock(side_effect=[{"dispatches": []}, []])
+        store.rpc = Mock(return_value={"dispatches": []})
         status = store.company_status()
         self.assertEqual(status["status_errors"], ["agents"])
         self.assertEqual(status["agents"], [])
@@ -660,7 +666,7 @@ class FounderCommandTests(unittest.TestCase):
     def test_status_snapshot_records_failed_rpc_without_discarding_other_sources(self):
         store = SupabaseREST("https://sutra.example", "server-key")
         store.request = Mock(return_value=[])
-        store.rpc = Mock(side_effect=[IntegrationError("unavailable"), []])
+        store.rpc = Mock(side_effect=IntegrationError("unavailable"))
         status = store.company_status()
         self.assertEqual(status["status_errors"], ["github_dispatches"])
         self.assertEqual(status["github_dispatches"], [])
