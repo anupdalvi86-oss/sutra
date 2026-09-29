@@ -187,6 +187,23 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertIn('"first_contact_draft":"..."', prompt)
         self.assertIn("do not identify or invent a real lead", prompt)
 
+    def test_architect_task_prompt_shows_exact_technical_design_contract(self):
+        response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("architect"))}}],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+        fake_response = Mock()
+        fake_response.__enter__ = Mock(return_value=fake_response)
+        fake_response.__exit__ = Mock(return_value=False)
+        fake_response.read.return_value = json.dumps(response).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=fake_response) as request:
+            HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-6-luna").review(
+                task_artifact_run("architect"), max_output_tokens=2200)
+        prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
+        self.assertIn('"artifact":{"design":"...","components":["..."],', prompt)
+        self.assertIn('"security_risks":["..."]}', prompt)
+        self.assertIn('"criterion":"COPY THE ASSIGNED CRITERION VERBATIM"', prompt)
+        self.assertIn("exactly one object for every assigned criterion", prompt)
+        self.assertIn("do not implement, spend, contact anyone, deploy, or claim verification", prompt)
+
     def test_cpo_research_prompt_keeps_the_report_within_the_output_budget(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("cpo"))}}],
                     "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
