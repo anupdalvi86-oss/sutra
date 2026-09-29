@@ -421,7 +421,7 @@ class SutraHandler(BaseHTTPRequestHandler):
         if path == "/v1/drafts":
             self._draft_request("POST", path)
             return
-        if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update", "/internal/task-review"}:
+        if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update", "/internal/task-review", "/internal/customer-email"}:
             self._json(404, {"error": "not_found"})
             return
         token = self.app.internal_token
@@ -434,7 +434,51 @@ class SutraHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_json()
-            if path == "/internal/task-review":
+            if path == "/internal/customer-email":
+                allowed = {
+                    "actor_agent_id", "actor_agent_slug", "task_id", "project_id", "customer_id",
+                    "purpose", "subject", "body_text", "estimated_cost_eur", "idempotency_key",
+                }
+                if set(payload) != allowed:
+                    raise ValueError("Malformed customer email action")
+                agent_slug = payload["actor_agent_slug"]
+                if agent_slug not in {"sales", "cmo"}:
+                    raise ValueError("Customer email action requires a Sales or Marketing agent")
+                purpose = payload["purpose"]
+                if purpose not in {"sales", "marketing", "support"}:
+                    raise ValueError("Invalid customer email purpose")
+                subject, body_text = payload["subject"], payload["body_text"]
+                if (not isinstance(subject, str) or not subject.strip() or len(subject) > 200
+                        or not isinstance(body_text, str) or not body_text.strip() or len(body_text) > 10_000):
+                    raise ValueError("Email subject or body exceeds the supported bounds")
+                estimated_cost = payload["estimated_cost_eur"]
+                if (not isinstance(estimated_cost, (int, float)) or isinstance(estimated_cost, bool)
+                        or estimated_cost <= 0 or estimated_cost > 999999999999.99
+                        or (isinstance(estimated_cost, float) and not math.isfinite(estimated_cost))):
+                    raise ValueError("Estimated cost must be finite, positive EUR within the supported range")
+                idempotency_key = payload["idempotency_key"]
+                if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", idempotency_key):
+                    raise ValueError("Customer email actions require an 8 to 128 character idempotency key")
+                try:
+                    agent_id = str(uuid.UUID(str(payload["actor_agent_id"])))
+                    task_id = str(uuid.UUID(str(payload["task_id"])))
+                    project_id = str(uuid.UUID(str(payload["project_id"])))
+                    customer_id = str(uuid.UUID(str(payload["customer_id"])))
+                except (TypeError, ValueError, AttributeError) as exc:
+                    raise ValueError("Customer email action IDs must be UUIDs") from exc
+                result = self.app.store.rpc("sutra_queue_customer_email", {
+                    "p_agent_id": agent_id,
+                    "p_agent_slug": agent_slug,
+                    "p_task_id": task_id,
+                    "p_project_id": project_id,
+                    "p_customer_id": customer_id,
+                    "p_purpose": purpose,
+                    "p_subject": subject.strip(),
+                    "p_body_text": body_text.strip(),
+                    "p_estimated_cost_eur": estimated_cost,
+                    "p_idempotency_key": idempotency_key,
+                })
+            elif path == "/internal/task-review":
                 allowed = {"task_id", "actor_agent_id", "evidence"}
                 if set(payload) - allowed or not {"task_id", "actor_agent_id", "evidence"}.issubset(payload):
                     raise ValueError("Malformed task review")

@@ -7,7 +7,7 @@ import unittest
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sutra.runtime import IntegrationError
 from sutra.server import (GatewayProbe, SutraApplication, SutraHandler,
@@ -55,8 +55,76 @@ class InternalEndpointTests(unittest.TestCase):
         request = Request(f"{self.base}/internal/spend", data=payload if isinstance(payload, bytes) else json.dumps(payload).encode(), headers=headers, method="POST")
         return urlopen(request, timeout=2)
 
+    def post_path(self, path, payload, token=None):
+        headers = {"Content-Type": "application/json"}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        request = Request(f"{self.base}{path}", data=json.dumps(payload).encode(), headers=headers, method="POST")
+        return urlopen(request, timeout=2)
+
     def get(self, path):
         return urlopen(f"{self.base}{path}", timeout=2)
+
+    def test_customer_email_queue_requires_internal_auth_and_passes_only_bounded_payload(self):
+        payload = {
+            "actor_agent_id": AGENT_ID,
+            "actor_agent_slug": "sales",
+            "task_id": "00000000-0000-4000-8000-000000000003",
+            "project_id": "00000000-0000-4000-8000-000000000004",
+            "customer_id": "00000000-0000-4000-8000-000000000005",
+            "purpose": "sales",
+            "subject": "A brief follow-up",
+            "body_text": "Would a short product overview be useful?",
+            "estimated_cost_eur": 0.05,
+            "idempotency_key": "email-action-0001",
+        }
+        with self.assertRaises(HTTPError) as unauthorized:
+            self.post_path("/internal/customer-email", payload)
+        self.assertEqual(unauthorized.exception.code, 401)
+        self.app.store.calls.clear()
+        rpc = Mock(return_value={"status": "queued", "action_id": "action-1"})
+        with patch.object(self.app.store, "rpc", rpc):
+            response = self.post_path("/internal/customer-email", payload, "unit-test-only-token")
+        self.assertEqual(json.loads(response.read()), {"status": "queued", "action_id": "action-1"})
+        rpc.assert_called_once_with("sutra_queue_customer_email", {
+            "p_agent_id": AGENT_ID,
+            "p_agent_slug": "sales",
+            "p_task_id": payload["task_id"],
+            "p_project_id": payload["project_id"],
+            "p_customer_id": payload["customer_id"],
+            "p_purpose": "sales",
+            "p_subject": payload["subject"],
+            "p_body_text": payload["body_text"],
+            "p_estimated_cost_eur": 0.05,
+            "p_idempotency_key": payload["idempotency_key"],
+        })
+
+    def test_customer_email_queue_rejects_malformed_scope_content_and_cost(self):
+        payload = {
+            "actor_agent_id": AGENT_ID,
+            "actor_agent_slug": "sales",
+            "task_id": "00000000-0000-4000-8000-000000000003",
+            "project_id": "00000000-0000-4000-8000-000000000004",
+            "customer_id": "00000000-0000-4000-8000-000000000005",
+            "purpose": "sales",
+            "subject": "A brief follow-up",
+            "body_text": "Would a short product overview be useful?",
+            "estimated_cost_eur": 0.05,
+            "idempotency_key": "email-action-0001",
+        }
+        malformed = [
+            {**payload, "actor_agent_slug": "ceo"},
+            {**payload, "purpose": "legal"},
+            {**payload, "estimated_cost_eur": True},
+            {**payload, "estimated_cost_eur": float("inf")},
+            {**payload, "body_text": ""},
+            {**payload, "idempotency_key": "short"},
+            {key: value for key, value in payload.items() if key != "project_id"},
+        ]
+        for candidate in malformed:
+            with self.subTest(candidate=candidate), self.assertRaises(HTTPError) as invalid:
+                self.post_path("/internal/customer-email", candidate, "unit-test-only-token")
+            self.assertEqual(invalid.exception.code, 400)
 
     def test_model_role_routes_are_validated_and_reject_unknown_fields(self):
         self.assertEqual(parse_role_routes(

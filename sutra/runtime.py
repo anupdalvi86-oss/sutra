@@ -270,7 +270,7 @@ class SupabaseREST:
     def company_status(self) -> dict[str, list[dict[str, Any]]]:
         """Read a bounded, factual operating snapshot from authoritative company state."""
         paths = {
-            "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at,budget_assessment,budget_assessment_status&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
+            "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at,budget_assessment,budget_assessment_status,legal_hold&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
             "objectives": "objectives?select=id,project_id,title,status,owner_agent_id&status=in.(proposed,active)&order=created_at&limit=100",
             "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at,deferred_reason&status=in.(backlog,ready,in_progress,blocked,review,deferred)&order=updated_at.desc&limit=100",
             "completed_tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at&status=eq.done&order=updated_at.desc&limit=20",
@@ -283,6 +283,7 @@ class SupabaseREST:
             "budget_ledger": "initiative_budget_ledger?select=project_id,category,vendor,reserved_amount,actual_amount,status,currency&limit=1000",
             "campaigns": "campaigns?select=id,project_id,name,channel,status,budget_amount,currency,created_at&order=created_at.desc&limit=100",
             "customers": "customers?select=id,name,company,source,status,updated_at&status=in.(lead,qualified,customer)&order=updated_at.desc&limit=100",
+            "customer_email_actions": "customer_email_actions?select=id,project_id,purpose,status,created_at&order=created_at.desc&limit=100",
         }
         snapshot = {key: self.request(path) for key, path in paths.items()}
         dispatch_status = self.rpc("sutra_company_github_dispatch_status", {})
@@ -338,6 +339,7 @@ class FounderCommand:
     legal_case_id: str | None = None
     legal_disposition: str = ""
     legal_reason: str = ""
+    project_legal_hold: bool | None = None
     authorization_id: str | None = None
     authorization_reason: str = ""
 
@@ -391,6 +393,10 @@ LEGAL_ESCALATIONS_RE = re.compile(
 )
 LEGAL_DISPOSITION_RE = re.compile(
     r"^\s*(?:record|resolve)\s+legal\s+case\s+([0-9a-f-]{36})\s+as\s+(continue\s+within\s+budget|stop|seek\s+legal\s+counsel)\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+PROJECT_LEGAL_HOLD_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(set|clear)\s+(?:the\s+)?legal\s+hold\s+(?:for\s+)?([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 CODE_AUTHORITY_STATUS_RE = re.compile(
@@ -536,6 +542,17 @@ def parse_founder_command(text: str) -> FounderCommand:
             raise ValueError("Review task reason must contain 8 to 500 characters")
         return FounderCommand("defer_review_chain", text.strip(), task_id=task_id, task_reason=reason)
     lowered = text.lower()
+    match = PROJECT_LEGAL_HOLD_RE.fullmatch(text)
+    if match:
+        try:
+            project_id = str(uuid.UUID(match.group(2)))
+        except ValueError as exc:
+            raise ValueError("Legal hold change needs a valid project ID") from exc
+        reason = match.group(3).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Legal hold reason must contain 8 to 500 characters")
+        return FounderCommand("set_project_legal_hold", text.strip(), project_id=project_id,
+                              project_legal_hold=match.group(1).lower() == "set", legal_reason=reason)
     if LEGAL_ESCALATIONS_RE.fullmatch(text):
         return FounderCommand("legal_escalations", text.strip())
     match = LEGAL_DISPOSITION_RE.fullmatch(text)
@@ -633,6 +650,21 @@ class FounderCommandRouter:
             lines.append("Record a disposition with: record legal case <case-id> as continue within budget, stop, or seek legal counsel because <reason>.")
             lines.append("Recording a disposition does not resume work or authorize contracts, legal commitments, or spending above the existing budget.")
             return FounderResponse("\n".join(lines))
+        if command.kind == "set_project_legal_hold":
+            try:
+                result = self.store.rpc("sutra_founder_set_project_legal_hold", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_project_id": command.project_id,
+                    "p_legal_hold": command.project_legal_hold,
+                    "p_reason": command.legal_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("The legal hold was not changed. Only the configured founder can change it, and the database must confirm the project and reason.")
+            action = "set" if result.get("legal_hold") is True else "cleared"
+            return FounderResponse(
+                f"Audited legal hold {action} for initiative {result.get('project_id')}. "
+                "A legal hold blocks outbound customer email. Clearing it does not resume a paused initiative or close an open legal escalation."
+            )
         if command.kind == "code_authority_status":
             try:
                 result = self.store.rpc("sutra_founder_code_authorization_status", {
@@ -1120,6 +1152,8 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
                       f"{currency} {max(0.0, float(amount) - actual - reserved):,.2f}")
         owner = agents.get(str(project.get("owner_agent_id")), {}).get("display_name", "Unassigned")
         lines.append(f"• {name} — {status_text}; owner {owner}{budget}; ID {project.get('id', 'unknown')}")
+        if project.get("legal_hold") is True:
+            lines.append("  Legal hold active: external customer email is blocked until the founder clears it.")
         if unknown:
             lines.append(f"  €{unknown:,.2f} remains held because usage is unconfirmed.")
         assessment = project.get("budget_assessment")
@@ -1385,6 +1419,23 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             lines.append("• No customer or lead records are currently recorded.")
         if len(customer_rows) > 5:
             lines.append(f"• {len(customer_rows) - 5} more lead/customer records omitted; see Supabase.")
+    include_customer_operations = is_company_wide or agent_slug in {"sales", "cmo"}
+    if include_customer_operations:
+        email_actions = [item for item in snapshot.get("customer_email_actions", [])
+                         if isinstance(item, dict) and (is_company_wide
+                            or str(item.get("project_id")) in scoped_project_ids)]
+        lines.extend(["", "Customer communications"])
+        if not email_actions:
+            lines.append("• No budgeted customer email actions are queued or recorded.")
+        else:
+            action_counts: dict[str, int] = {}
+            for action in email_actions:
+                action_status = str(action.get("status") or "unknown")
+                action_counts[action_status] = action_counts.get(action_status, 0) + 1
+            lines.append("• " + ", ".join(f"{status}: {count}" for status, count in sorted(action_counts.items())))
+            for action in email_actions[:6]:
+                purpose = str(action.get("purpose") or "customer")[:24]
+                lines.append(f"• [{action.get('status', 'unknown')}] {purpose} email action — ID {action.get('id', 'unknown')}")
     lines.extend(["", "Approvals requiring attention"])
     if not scoped_approvals:
         lines.append("• None pending.")
