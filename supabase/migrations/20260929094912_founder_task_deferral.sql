@@ -109,7 +109,8 @@ begin
     raise exception 'task is not in a deferrable state' using errcode='22023';
   end if;
   if assigned_role='qa' and not exists(select 1 from public.tasks c join public.agents a on a.id=c.assigned_agent_id
-      where c.parent_task_id=task_row.id and c.project_id=task_row.project_id and c.status='backlog' and a.slug='security') then
+      where c.parent_task_id=task_row.id and c.project_id=task_row.project_id
+        and c.status in ('backlog','ready','blocked') and a.slug='security') then
     raise exception 'QA deferral has no pending Security child to release' using errcode='42501';
   end if;
   if assigned_role='security' and not exists(select 1 from public.tasks c join public.agents a on a.id=c.assigned_agent_id
@@ -138,18 +139,21 @@ grant execute on function public.sutra_founder_defer_task(text,uuid,text) to ser
 create or replace function public.sutra_founder_defer_quality_chain(
   p_founder_telegram_user_id text,p_qa_task_id uuid,p_reason text
 ) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
-declare qa_result jsonb; security_result jsonb; security_task_id uuid; security_task_count integer;
+declare qa_result jsonb; security_result jsonb; security_task_id uuid; security_task_ids uuid[];
 begin
   if p_qa_task_id is null then raise exception 'QA task ID is required' using errcode='22023'; end if;
-  select count(*)::integer,(array_agg(c.id order by c.id))[1]
-    into security_task_count,security_task_id from public.tasks qa
-  join public.agents qa_agent on qa_agent.id=qa.assigned_agent_id and qa_agent.slug='qa'
-  join public.tasks c on c.parent_task_id=qa.id and c.project_id=qa.project_id and c.status='backlog'
-  join public.agents security_agent on security_agent.id=c.assigned_agent_id and security_agent.slug='security'
-  where qa.id=p_qa_task_id;
-  if security_task_count<>1 then
+  perform 1 from public.tasks qa where qa.id=p_qa_task_id for update;
+  if not found then raise exception 'QA task does not exist' using errcode='22023'; end if;
+  select array(select c.id from public.tasks qa
+    join public.agents qa_agent on qa_agent.id=qa.assigned_agent_id and qa_agent.slug='qa'
+    join public.tasks c on c.parent_task_id=qa.id and c.project_id=qa.project_id
+      and c.status in ('backlog','ready','blocked','in_progress','review')
+    join public.agents security_agent on security_agent.id=c.assigned_agent_id and security_agent.slug='security'
+    where qa.id=p_qa_task_id order by c.id for update of c) into security_task_ids;
+  if coalesce(cardinality(security_task_ids),0)<>1 then
     raise exception 'QA task must have exactly one pending direct Security review child' using errcode='42501';
   end if;
+  security_task_id:=security_task_ids[1];
   qa_result:=public.sutra_founder_defer_task(p_founder_telegram_user_id,p_qa_task_id,p_reason);
   security_result:=public.sutra_founder_defer_task(p_founder_telegram_user_id,security_task_id,p_reason);
   return jsonb_build_object('status','deferred','qa',qa_result,'security',security_result,

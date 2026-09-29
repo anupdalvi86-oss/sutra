@@ -34,7 +34,7 @@ begin
   insert into public.tasks(project_id,parent_task_id,title,description,acceptance_criteria,task_type,status,
       owner_agent_id,assigned_agent_id)
     values(project_uuid,qa_task,'Security review fixture','Review security and dependencies.',
-      '["Findings and owner are recorded"]'::jsonb,'engineering','backlog',security_uuid,security_uuid)
+      '["Findings and owner are recorded"]'::jsonb,'engineering','ready',security_uuid,security_uuid)
     returning id into security_task;
   insert into public.tasks(project_id,parent_task_id,title,description,acceptance_criteria,task_type,status,
       owner_agent_id,assigned_agent_id)
@@ -79,7 +79,7 @@ select is((public.sutra_founder_defer_quality_chain('12345678',(select qa_task_i
 select is((select status from public.tasks where id=(select qa_task_id from review_deferral_fixture)),'deferred',
   'deferred QA is not marked done');
 select is((select status from public.tasks where id=(select security_task_id from review_deferral_fixture)),'deferred',
-  'Security is never left ready between QA and Security deferral');
+  'a previously ready Security review is locked and deferred atomically with QA');
 select is((select status from public.tasks where id=(select security_task_id from review_deferral_fixture)),'deferred',
   'deferred Security is not marked done');
 select is((select status from public.tasks where id=(select devops_task_id from review_deferral_fixture)),'ready',
