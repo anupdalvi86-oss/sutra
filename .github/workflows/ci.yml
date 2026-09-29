@@ -88,7 +88,24 @@ jobs:
           umask 077
           # Service-specific integration and SQL checks below determine readiness;
           # unrelated local containers must not block those checks at startup.
-          supabase start --exclude realtime,storage-api,imgproxy,mailpit,studio,postgres-meta,edge-runtime,logflare,vector,supavisor --ignore-health-check > "$RUNNER_TEMP/sutra-supabase-start.log" 2>&1
+          start_log="$RUNNER_TEMP/sutra-supabase-start.log"
+          if ! supabase start --exclude realtime,storage-api,imgproxy,mailpit,studio,postgres-meta,edge-runtime,logflare,vector,supavisor --ignore-health-check > "$start_log" 2>&1; then
+            echo "Supabase local startup failed; sanitized diagnostic tail follows."
+            python3 - "$start_log" <<'PY'
+          import pathlib, re, sys
+          text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          patterns = (
+              r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+              r"sb_(?:publishable|secret)_[A-Za-z0-9_-]+",
+              r"(?i)(?:anon(?:ymous)? key|service[_ -]?role key|jwt[_ -]?secret|password|secret)\s*[:=]\s*\S+",
+              r"(?i)(postgres(?:ql)?://)[^:\s/]+:[^@\s/]+@",
+          )
+          for pattern in patterns:
+              text = re.sub(pattern, "[REDACTED]", text)
+          print("\n".join(text.splitlines()[-80:]))
+          PY
+            exit 1
+          fi
           python3 - <<'PY'
           import json, subprocess
           result = subprocess.run(["supabase", "status", "--output", "json"], capture_output=True, text=True, check=True)
