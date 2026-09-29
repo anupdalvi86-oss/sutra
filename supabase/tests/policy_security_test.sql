@@ -80,7 +80,7 @@ select throws_ok($$select public.sutra_claim_agent_run('bad-worker')$$,
 
 select throws_ok($$update public.spending_policies set required_approvers='{}' where name='founder_200_and_over'$$,
   '42501',null,'service_role cannot mutate spending authority directly');
-select is((public.sutra_authorize_spend('agent','developer',(select id from public.agents where slug='developer'),null,null,
+select is((public.sutra_authorize_spend('agent','architect',(select id from public.agents where slug='architect'),null,null,
   'ai_api',null,'department approval test',11,'EUR')->>'status'),'requested','spend above €10 creates an approval request');
 select throws_ok($$select public.sutra_decide_role_approval((select id from public.approvals where summary='department approval test' limit 1),
   (select id::text from public.agents where slug='developer'),'department_head','approve','')$$,
@@ -95,6 +95,26 @@ select ok(exists(select 1 from public.company_settings s join public.agents a on
 select is((public.sutra_decide_role_approval((select id from public.approvals where summary='department approval test' limit 1),
   (select id::text from public.agents where slug='developer'),'department_head','approve','Designated head review')->>'status'),
   'approved','only the designated department head can approve');
+select is((public.sutra_authorize_spend('agent','developer',(select id from public.agents where slug='developer'),null,null,
+  'ai_api',null,'developer self approval test',11,'EUR')->>'status'),'requested','developer test expense awaits approval');
+select is((select requested_by_agent_id from public.approvals where summary='developer self approval test' limit 1),
+  (select id from public.agents where slug='developer'),'expense approval retains its requesting agent identity');
+select throws_ok($$select public.sutra_decide_role_approval((select id from public.approvals where summary='developer self approval test' limit 1),
+  (select id::text from public.agents where slug='developer'),'department_head','approve','')$$,
+  '42501',null,'an agent cannot approve its own expense');
+select lives_ok($$select public.sutra_set_company_setting('12345678',
+  'department_head:' || (select department_id::text from public.agents where slug='qa'),
+  to_jsonb((select id::text from public.agents where slug='cto')))$$,
+  'founder can designate a cross-department head for a one-agent department');
+select ok(exists(select 1 from public.audit_log where actor_type='founder' and actor_id='12345678'
+  and action='company.setting_changed' and resource_type='company_setting'
+  and resource_id='department_head:' || (select department_id::text from public.agents where slug='qa')),
+  'department-head delegation changes are audit logged');
+select is((public.sutra_decide_role_approval(
+  (public.sutra_authorize_spend('agent','qa',(select id from public.agents where slug='qa'),null,null,
+    'ai_api',null,'cross department approval test',11,'EUR')->>'approval_id')::uuid,
+  (select id::text from public.agents where slug='cto'),'department_head','approve','Scoped QA approval')->>'status'),
+  'approved','cross-department head can approve only the department they were assigned');
 reset role;
 set local role anon;
 select throws_ok($$select * from public.spending_policies$$,'42501',null,'anon role cannot read spending policies');
