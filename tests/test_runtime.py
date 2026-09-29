@@ -240,6 +240,113 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("16 tasks — 15 backlog", reply)
         self.assertIn("4 more open tasks omitted; see the Supabase task list", reply)
 
+    def test_board_status_reports_deferred_reviews_as_incomplete(self):
+        snapshot = status_fixture()
+        snapshot["tasks"].append({"id": "deferred-qa", "title": "Verify acceptance criteria",
+                                  "status": "deferred", "project_id": "project-1",
+                                  "owner_agent_id": "qa-id",
+                                  "deferred_reason": "Founder deferred QA temporarily; no pass is claimed."})
+        snapshot["agents"].append({"id": "qa-id", "slug": "qa", "display_name": "Quality Assurance",
+                                   "department_id": "product-dept"})
+
+        reply = render_status_brief(snapshot, "ceo")
+
+        self.assertIn("Deferred quality reviews", reply)
+        self.assertIn("[deferred; incomplete] Verify acceptance criteria — Quality Assurance", reply)
+        self.assertIn("Founder deferred QA temporarily", reply)
+        self.assertIn("Deferred QA/Security reviews: 1 (incomplete)", reply)
+
+    def test_founder_can_defer_and_restore_review_task_through_audited_database_commands(self):
+        self.store.rpc.return_value = {
+            "task_id": APPROVAL, "status": "deferred", "role": "qa",
+            "released_internal_planning_tasks": [{"task_id": "child-task", "role": "security"}],
+        }
+        reply = self.router.handle(
+            FOUNDER, FOUNDER,
+            f"defer review task {APPROVAL} because Founder directed QA to wait; no pass is claimed.",
+        ).text
+        self.assertIn("Founder deferral recorded", reply)
+        self.assertIn("remains incomplete", reply)
+        self.assertIn("1 directly dependent internal planning task", reply)
+        self.assertIn("no spending, merge, or release authority", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_defer_task", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_task_id": APPROVAL,
+            "p_reason": "Founder directed QA to wait; no pass is claimed",
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"task_id": APPROVAL, "status": "ready", "role": "qa"}
+        reply = self.router.handle(
+            FOUNDER, FOUNDER,
+            f"restore review task {APPROVAL} because Founder is ready to resume QA review.",
+        ).text
+        self.assertIn("restored the qa task to the ready queue", reply)
+        self.assertIn("no spending, merge, or release authority", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_restore_deferred_task", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_task_id": APPROVAL,
+            "p_reason": "Founder is ready to resume QA review",
+        })
+
+    def test_review_deferral_commands_require_founder_private_chat_and_valid_reason(self):
+        command = f"defer review task {APPROVAL} because Founder temporarily pauses QA."
+        for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):
+            with self.subTest(user_id=user_id, chat_id=chat_id):
+                reply = self.router.handle(user_id, chat_id, command).text
+                self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+        for bad_command in (
+            "defer review task not-a-uuid because a valid reason is supplied",
+            f"defer review task {APPROVAL} without a reason",
+        ):
+            with self.subTest(command=bad_command):
+                self.assertEqual(parse_founder_command(bad_command).kind, "unsupported")
+                self.router.handle(FOUNDER, FOUNDER, bad_command)
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command(f"defer review task {APPROVAL} because short")
+        self.store.rpc.assert_not_called()
+
+    def test_review_deferral_database_failure_fails_closed(self):
+        self.store.rpc.side_effect = IntegrationError("not eligible")
+        reply = self.router.handle(
+            FOUNDER, FOUNDER,
+            f"defer review task {APPROVAL} because Founder temporarily defers this QA review.",
+        ).text
+        self.assertIn("couldn't defer that review task", reply)
+        self.assertIn("check the task status before trying again", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_defer_task", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_task_id": APPROVAL,
+            "p_reason": "Founder temporarily defers this QA review",
+        })
+
+    def test_founder_can_atomically_defer_qa_and_security_without_releasing_security_between_steps(self):
+        self.store.rpc.return_value = {
+            "qa": {"status": "deferred"},
+            "security": {"status": "deferred", "released_internal_planning_tasks": [
+                {"task_id": "devops-task", "role": "devops"},
+            ]},
+            "qa_and_security_incomplete": True,
+            "release_authority_granted": False,
+        }
+        command = (
+            f"defer QA and Security reviews for task {APPROVAL} because "
+            "Founder directed both reviews to pause temporarily; neither passes."
+        )
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+
+        self.assertIn("Founder deferral recorded for QA and Security", reply)
+        self.assertIn("Both reviews remain incomplete", reply)
+        self.assertIn("1 directly dependent internal DevOps planning task", reply)
+        self.assertIn("no spending, merge, or release authority", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_defer_quality_chain", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_qa_task_id": APPROVAL,
+            "p_reason": "Founder directed both reviews to pause temporarily; neither passes",
+        })
+
     def test_role_status_commands_cover_operating_roles(self):
         for role, expected in (("CTO", "cto"), ("Product Manager", "product manager"),
                                ("QA", "qa"), ("CMO", "cmo"), ("Governance", "governance")):
@@ -268,7 +375,8 @@ class FounderCommandTests(unittest.TestCase):
         requested_paths = [call.args[0] for call in store.request.call_args_list]
         self.assertTrue(any(path.startswith("projects?") and "requested_budget" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("objectives?") and "title" in path for path in requested_paths))
-        self.assertTrue(any(path.startswith("tasks?") and "owner_agent_id" in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("tasks?") and "owner_agent_id" in path
+                            and "deferred_reason" in path and "deferred" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("approvals?") and "required_roles" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("budgets?") and "hard_stop" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("campaigns?") and "budget_amount" in path for path in requested_paths))
