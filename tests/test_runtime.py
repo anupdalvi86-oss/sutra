@@ -67,6 +67,35 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("company / * / monthly: EUR 8.0", reply)
         self.store.company_status.assert_called_once_with()
 
+    def test_board_status_explains_blocked_work_waiting_on_proposed_project_approval(self):
+        snapshot = status_fixture()
+        snapshot["projects"].append({
+            "id": "proposed-project", "name": "Duplicate proposal", "status": "proposed",
+            "requested_budget": 500, "currency": "EUR", "department_id": "product-dept",
+            "owner_agent_id": "ceo-id",
+        })
+        snapshot["tasks"].append({
+            "id": "proposed-cpo-task", "title": "Research duplicate proposal", "status": "blocked",
+            "project_id": "proposed-project", "owner_agent_id": "cpo-id",
+        })
+        snapshot["approvals"].append({
+            "id": "proposed-project-approval", "project_id": "proposed-project",
+            "summary": "CFO review followed by founder approval", "amount": 500,
+            "currency": "EUR", "status": "pending", "required_roles": ["cfo", "founder"],
+            "decisions": {},
+        })
+        snapshot["agents"].append({
+            "id": "cpo-id", "slug": "cpo", "display_name": "CPO", "department_id": "product-dept",
+        })
+
+        reply = render_status_brief(snapshot, "ceo")
+
+        self.assertIn(
+            "Research duplicate proposal — owned by CPO; its project is still proposed and awaits "
+            "project-budget approval; no execution run or model spend was started.", reply,
+        )
+        self.assertIn("CFO review followed by founder approval — EUR 500; awaiting cfo, founder", reply)
+
     def test_board_status_includes_objectives_campaigns_and_customer_pipeline(self):
         reply = render_status_brief(status_fixture(), "ceo")
         self.assertIn("Objective [active]: Validate buyer demand", reply)
