@@ -307,7 +307,8 @@ class SupabaseREST:
             snapshot["github_dispatches"] = []
             status_errors.append("github_dispatches")
         try:
-            release_status = self.rpc("sutra_company_code_release_status", {})
+            # This RPC intentionally returns a JSON array; the generic rpc helper is object-only.
+            release_status = self.request("rpc/sutra_company_code_release_status", "POST", {})
             if not isinstance(release_status, list) or not all(isinstance(item, dict) for item in release_status):
                 raise IntegrationError("invalid code release status")
             snapshot["code_releases"] = release_status
