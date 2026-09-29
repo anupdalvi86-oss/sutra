@@ -326,6 +326,22 @@ class HermesAgentClient:
                     "fields and assigned task_acceptance items. "
                     "This is internal research only; do not contact customers, create leads, publish, or spend."
                 )
+            elif role == "architect":
+                role_output += (
+                    " For the technical_design artifact, return exactly these five top-level keys: summary, "
+                    "recommendation, evidence, task_acceptance, artifact. The nested artifact must contain "
+                    "exactly design (one string, 8-4000 characters), components (an array of 1-20 concise "
+                    "strings), and security_risks (an array of 1-20 concise strings). Do not return objects "
+                    "inside either nested array. task_acceptance must contain exactly one object for every "
+                    "assigned criterion; copy each criterion verbatim and give evidence of 8-1000 characters. "
+                    "Use this shape: {\"summary\":\"...\",\"recommendation\":\"...\",\"evidence\":[],"
+                    "\"task_acceptance\":[{\"criterion\":\"COPY THE ASSIGNED CRITERION VERBATIM\","
+                    "\"evidence\":\"Point to the exact design section that satisfies it\"}],"
+                    "\"artifact\":{\"design\":\"...\",\"components\":[\"...\"],"
+                    "\"security_risks\":[\"...\"]}}. Evidence may be empty when no external source is "
+                    "needed; never invent citations. This is an internal design draft only: do not implement, "
+                    "spend, contact anyone, deploy, or claim verification."
+                )
             elif role == "sales":
                 role_output += (
                     " For the sales_handoff artifact, use exactly these nested fields and JSON types: "
