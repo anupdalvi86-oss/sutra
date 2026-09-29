@@ -242,7 +242,7 @@ class SupabaseREST:
         paths = {
             "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
             "objectives": "objectives?select=id,project_id,title,status,owner_agent_id&status=in.(proposed,active)&order=created_at&limit=100",
-            "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at&status=in.(backlog,ready,in_progress,blocked,review)&order=updated_at.desc&limit=100",
+            "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at,deferred_reason&status=in.(backlog,ready,in_progress,blocked,review,deferred)&order=updated_at.desc&limit=100",
             "approvals": "approvals?select=id,project_id,summary,amount,currency,status,required_roles,decisions,created_at&status=eq.pending&order=created_at.desc&limit=50",
             "agent_runs": "agent_runs?select=task_id,status,output,finished_at&status=in.(failed,blocked)&order=finished_at.desc&limit=200",
             "agents": "agents?select=id,slug,display_name,department_id,active&active=eq.true&limit=100",
@@ -284,6 +284,7 @@ class FounderCommand:
     comment: str = ""
     budget: float | None = None
     task_id: str | None = None
+    task_reason: str = ""
     status_role: str = "company"
     retry_limit: int | None = None
 
@@ -312,6 +313,14 @@ CODEX_RETRY_LIMIT_SET_RE = re.compile(
 )
 CODEX_RETRY_LIMIT_GET_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?codex\s+no-request\s+retry\s+limit\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+REVIEW_TASK_ACTION_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(defer|restore)\s+review\s+task\s+([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+REVIEW_CHAIN_DEFER_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?defer\s+qa\s+and\s+security\s+reviews\s+for\s+(?:task\s+)?([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 STATUS_ROLE_RE = re.compile(r"^\s*(ceo|cto|cpo|cfo|coo|product manager|pm|architect|developer|qa|security|devops|cmo|marketing|sales|governance|audit)[, :]\s*(?:give me|show me|provide)?\s*(?:the\s+)?(?:company\s+)?(?:department\s+)?status(?:\s+report)?\s*[?.!]*\s*$", re.IGNORECASE)
@@ -389,6 +398,29 @@ def parse_founder_command(text: str) -> FounderCommand:
         return FounderCommand("set_codex_retry_limit", text.strip(), retry_limit=total_attempts)
     if CODEX_RETRY_LIMIT_GET_RE.fullmatch(text):
         return FounderCommand("get_codex_retry_limit", text.strip())
+    match = REVIEW_TASK_ACTION_RE.fullmatch(text)
+    if match:
+        try:
+            task_id = str(uuid.UUID(match.group(2)))
+        except ValueError as exc:
+            raise ValueError("Review task action needs a valid task ID") from exc
+        reason = match.group(3).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Review task reason must contain 8 to 500 characters")
+        return FounderCommand(
+            "defer_review_task" if match.group(1).lower() == "defer" else "restore_review_task",
+            text.strip(), task_id=task_id, task_reason=reason,
+        )
+    match = REVIEW_CHAIN_DEFER_RE.fullmatch(text)
+    if match:
+        try:
+            task_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("QA and Security deferral needs a valid QA task ID") from exc
+        reason = match.group(2).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Review task reason must contain 8 to 500 characters")
+        return FounderCommand("defer_review_chain", text.strip(), task_id=task_id, task_reason=reason)
     lowered = text.lower()
     if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
         return FounderCommand("approvals", text.strip())
@@ -444,6 +476,50 @@ class FounderCommandRouter:
             except IntegrationError:
                 return FounderResponse("I couldn't load company status. No company state was changed; check the database connection and try again.")
             return FounderResponse(render_status_brief(status, command.status_role))
+        if command.kind in {"defer_review_task", "restore_review_task", "defer_review_chain"}:
+            procedure = {
+                "defer_review_task": "sutra_founder_defer_task",
+                "restore_review_task": "sutra_founder_restore_deferred_task",
+                "defer_review_chain": "sutra_founder_defer_quality_chain",
+            }[command.kind]
+            task_parameter = "p_qa_task_id" if command.kind == "defer_review_chain" else "p_task_id"
+            try:
+                result = self.store.rpc(procedure, {
+                    "p_founder_telegram_user_id": user_id,
+                    task_parameter: command.task_id,
+                    "p_reason": command.task_reason,
+                })
+            except IntegrationError:
+                action = "restore" if command.kind == "restore_review_task" else "defer"
+                return FounderResponse(
+                    f"I couldn't {action} that review task. The database did not confirm a change; "
+                    "check the task status before trying again."
+                )
+            if command.kind == "defer_review_chain":
+                qa = result.get("qa") if isinstance(result.get("qa"), dict) else {}
+                security = result.get("security") if isinstance(result.get("security"), dict) else {}
+                devops = security.get("released_internal_planning_tasks")
+                released_count = len(devops) if isinstance(devops, list) else 0
+                return FounderResponse(
+                    "Founder deferral recorded for QA and Security. Both reviews remain incomplete; "
+                    "no pass or security approval was created. "
+                    f"{released_count} directly dependent internal DevOps planning task(s) were released. "
+                    "This changes no spending, merge, or release authority."
+                )
+            if command.kind == "defer_review_task":
+                released = result.get("released_internal_planning_tasks")
+                released_count = len(released) if isinstance(released, list) else 0
+                return FounderResponse(
+                    f"Founder deferral recorded for the {result.get('role', 'review')} task. "
+                    "The review remains incomplete; no pass evidence was created. "
+                    f"{released_count} directly dependent internal planning task(s) were released. "
+                    "This changes no spending, merge, or release authority."
+                )
+            return FounderResponse(
+                f"Founder restored the {result.get('role', 'review')} task to the ready queue. "
+                "The review must be completed with evidence before later stages can proceed. "
+                "This changes no spending, merge, or release authority."
+            )
         if command.kind == "approvals":
             try:
                 approvals = self.store.founder_pending_approvals(user_id)
@@ -726,6 +802,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         scoped_approvals = [row for row in approvals if row.get("project_id") in scoped_project_ids]
     task_statuses = ("backlog", "ready", "in_progress", "blocked", "review")
     counts = {state: sum(1 for task in scoped_tasks if task.get("status") == state) for state in task_statuses}
+    deferred_reviews = [task for task in scoped_tasks if task.get("status") == "deferred"]
     active_projects = [p for p in scoped_projects if p.get("status") in {"approved", "active", "paused"}]
     blocked_tasks = [t for t in scoped_tasks if t.get("status") == "blocked"]
     department_label = departments.get(str(dept_id), {}).get("name") if dept_id else None
@@ -736,6 +813,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         "Portfolio",
         f"• Active/approved/paused projects: {len(active_projects)}; proposals awaiting decisions: {sum(1 for p in scoped_projects if p.get('status') == 'proposed')}",
         f"• Open work: {sum(counts.values())} tasks — {counts['backlog']} backlog, {counts['ready']} ready, {counts['in_progress']} in progress, {counts['review']} in review, {counts['blocked']} blocked",
+        f"• Deferred QA/Security reviews: {len(deferred_reviews)} (incomplete)",
         f"• Pending approvals: {len(scoped_approvals)}",
         "",
         "Projects in motion",
@@ -771,6 +849,18 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         lines.append(f"• [{task.get('status', 'unknown')}] {title} — {owner}")
     if len(visible_tasks) > 12:
         lines.append(f"• {len(visible_tasks) - 12} more open tasks omitted; see the Supabase task list.")
+    if deferred_reviews:
+        lines.extend(["", "Deferred quality reviews"])
+        for task in deferred_reviews[:6]:
+            owner = agents.get(str(task.get("owner_agent_id")), {}).get("display_name", "Unassigned")
+            title = re.sub(r"\s+", " ", str(task.get("title") or "Review task"))[:84]
+            reason = re.sub(r"\s+", " ", str(task.get("deferred_reason") or "Founder deferral"))[:180]
+            lines.append(f"• [deferred; incomplete] {title} — {owner}; {reason}")
+            task_id = task.get("id")
+            if isinstance(task_id, str) and re.fullmatch(r"[0-9a-f-]{36}", task_id):
+                lines.append(f"  Restore later with: restore review task {task_id} because <reason>")
+        if len(deferred_reviews) > 6:
+            lines.append(f"• {len(deferred_reviews) - 6} more deferred reviews omitted; see the Supabase task list.")
     failed_codex_tasks = []
     for task in scoped_tasks:
         run = runs_by_task.get(str(task.get("id")), {})
