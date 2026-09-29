@@ -846,10 +846,39 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
                 explanation = f"latest dispatch error: {str(code)[:48]}"
             elif dispatch.get("status") == "creating":
                 explanation = "GitHub issue handoff is in progress"
+            elif (
+                dispatch.get("status") == "created"
+                and dispatch.get("pull_request_number")
+                and dispatch.get("pull_request_merged") is True
+                and dispatch.get("ci_conclusion") == "success"
+                and isinstance(dispatch.get("pull_request_head_sha"), str)
+                and dispatch.get("pull_request_head_sha")
+                == dispatch.get("ci_head_sha")
+            ):
+                explanation = "merged PR passed CI on the same commit"
+            elif dispatch.get("status") == "created" and dispatch.get("pull_request_number"):
+                if dispatch.get("pull_request_merged") is True:
+                    conclusion = dispatch.get("ci_conclusion")
+                    if isinstance(conclusion, str) and re.fullmatch(r"[a-z_]{1,24}", conclusion):
+                        explanation = f"PR is merged; matching CI conclusion is {conclusion}"
+                    else:
+                        explanation = "PR is merged; matching CI evidence is pending"
+                elif (
+                    dispatch.get("ci_conclusion") == "success"
+                    and isinstance(dispatch.get("pull_request_head_sha"), str)
+                    and dispatch.get("pull_request_head_sha") == dispatch.get("ci_head_sha")
+                ):
+                    explanation = "open PR passed CI on the same commit; merge is pending"
+                else:
+                    explanation = "GitHub PR is open; matching successful CI or merge evidence is pending"
+            elif dispatch.get("status") == "created":
+                explanation = "GitHub issue created; pull request evidence is pending"
+            elif dispatch.get("status") == "failed":
+                explanation = "GitHub dispatch failed without a recorded error code"
             else:
-                explanation = "GitHub delivery needs attention"
+                explanation = f"GitHub dispatch state is {str(dispatch.get('status') or 'unknown')[:24]}"
             attempts = dispatch.get("attempts")
-            attempt_text = f"; attempt {attempts}/3" if isinstance(attempts, int) else ""
+            attempt_text = f"; dispatch attempts {attempts}/3" if isinstance(attempts, int) else ""
             pull_request_number = dispatch.get("pull_request_number")
             pull_request_line = ""
             if isinstance(pull_request_number, int) and not isinstance(pull_request_number, bool):
