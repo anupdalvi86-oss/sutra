@@ -27,6 +27,16 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder'
   and action='founder.kimi_usage_probe_requested'
   and resource_id=(select payload->>'probe_id' from first_probe)),
   'probe request is founder-audited');
+select ok(exists(select 1 from public.audit_log where actor_type='founder'
+  and action='founder.kimi_usage_probe_requested'
+  and resource_id=(select payload->>'probe_id' from first_probe)
+  and details ? 'one_hermes_invocation' and details->>'max_model_iterations'='3'
+  and not (details ? 'one_provider_request')),
+  'audit records the actual Hermes iteration bound instead of promising one upstream call');
+select ok((select rationale like '%up to three upstream model requests%'
+  from public.decisions where project_id=(select (payload->>'project_id')::uuid from first_probe)
+  and decision_type='founder_operational_authorization'),
+  'founder decision records Hermes model-iteration exposure');
 
 insert into probe_claim
 select public.sutra_claim_agent_run('sutra-worker-12345678');
