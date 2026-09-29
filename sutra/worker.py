@@ -103,9 +103,13 @@ def _response_context_shape(envelope: Any) -> str:
 class AgentOutputError(ValueError):
     """Hermes did not return a bounded, attributable role artifact."""
 
-    def __init__(self, message: str, usage: dict[str, Any] | None = None):
+    def __init__(self, message: str, usage: dict[str, Any] | None = None,
+                 usage_envelope_shape: str | None = None):
         super().__init__(message)
         self.usage = usage
+        # This is generated from a fixed set of JSON value types and field names;
+        # it never contains provider response text or token values.
+        self.usage_envelope_shape = usage_envelope_shape
         # Persist only a small code-owned category on run failures. Never store
         # model response text or a raw exception string in Supabase diagnostics.
         self.failure_category = (
@@ -403,6 +407,7 @@ class HermesAgentClient:
             raise
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise IntegrationError("Hermes review request failed") from exc
+        usage_shape = _usage_envelope_shape(envelope)
         usage = envelope.get("usage") if isinstance(envelope, dict) else None
         if not isinstance(usage, dict):
             safe_provider, safe_model = _safe_usage_route(provider, model)
@@ -430,20 +435,21 @@ class HermesAgentClient:
         try:
             content = envelope["choices"][0]["message"]["content"]
             if not isinstance(content, str) or len(content.encode()) > 24_000:
-                raise AgentOutputError("Hermes returned no bounded artifact")
+                raise AgentOutputError("Hermes returned no bounded artifact", usage, usage_shape)
             content = content.strip()
             if content.startswith("```"):
                 fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n?(.*?)\r?\n?```", content, flags=re.IGNORECASE | re.DOTALL)
                 if not fenced:
-                    raise AgentOutputError("Hermes returned malformed JSON fencing", usage)
+                    raise AgentOutputError("Hermes returned malformed JSON fencing", usage, usage_shape)
                 content = fenced.group(1).strip()
             result = json.loads(content)
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise AgentOutputError("Hermes returned malformed JSON", usage) from exc
+            raise AgentOutputError("Hermes returned malformed JSON", usage, usage_shape) from exc
         try:
             return validate_agent_artifact(role, result, run), usage
         except AgentOutputError as exc:
             exc.usage = usage
+            exc.usage_envelope_shape = usage_shape
             raise
 
 
@@ -743,13 +749,16 @@ class AgentWorker:
             except IntegrationError:
                 return "spend_reconciliation_pending"
             if spend_status != "reconciled":
+                output = {
+                    "summary": "Hermes artifact failed validation and usage could not be verified",
+                    "failure_category": exc.failure_category,
+                    "failure_detail_code": exc.failure_detail_code,
+                    "usage_state": "unverified",
+                }
+                if exc.usage_envelope_shape is not None:
+                    output["usage_envelope_shape"] = exc.usage_envelope_shape
                 self.store.complete_agent_run(self.worker_id, run, "failed",
-                    {
-                        "summary": "Hermes artifact failed validation and usage could not be verified",
-                        "failure_category": exc.failure_category,
-                        "failure_detail_code": exc.failure_detail_code,
-                        "usage_state": "unverified",
-                    }, "unknown_or_overrun_spend")
+                    output, "unknown_or_overrun_spend")
                 return "failed_unknown_spend"
             self.store.complete_agent_run(self.worker_id, run, "retry", {
                 "summary": "Agent output failed schema or evidence validation",

@@ -472,6 +472,10 @@ class AgentArtifactTests(unittest.TestCase):
                 ).review(claimed_run(), max_output_tokens=500)
         self.assertEqual(raised.exception.failure_category, "invalid_hermes_response")
         self.assertEqual(raised.exception.failure_detail_code, "malformed_json")
+        self.assertEqual(
+            raised.exception.usage_envelope_shape,
+            "usage_object:prompt_tokens=int,completion_tokens=int,total_tokens=missing",
+        )
         self.assertEqual(raised.exception.usage["completion_tokens"], 40)
 
     def test_model_request_over_input_ceiling_never_reaches_hermes(self):
@@ -535,7 +539,10 @@ class AgentArtifactTests(unittest.TestCase):
     def test_invalid_hermes_response_records_only_a_safe_failure_category(self):
         store = self.approved_store("cpo")
         hermes = Mock()
-        hermes.review.side_effect = AgentOutputError("Hermes returned malformed JSON including untrusted response")
+        hermes.review.side_effect = AgentOutputError(
+            "Hermes returned malformed JSON including untrusted response",
+            usage_envelope_shape="usage_missing",
+        )
         worker = AgentWorker(store, hermes, "openai", "gpt-4o-mini", worker_id="sutra-worker-12345678")
 
         self.assertEqual(worker.run_once(), "failed_unknown_spend")
@@ -543,6 +550,7 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertEqual(output["failure_category"], "invalid_hermes_response")
         self.assertEqual(output["failure_detail_code"], "malformed_json")
         self.assertEqual(output["usage_state"], "unverified")
+        self.assertEqual(output["usage_envelope_shape"], "usage_missing")
         self.assertNotIn("untrusted response", str(output))
 
     def test_unavailable_hermes_retains_reserve_and_fails_run(self):
