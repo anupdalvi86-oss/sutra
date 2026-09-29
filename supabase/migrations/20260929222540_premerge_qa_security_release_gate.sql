@@ -280,8 +280,8 @@ begin
   if old.pull_request_head_sha is distinct from new.pull_request_head_sha then
     with recursive descendants(id,depth) as (
       select t.id,1 from public.tasks t where t.parent_task_id=new.task_id
-      union all select child.id,parent.depth+1 from public.tasks child
-        join descendants parent on child.parent_task_id=parent.id where parent.depth<8
+      union all select descendant_task.id,parent.depth+1 from public.tasks descendant_task
+        join descendants parent on descendant_task.parent_task_id=parent.id where parent.depth<8
     )
     update public.agent_runs r set status='failed',finished_at=now(),lease_token=null,lease_expires_at=null,
       output=coalesce(r.output,'{}'::jsonb)||jsonb_build_object('failure','developer_commit_changed')
@@ -358,7 +358,7 @@ create function public.sutra_claim_ready_code_release(p_worker_id text)
 returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare dispatch_row public.github_task_dispatches%rowtype; task_row public.tasks%rowtype;
   attempt_row public.code_release_attempts%rowtype; authorization_row public.founder_code_authorizations%rowtype;
-  qa_task_id uuid; security_task_id uuid; claim_id uuid; claim_token uuid;
+  qa_task_id uuid; security_task_id uuid; claim_id uuid; claim_token_value uuid;
 begin
   if p_worker_id is null or p_worker_id !~ '^sutra-worker-[a-z0-9]{8,64}$' then
     raise exception 'invalid code release worker identity' using errcode='22023';
@@ -415,14 +415,14 @@ begin
       lease_expires_at=now()+interval '10 minutes',detail_code=null,updated_at=now()
       where code_release_attempts.status<>'merged' and code_release_attempts.attempt_count<3
         and (code_release_attempts.status='blocked' or code_release_attempts.lease_expires_at<now())
-    returning id,claim_token into claim_id,claim_token;
+    returning id,claim_token into claim_id,claim_token_value;
   if claim_id is null then return null; end if;
   insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)
     values('system',p_worker_id,'github.code_release_claimed','task',dispatch_row.task_id::text,
       jsonb_build_object('release_attempt_id',claim_id,'pull_request_number',dispatch_row.pull_request_number,
         'head_sha',dispatch_row.pull_request_head_sha,'attempt',
         (select attempt_count from public.code_release_attempts where id=claim_id)));
-  return jsonb_build_object('attempt_id',claim_id,'claim_token',claim_token,'task_id',dispatch_row.task_id,
+  return jsonb_build_object('attempt_id',claim_id,'claim_token',claim_token_value,'task_id',dispatch_row.task_id,
     'pull_request_number',dispatch_row.pull_request_number,'pull_request_url',dispatch_row.pull_request_url,
     'head_sha',dispatch_row.pull_request_head_sha,'repository',authorization_row.repository);
 end;
