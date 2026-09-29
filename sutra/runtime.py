@@ -785,7 +785,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         dispatch = dispatch_by_task.get(str(task.get("id")), {})
         pull_request_number = dispatch.get("pull_request_number")
         if isinstance(pull_request_number, int) and not isinstance(pull_request_number, bool):
-            pull_request_state = "merged" if dispatch.get("pull_request_merged") is True else "open"
+            pull_request_state = "merged" if dispatch.get("pull_request_merged") is True else "not merged"
             explanation += f"; GitHub PR #{pull_request_number} is {pull_request_state}"
             if not dispatch.get("ci_conclusion"):
                 explanation += " and CI evidence has not been recorded"
@@ -832,7 +832,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             pull_request_number = dispatch.get("pull_request_number")
             pull_request_line = ""
             if isinstance(pull_request_number, int) and not isinstance(pull_request_number, bool):
-                pull_request_state = "merged" if dispatch.get("pull_request_merged") is True else "open"
+                pull_request_state = "merged" if dispatch.get("pull_request_merged") is True else "not merged"
                 pull_request_line = f"; PR #{pull_request_number} {pull_request_state}"
                 pull_request_url = dispatch.get("pull_request_url")
                 if isinstance(pull_request_url, str) and re.fullmatch(

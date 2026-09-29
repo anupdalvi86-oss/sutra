@@ -146,8 +146,8 @@ class FounderCommandTests(unittest.TestCase):
 
         reply = render_status_brief(snapshot, "ceo")
 
-        self.assertIn("Implement approved task — owned by Product Manager; latest failed run recorded codex_process_failed; GitHub PR #160 is open and CI evidence has not been recorded.", reply)
-        self.assertIn("PR #160 open (https://github.com/anupdalvi86-oss/sutra/pull/160); CI evidence not recorded", reply)
+        self.assertIn("Implement approved task — owned by Product Manager; latest failed run recorded codex_process_failed; GitHub PR #160 is not merged and CI evidence has not been recorded.", reply)
+        self.assertIn("PR #160 not merged (https://github.com/anupdalvi86-oss/sutra/pull/160); CI evidence not recorded", reply)
         self.assertNotIn("no PR was produced", reply)
 
     def test_delivery_health_is_scoped_to_company_and_engineering_roles(self):
