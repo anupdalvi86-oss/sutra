@@ -363,9 +363,63 @@ select ok((select payload->>'reservation_id' from retry_attempt_two_reservation)
   <> (select payload->>'reservation_id' from retry_attempt_reservation),
   'retry creates a distinct spend reservation without rewriting the prior attempt');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'retry',
+  '{"summary":"PM artifact schema was invalid","failure_category":"invalid_agent_output","failure_detail_code":"invalid_artifact_schema","usage_state":"reconciled"}'::jsonb,
+  'invalid_agent_output')$$,'second PM schema failure uses the bounded third attempt');
+truncate worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+select is((select role from worker_claims),'product_manager','third standard attempt remains the same PM stage');
+select is((select attempt_count from public.agent_runs where id=(select run_id from worker_claims)),3,
+  'standard PM retry limit stops at three attempts');
+create temporary table retry_attempt_three_reservation(payload jsonb) on commit drop;
+insert into retry_attempt_three_reservation
+select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims));
+select is((select payload->>'status' from retry_attempt_three_reservation),'approved',
+  'third standard PM attempt requires its own central spend reservation');
+select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'retry',
+  '{"summary":"PM artifact schema was invalid","failure_category":"invalid_agent_output","failure_detail_code":"invalid_artifact_schema","usage_state":"reconciled"}'::jsonb,
+  'invalid_agent_output')$$,'third schema failure becomes terminal');
+create temporary table final_pm_recovery(payload jsonb) on commit drop;
+insert into final_pm_recovery
+select public.sutra_founder_retry_pm_review('12345678',(select run_id from worker_claims));
+select is((select payload->>'final_recovery_attempt' from final_pm_recovery),'true',
+  'founder can authorize one final recovery only for a reconciled PM schema failure');
+select is((select payload->>'preserved_unknown_reservations' from final_pm_recovery),'1',
+  'final recovery preserves the earlier unknown reservation');
+select ok(exists(select 1 from public.audit_log where action='founder.pm_review_final_recovery_requested'
+  and resource_id=(select run_id::text from worker_claims)),
+  'final recovery is separately audit logged');
+truncate worker_claims;
+with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
+insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
+select is((select role from worker_claims),'product_manager','final recovery reclaims only the same PM stage');
+select is((select attempt_count from public.agent_runs where id=(select run_id from worker_claims)),4,
+  'founder recovery is exactly one fourth attempt');
+reset role;
+update public.agent_runs set output=output-'founder_pm_recovery' where id=(select run_id from worker_claims);
+set local role service_role;
+select throws_ok($$select public.sutra_reserve_agent_run_spend_from_profile('sutra-worker-12345678',
+  (select run_id from worker_claims),(select lease_token from worker_claims),'openai','gpt-4o-mini-test-cheap')$$,
+  '42501',null,'a fourth model reservation requires the founder recovery marker');
+reset role;
+update public.agent_runs set output=output||jsonb_build_object('founder_pm_recovery','requested') where id=(select run_id from worker_claims);
+set local role service_role;
+create temporary table final_pm_recovery_reservation(payload jsonb) on commit drop;
+insert into final_pm_recovery_reservation
+select pg_temp.prepare_agent_run_spend((select run_id from worker_claims),
+  (select lease_token from worker_claims));
+select is((select payload->>'status' from final_pm_recovery_reservation),'approved',
+  'final recovery still requires a fresh central reservation');
+select ok((select payload->>'reservation_id' from final_pm_recovery_reservation)
+  <> (select payload->>'reservation_id' from retry_attempt_three_reservation),
+  'final recovery cannot reuse a prior attempt reservation');
+select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
   '{"summary":"A sufficiently long PM summary","recommendation":"Founder review is ready","evidence":[],"milestones":["Discovery"]}'::jsonb)$$,
-  'second PM attempt stores its artifact after spend reconciliation');
+  'final PM recovery can persist its valid artifact after spend reconciliation');
 select ok(exists(select 1 from jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') item
   where item->>'ready'='true' and item->'pending_roles'='[]'::jsonb),
   'founder queue becomes ready after all department and PM reviews succeed');
@@ -798,15 +852,15 @@ reset role;
 select ok((select count(*) from public.audit_log where action='spending.authorization_requested') >= 7,'authorization decisions are audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.succeeded'),5,
   'each executed department review is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),11,
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reconciled'),13,
   'each Hermes and Codex model usage reconciliation is audit logged');
-select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),12,
+select is((select count(*)::integer from public.audit_log where action='agent_run.spend_reserved'),14,
   'each Hermes and Codex model spend reservation decision is audit logged');
 select is((select count(*)::integer from public.audit_log where action='task.artifact_submitted'),5,
   'every persisted internal role artifact is audit logged');
 select is((select count(*)::integer from public.audit_log where action='agent_run.spend_approval_resumed'),1,
   'approval-driven model run resumption is audit logged');
-select is((select count(*)::integer from public.expenses where actual_amount=0.01),11,
+select is((select count(*)::integer from public.expenses where actual_amount=0.01),13,
   'actual Hermes and Codex model usage is reconciled into its authoritative expense');
 
 -- Exercise every configurable budget scope and every supported period. Use
