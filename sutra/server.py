@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .codex_runner import CodexTaskRunner
+from .code_release import CodeReleaseWorker
 from .drafts import DraftNotFound, DraftRequestError, DraftService, UserScopedSupabase
 from .github_webhook import normalize_github_event, verify_github_signature
 from .runtime import (
@@ -102,6 +103,8 @@ class SutraApplication:
         self.github_dispatcher_status = "disabled"
         self.codex_runner_thread: threading.Thread | None = None
         self.codex_runner_status = "disabled"
+        self.code_release_thread: threading.Thread | None = None
+        self.code_release_status = "disabled"
         self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
         # Keep the synthetic prototype local-only, even if a hosted service is mislabeled.
@@ -218,6 +221,25 @@ class SutraApplication:
                         self.codex_runner_status = "running"
                 except (IntegrationError, ValueError, OSError):
                     self.codex_runner_status = "blocked_runtime_configuration"
+        if os.environ.get("SUTRA_ENABLE_CODE_RELEASE_WORKER", "false").lower() == "true":
+            github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+            github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+            if (not self.store or not github_token
+                    or github_repository != "anupdalvi86-oss/sutra"
+                    or len(self.github_webhook_secret) < 32):
+                self.code_release_status = "blocked_runtime_configuration"
+            else:
+                try:
+                    issues = GitHubIssues(github_token, github_repository,
+                                          self.github_webhook_secret)
+                    worker = CodeReleaseWorker(self.store, issues)
+                    self.code_release_thread = threading.Thread(
+                        target=worker.run, args=(self.telegram_stop,), daemon=True,
+                        name="sutra-code-release-worker")
+                    self.code_release_thread.start()
+                    self.code_release_status = "running"
+                except ValueError:
+                    self.code_release_status = "blocked_runtime_configuration"
         if os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
             if not self.store or not self.router or not self.telegram_token:
                 self.telegram_status = "unconfigured"
@@ -273,6 +295,7 @@ class SutraApplication:
             "agent_worker": self.agent_worker_status,
             "github_dispatcher": self.github_dispatcher_status,
             "codex_runner": self.codex_runner_status,
+            "code_release_worker": self.code_release_status,
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
         }
 
@@ -286,6 +309,7 @@ class SutraApplication:
             "agent_worker": health["agent_worker"],
             "github_dispatcher": health["github_dispatcher"],
             "codex_runner": health["codex_runner"],
+            "code_release_worker": health["code_release_worker"],
             "github_webhook": health["github_webhook"],
         }
         blockers = []
@@ -295,6 +319,7 @@ class SutraApplication:
         worker_enabled = os.environ.get("SUTRA_ENABLE_AGENT_WORKER", "false").lower() == "true"
         dispatcher_enabled = os.environ.get("SUTRA_ENABLE_GITHUB_DISPATCHER", "false").lower() == "true"
         codex_enabled = os.environ.get("SUTRA_ENABLE_CODEX_RUNNER", "false").lower() == "true"
+        code_release_enabled = os.environ.get("SUTRA_ENABLE_CODE_RELEASE_WORKER", "false").lower() == "true"
         if telegram_enabled and health["telegram"] != "running":
             blockers.append("telegram")
         if worker_enabled and health["agent_worker"] != "running":
@@ -308,6 +333,8 @@ class SutraApplication:
                 blockers.append("github_webhook")
         if codex_enabled and health["codex_runner"] != "running":
             blockers.append("codex_runner")
+        if code_release_enabled and health["code_release_worker"] != "running":
+            blockers.append("code_release_worker")
         ready = not blockers
         return {
             "status": "ready" if ready else "not_ready",
@@ -327,6 +354,8 @@ class SutraApplication:
             self.github_dispatcher_thread.join(timeout=2)
         if self.codex_runner_thread:
             self.codex_runner_thread.join(timeout=2)
+        if self.code_release_thread:
+            self.code_release_thread.join(timeout=2)
 
 
 class SutraHandler(BaseHTTPRequestHandler):

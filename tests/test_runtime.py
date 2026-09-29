@@ -285,6 +285,22 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("matching successful CI or merge evidence is pending", reply)
         self.assertNotIn("open PR passed CI on the same commit", reply)
 
+    def test_company_status_reports_premerge_review_and_release_state(self):
+        snapshot = status_fixture()
+        snapshot["github_dispatches"] = [{
+            "task_id": "developer-task", "task_title": "Implement approved product tasks",
+            "status": "created", "pull_request_number": 160,
+            "pull_request_merged": False, "pull_request_head_sha": "a" * 40,
+            "ci_conclusion": "success", "ci_head_sha": "a" * 40,
+        }]
+        snapshot["code_releases"] = [{
+            "task_id": "developer-task", "status": "blocked",
+            "detail_code": "github_permission_denied",
+        }]
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("automatic merge is blocked (github_permission_denied)", reply)
+        self.assertNotIn("open PR passed CI on the same commit; QA/Security review or merge is pending", reply)
+
     def test_company_status_surfaces_metered_codex_process_failure(self):
         snapshot = status_fixture()
         snapshot["tasks"].append({"id": "codex-task", "title": "Implement approved task",
@@ -548,9 +564,10 @@ class FounderCommandTests(unittest.TestCase):
 
     def test_status_snapshot_reads_projects_tasks_approvals_and_financial_controls(self):
         expected = status_fixture()
+        expected["code_releases"] = []
         store = SupabaseREST("https://sutra.example", "server-key")
         store.request = Mock(side_effect=[expected[key] for key in expected if key != "github_dispatches"])
-        store.rpc = Mock(return_value={"dispatches": expected["github_dispatches"]})
+        store.rpc = Mock(side_effect=[{"dispatches": expected["github_dispatches"]}, []])
         expected.pop("legal_escalations")
         self.assertEqual(store.company_status(), expected)
         requested_paths = [call.args[0] for call in store.request.call_args_list]
@@ -567,14 +584,17 @@ class FounderCommandTests(unittest.TestCase):
                             for path in requested_paths))
         self.assertTrue(any(path.startswith("campaigns?") and "budget_amount" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("customers?") and "email" not in path for path in requested_paths))
-        store.rpc.assert_called_once_with("sutra_company_github_dispatch_status", {})
+        self.assertEqual(store.rpc.call_args_list, [
+            unittest.mock.call("sutra_company_github_dispatch_status", {}),
+            unittest.mock.call("sutra_company_code_release_status", {}),
+        ])
 
     def test_status_snapshot_rejects_partial_or_malformed_database_responses(self):
         store = SupabaseREST("https://sutra.example", "server-key")
         malformed_responses = [[] for _ in range(13)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
-        store.rpc = Mock(return_value={"dispatches": []})
+        store.rpc = Mock(side_effect=[{"dispatches": []}, []])
         with self.assertRaises(IntegrationError):
             store.company_status()
 

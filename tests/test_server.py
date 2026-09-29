@@ -566,6 +566,47 @@ class InternalEndpointTests(unittest.TestCase):
         self.assertEqual(app.codex_runner_status, "blocked_model_profile")
         self.assertIsNone(app.codex_runner_thread)
 
+    def test_code_release_worker_requires_fixed_repository_and_github_credentials(self):
+        with patch.dict("os.environ", {
+            "SUTRA_ENABLE_CODE_RELEASE_WORKER": "true",
+            "GITHUB_TOKEN": "unit-test-token",
+            "GITHUB_REPOSITORY": "acme/sutra",
+            "GITHUB_WEBHOOK_SECRET": "test-only-github-webhook-secret-long-enough",
+        }, clear=False):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+        self.assertEqual(app.code_release_status, "blocked_runtime_configuration")
+        self.assertIsNone(app.code_release_thread)
+        self.assertIn("code_release_worker", app.readiness()["checks"])
+
+    def test_code_release_worker_starts_without_model_credentials_when_explicitly_enabled(self):
+        class IdleReleaseWorker:
+            def __init__(self, store, github):
+                self.store = store
+                self.github = github
+
+            def run(self, stop):
+                stop.wait(0.01)
+
+        env = {
+            "SUTRA_ENABLE_CODE_RELEASE_WORKER": "true",
+            "GITHUB_TOKEN": "unit-test-token",
+            "GITHUB_REPOSITORY": "anupdalvi86-oss/sutra",
+            "GITHUB_WEBHOOK_SECRET": "test-only-github-webhook-secret-long-enough",
+            "OPENAI_API_KEY": "",
+        }
+        with patch.dict("os.environ", env, clear=False), patch(
+            "sutra.server.CodeReleaseWorker", IdleReleaseWorker
+        ):
+            app = SutraApplication()
+            app.store = FakeStore()
+            app.start()
+            self.assertEqual(app.code_release_status, "running")
+            self.assertIsNotNone(app.code_release_thread)
+            self.assertEqual(app.health()["code_release_worker"], "running")
+            app.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,9 @@ select throws_ok($$select public.sutra_founder_record_code_authorization('876543
   'Founder authorizes code delivery in Sutra repository')$$,
   '42501',null,'non-founder cannot record standing code authority');
 
-create temporary table standing_code_fixture(authorization_id uuid,task_id uuid,project_id uuid) on commit drop;
+create temporary table standing_code_fixture(
+  authorization_id uuid,task_id uuid,project_id uuid,qa_task_id uuid,security_task_id uuid
+) on commit drop;
 insert into standing_code_fixture(authorization_id)
 select (public.sutra_founder_record_code_authorization('12345678',
   'Founder standing approval: Sutra repository code changes, tasks, branches, pull requests, merge, QA, Security, and deployment. No spending authority.')
@@ -55,6 +57,105 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder'
   and action='founder.standing_code_task_created'
   and resource_id=(select task_id::text from standing_code_fixture)),
   'fresh Developer task and zero budget are recorded in the audit log');
+
+select ok(not (select has_table_privilege('service_role','public.code_release_attempts','select')),
+  'service role cannot bypass release authorization through direct table access');
+select is(public.sutra_claim_ready_code_release('sutra-worker-release1234')::text,null::text,
+  'a standing grant alone cannot claim a merge without CI and independent reviews');
+
+insert into public.tasks(project_id,title,description,acceptance_criteria,task_type,status,
+  owner_agent_id,assigned_agent_id,parent_task_id)
+select d.project_id,'Review tested PR acceptance criteria','Run bounded pre-merge QA for this PR.',
+  '["Acceptance criteria have evidence","Failures are recorded"]'::jsonb,'engineering','backlog',qa.id,qa.id,d.id
+from public.tasks d join public.agents qa on qa.slug='qa'
+where d.id=(select task_id from standing_code_fixture)
+returning id;
+
+update standing_code_fixture set qa_task_id=(select id from public.tasks
+  where title='Review tested PR acceptance criteria' order by created_at desc limit 1);
+insert into public.tasks(project_id,title,description,acceptance_criteria,task_type,status,
+  owner_agent_id,assigned_agent_id,parent_task_id)
+select q.project_id,'Review tested PR security','Run bounded security checks for this PR.',
+  '["Security findings have severity and owner","Release blockers are explicit"]'::jsonb,
+  'engineering','backlog',sec.id,sec.id,q.id
+from public.tasks q join public.agents sec on sec.slug='security'
+where q.id=(select qa_task_id from standing_code_fixture)
+returning id;
+update standing_code_fixture set security_task_id=(select id from public.tasks
+  where title='Review tested PR security' order by created_at desc limit 1);
+
+insert into public.github_task_dispatches(task_id,status,attempts,issue_number,issue_url,
+  pull_request_number,pull_request_url,pull_request_head_sha,pull_request_merged,
+  ci_conclusion,ci_run_url,ci_head_sha)
+select task_id,'created',1,41,'https://github.com/anupdalvi86-oss/sutra/issues/41',
+  51,'https://github.com/anupdalvi86-oss/sutra/pull/51',repeat('a',40),false,
+  'failure','https://github.com/anupdalvi86-oss/sutra/actions/runs/201',repeat('a',40)
+from standing_code_fixture;
+update public.github_task_dispatches set ci_conclusion='success'
+where task_id=(select task_id from standing_code_fixture);
+select is((select status from public.tasks where id=(select qa_task_id from standing_code_fixture)),
+  'ready','matching successful CI on the open PR releases QA before merge');
+select is(public.sutra_claim_ready_code_release('sutra-worker-release1234')::text,null::text,
+  'CI alone cannot authorize merge before QA and Security evidence');
+
+create temporary table release_claim(payload jsonb) on commit drop;
+insert into release_claim select public.sutra_claim_task_review_agent_run('sutra-worker-qa12345678');
+select is((select payload->'task_review'->>'tested_commit_sha' from release_claim),repeat('a',40),
+  'pre-merge QA receives the exact open PR head that passed CI');
+select lives_ok($$select public.sutra_submit_task_review(
+  (select id from public.agents where slug='qa'),
+  (select qa_task_id from standing_code_fixture),
+  jsonb_build_object('result','pass','summary','Current open PR passed manual acceptance checks',
+    'tested_commit_sha',repeat('a',40),
+    'acceptance_criteria',jsonb_build_array(
+      jsonb_build_object('criterion','Acceptance criteria have evidence','result','pass','evidence_url','https://github.com/anupdalvi86-oss/sutra/pull/51'),
+      jsonb_build_object('criterion','Failures are recorded','result','pass','evidence_url','https://github.com/anupdalvi86-oss/sutra/actions/runs/201')),
+    'tests',jsonb_build_array(jsonb_build_object('name','acceptance suite','result','pass','evidence_url','https://github.com/anupdalvi86-oss/sutra/actions/runs/201'))))$$,
+  'QA evidence for the current open PR can complete before code is merged');
+select is((select status from public.tasks where id=(select security_task_id from standing_code_fixture)),
+  'ready','QA pass releases Security before merge');
+select is(public.sutra_claim_ready_code_release('sutra-worker-release1234')::text,null::text,
+  'QA alone cannot authorize merge before Security evidence');
+truncate release_claim;
+insert into release_claim select public.sutra_claim_task_review_agent_run('sutra-worker-security123');
+select is((select payload->'task_review'->>'tested_commit_sha' from release_claim),repeat('a',40),
+  'pre-merge Security receives the same CI-tested open PR head');
+select lives_ok($$select public.sutra_submit_task_review(
+  (select id from public.agents where slug='security'),
+  (select security_task_id from standing_code_fixture),
+  jsonb_build_object('result','pass','summary','Current open PR has no release blockers',
+    'tested_commit_sha',repeat('a',40),
+    'acceptance_criteria',jsonb_build_array(
+      jsonb_build_object('criterion','Security findings have severity and owner','result','pass','evidence_url','https://github.com/anupdalvi86-oss/sutra/pull/51'),
+      jsonb_build_object('criterion','Release blockers are explicit','result','pass','evidence_url','https://github.com/anupdalvi86-oss/sutra/actions/runs/201')),
+    'findings','[]'::jsonb,'release_blockers','[]'::jsonb,
+    'checks',jsonb_build_array(jsonb_build_object('name','dependency and secret checks','result','pass','evidence_url','https://github.com/anupdalvi86-oss/sutra/actions/runs/201'))))$$,
+  'Security evidence for the current open PR can complete before code is merged');
+
+truncate release_claim;
+insert into release_claim select public.sutra_claim_ready_code_release('sutra-worker-release1234');
+select ok((select payload->>'attempt_id' is not null and payload->>'head_sha'=repeat('a',40)
+  from release_claim),'merge claim requires same-SHA passing CI, QA and Security evidence');
+select ok(public.sutra_validate_code_release_claim('sutra-worker-release1234',
+  (select (payload->>'attempt_id')::uuid from release_claim),
+  (select (payload->>'claim_token')::uuid from release_claim)),
+  'the live founder grant and all release evidence are rechecked immediately before GitHub write');
+select is((public.sutra_finish_code_release('sutra-worker-release1234',
+  (select (payload->>'attempt_id')::uuid from release_claim),
+  (select (payload->>'claim_token')::uuid from release_claim),'merged',repeat('b',40))->>'status'),
+  'merged','successful squash merge result is persisted through the restricted release RPC');
+select ok(exists(select 1 from public.audit_log where action='github.code_release_merged'
+  and resource_id=(select task_id::text from standing_code_fixture)),
+  'automatic merge result is recorded in the audit log');
+
+update public.github_task_dispatches set pull_request_head_sha=repeat('c',40)
+where task_id=(select task_id from standing_code_fixture);
+select is((select status from public.tasks where id=(select qa_task_id from standing_code_fixture)),
+  'blocked','a new PR head invalidates QA evidence for the older commit');
+select is((select status from public.tasks where id=(select security_task_id from standing_code_fixture)),
+  'backlog','a new PR head invalidates downstream Security and release work');
+select is(public.sutra_claim_ready_code_release('sutra-worker-release1234')::text,null::text,
+  'old QA and Security evidence cannot authorize a changed PR commit');
 
 select lives_ok($$select public.sutra_founder_revoke_code_authorization('12345678',
   (select authorization_id from standing_code_fixture),'Founder test revocation for policy coverage')$$,

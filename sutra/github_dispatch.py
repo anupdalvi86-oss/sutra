@@ -128,6 +128,43 @@ class GitHubIssues:
         return [item for item in runs if isinstance(item, dict)
                 and item.get("name") == "CI" and item.get("status") == "completed"]
 
+    def pull_request_release_state(self, pull_request_number: int) -> dict[str, Any]:
+        """Fetch the minimum GitHub facts needed before a policy-authorized merge."""
+        if isinstance(pull_request_number, bool) or not isinstance(pull_request_number, int) or pull_request_number < 1:
+            raise GitHubAPIError("malformed_github_response")
+        result = self._request(f"/repos/{self.repository}/pulls/{pull_request_number}")
+        if not isinstance(result, dict):
+            raise GitHubAPIError("malformed_github_response")
+        head, base = result.get("head"), result.get("base")
+        if (not isinstance(head, dict) or not isinstance(base, dict)
+                or not isinstance(head.get("sha"), str)
+                or not re.fullmatch(r"[a-f0-9]{40}", head["sha"])
+                or not isinstance(base.get("ref"), str)
+                or not isinstance(result.get("state"), str)
+                or not isinstance(result.get("merged"), bool)
+                or not isinstance(result.get("draft"), bool)
+                or (result.get("merged") and (not isinstance(result.get("merge_commit_sha"), str)
+                    or not re.fullmatch(r"[a-f0-9]{40}", result["merge_commit_sha"])))):
+            raise GitHubAPIError("malformed_github_response")
+        return {"head_sha": head["sha"], "base_ref": base["ref"],
+                "state": result["state"], "merged": result["merged"],
+                "draft": result["draft"], "merge_commit_sha": result.get("merge_commit_sha")}
+
+    def merge_pull_request(self, pull_request_number: int, expected_head_sha: str) -> dict[str, Any]:
+        """Squash merge only the PR head that passed Sutra's database release gate."""
+        if (isinstance(pull_request_number, bool) or not isinstance(pull_request_number, int)
+                or pull_request_number < 1 or not isinstance(expected_head_sha, str)
+                or not re.fullmatch(r"[a-f0-9]{40}", expected_head_sha)):
+            raise GitHubAPIError("malformed_github_response")
+        result = self._request(f"/repos/{self.repository}/pulls/{pull_request_number}/merge",
+                               method="PUT", payload={"sha": expected_head_sha,
+                                                       "merge_method": "squash"})
+        if (not isinstance(result, dict) or result.get("merged") is not True
+                or not isinstance(result.get("sha"), str)
+                or not re.fullmatch(r"[a-f0-9]{40}", result["sha"])):
+            raise GitHubAPIError("malformed_github_response")
+        return {"merged": True, "merge_commit_sha": result["sha"]}
+
     def create_pull_request(self, title: str, body: str, head: str,
                             base: str = "main") -> dict[str, Any]:
         if (not isinstance(title, str) or not title.startswith("Sutra: ") or len(title) > 300
