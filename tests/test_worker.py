@@ -28,7 +28,17 @@ def artifact(role="ceo"):
         result["milestones"] = ["Validate buyer problem", "Define prototype scope"]
         result["acceptance_criteria"] = ["Buyer evidence is documented", "Prototype outcomes are measurable"]
     if role == "cfo":
-        result.update(decision="approve", decision_rationale="The requested budget is reviewable under current policy.")
+        result.update(
+            decision="approve",
+            decision_rationale="The all-in cost estimate fits the founder-set ceiling.",
+            budget_estimate={
+                "estimated_total_eur": 100,
+                "confidence": "medium",
+                "recommended_action": "proceed_within_cap",
+                "line_items": [{"category": "development", "amount_eur": 100,
+                                "basis": "Existing product scope and conservative implementation estimate."}],
+            },
+        )
     return result
 
 
@@ -234,7 +244,7 @@ class AgentArtifactTests(unittest.TestCase):
         task_context = messages[1]["content"]
         self.assertIn('"criterion":"COPY THE ASSIGNED CRITERION VERBATIM"', prompt)
         self.assertIn('"evidence":"Explain where the persisted deliverable satisfies it"', prompt)
-        self.assertIn("Do not claim project approval is missing when the supplied flag is true", prompt)
+        self.assertIn("Do not claim initiative authorization is missing when the supplied flag is true", prompt)
         self.assertIn("The output is recorded", task_context)
         self.assertIn("The handoff is actionable", task_context)
         self.assertIn('"status":"approved"', task_context)
@@ -309,7 +319,19 @@ class AgentArtifactTests(unittest.TestCase):
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cfo", value)
 
-    def test_cfo_prompt_keeps_founder_threshold_as_the_next_approval_gate(self):
+    def test_cfo_estimate_must_have_balanced_all_in_cost_lines(self):
+        value = artifact("cfo")
+        value["budget_estimate"]["line_items"][0]["amount_eur"] = 99
+        with self.assertRaises(AgentOutputError):
+            validate_agent_artifact("cfo", value)
+
+    def test_cfo_estimate_rejects_unknown_categories_and_unbounded_lines(self):
+        value = artifact("cfo")
+        value["budget_estimate"]["line_items"][0]["category"] = "everything"
+        with self.assertRaises(AgentOutputError):
+            validate_agent_artifact("cfo", value)
+
+    def test_cfo_prompt_estimates_all_in_cost_and_escalates_only_budget_or_legal_issues(self):
         response_body = {"choices": [{"message": {"content": json.dumps(artifact("cfo"))}}],
                          "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
         response = Mock()
@@ -320,8 +342,9 @@ class AgentArtifactTests(unittest.TestCase):
             HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-6-luna").review(
                 claimed_run("cfo"), max_output_tokens=500)
         system_prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
-        self.assertIn("never reject solely because founder approval has not happened yet", system_prompt)
-        self.assertIn("no spending occurs until that gate is approved", system_prompt)
+        self.assertIn("Assess whether the founder's explicit all-in initiative ceiling is realistic", system_prompt)
+        self.assertIn("recommended_action", system_prompt)
+        self.assertIn("never raise the cap", system_prompt)
 
     def test_hermes_only_allows_https_or_private_railway_url(self):
         with self.assertRaises(ValueError):

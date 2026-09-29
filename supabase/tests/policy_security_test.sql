@@ -49,28 +49,24 @@ select throws_ok($$select public.sutra_authorize_spend('system','test',null,null
 select throws_ok($$select public.sutra_authorize_spend(null,'test',null,null,null,'ai_api',null,'missing actor',1,'EUR')$$,
   '22023',null,'missing actor type is rejected');
 select is((public.sutra_submit_proposal('12345678','AI QA opportunity','Investigate an AI QA product for software teams',500,'EUR')->>'status'),
-  'pending_founder_approval','valid founder proposal is persisted with approvals');
+  'pending_financial_review','valid founder proposal queues assessment against an explicit ceiling');
 select throws_ok($$select public.sutra_founder_pending_approvals('99999999')$$,
   '42501',null,'nonfounder cannot inspect the founder approval queue');
 create temporary table founder_approval_queue_test as
   select jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') as item;
-select ok(exists(select 1 from founder_approval_queue_test where item->>'approval_id'=(select id::text
-  from public.approvals where approval_type='project_budget' order by created_at desc limit 1)),
-  'founder approval queue includes the pending founder request');
-select ok(exists(select 1 from founder_approval_queue_test
-  where item->>'summary'='CFO review followed by founder approval: proposed maximum budget for AI QA opportunity'),
-  'founder approval queue includes a bounded summary');
-select ok(exists(select 1 from founder_approval_queue_test where (item->>'amount')::numeric=500 and item->>'currency'='EUR'),
-  'founder approval queue shows the requested amount and currency');
-select ok(exists(select 1 from founder_approval_queue_test where item->'pending_roles'='["cfo","product_manager"]'::jsonb),
-  'founder approval queue reports CFO and PM reviews still outstanding');
-select ok(exists(select 1 from founder_approval_queue_test where item->>'ready'='false'),
-  'founder approval queue marks the request as not ready for founder approval');
+select ok(not exists(select 1 from founder_approval_queue_test where item->>'approval_type'='project_budget'),
+  'routine initiative budgets do not enter the founder approval queue');
+select is((select required_roles::text from public.approvals where approval_type='project_budget' order by created_at desc limit 1),
+  '{cfo}','the explicit all-in ceiling receives a CFO assessment');
+select is((select amount::numeric from public.approvals where approval_type='project_budget' order by created_at desc limit 1),
+  500::numeric,'the founder-provided all-in EUR ceiling is persisted');
+select is((select status from public.approvals where approval_type='project_budget' order by created_at desc limit 1),
+  'pending','financial assessment remains pending until CFO review');
 select ok(exists(select 1 from public.audit_log where actor_type='founder' and actor_id='12345678'
   and action='founder.approvals_listed' and resource_type='approval_queue'),
   'founder approval queue reads are audit logged');
 select ok(exists(select 1 from public.agent_runs where trigger_type='founder_proposal' and status='queued'),'workflow roles receive durable queued runs');
-select ok(exists(select 1 from public.tasks where task_type='research' and status='blocked'),'execution work stays blocked before founder approval');
+select ok(exists(select 1 from public.tasks where task_type='research' and status='blocked'),'execution work stays blocked before budget assessment');
 select is(public.sutra_claim_task_agent_run('sutra-worker-12345678')::text,null::text,
   'internal task artifact workers cannot claim tasks before founder project approval');
 select throws_ok($$select public.sutra_founder_decide_approval('12345678',(select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
@@ -301,16 +297,16 @@ select lives_ok($$select pg_temp.prepare_agent_run_spend((select run_id from wor
   (select lease_token from worker_claims))$$,'finance review provider spend is reconciled');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
-  '{"summary":"A sufficiently long CFO summary","recommendation":"Present the budget to the founder","evidence":[],"decision":"approve","decision_rationale":"The proposal is ready for a separate founder decision."}'::jsonb)$$,
-  'CFO artifact records role approval without resolving founder approval');
+  '{"summary":"A sufficiently long CFO summary","recommendation":"Proceed within the assessed ceiling","evidence":[],"decision":"approve","decision_rationale":"The estimated all-in cost fits the explicit founder budget.","budget_estimate":{"estimated_total_eur":420,"confidence":"medium","recommended_action":"proceed_within_cap","line_items":[{"category":"ai_model_usage","amount_eur":2,"basis":"Bounded model use for review and build."},{"category":"development","amount_eur":250,"basis":"Engineering estimate for a small initial release."},{"category":"tools","amount_eur":20,"basis":"Temporary development and testing tools."},{"category":"infrastructure","amount_eur":30,"basis":"Provisioning and operations reserve."},{"category":"hosting","amount_eur":30,"basis":"Initial hosting during delivery and launch."},{"category":"marketing_ads","amount_eur":25,"basis":"Small optional launch experiment."},{"category":"operations","amount_eur":40,"basis":"Support and administration during the work."},{"category":"contingency","amount_eur":23,"basis":"Reserve for routine delivery uncertainty."}]}}'::jsonb)$$,
+  'CFO artifact records its decision and structured all-in cost assessment');
 select is((select status from public.approvals where approval_type='project_budget' limit 1),'pending',
-  'CFO approval leaves founder approval pending');
-select ok(exists(select 1 from jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') item
-  where item->>'ready'='false' and item->'pending_roles'='["product_manager"]'::jsonb),
-  'founder queue remains blocked until the product manager plan succeeds');
+  'CFO review is recorded while PM review is still in progress');
+select ok(not exists(select 1 from jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') item
+  where item->>'approval_type'='project_budget'),
+  'routine CFO and PM review do not ask the founder for another approval');
 select throws_ok($$select public.sutra_founder_decide_approval('12345678',
   (select id from public.approvals where approval_type='project_budget' limit 1),'approve','')$$,
-  '42501',null,'founder approval also waits for the PM review');
+  '42501',null,'founder cannot override the automatic financial review path');
 truncate worker_claims;
 with c as (select public.sutra_claim_agent_run('sutra-worker-12345678') as payload)
 insert into worker_claims select c.payload->'agent'->>'slug',(c.payload->>'run_id')::uuid,(c.payload->>'lease_token')::uuid,(c.payload->>'sequence')::integer from c;
@@ -418,18 +414,14 @@ select ok((select payload->>'reservation_id' from final_pm_recovery_reservation)
   'final recovery cannot reuse a prior attempt reservation');
 select lives_ok($$select public.sutra_complete_agent_run('sutra-worker-12345678',
   (select run_id from worker_claims),(select lease_token from worker_claims),'succeeded',
-  '{"summary":"A sufficiently long PM summary","recommendation":"Founder review is ready","evidence":[],"milestones":["Discovery"]}'::jsonb)$$,
+  '{"summary":"A sufficiently long PM summary","recommendation":"Proceed within the assessed budget","evidence":[],"milestones":["Discovery"]}'::jsonb)$$,
   'final PM recovery can persist its valid artifact after spend reconciliation');
-select ok(exists(select 1 from jsonb_array_elements(public.sutra_founder_pending_approvals('12345678')->'approvals') item
-  where item->>'ready'='true' and item->'pending_roles'='[]'::jsonb),
-  'founder queue becomes ready after all department and PM reviews succeed');
-select lives_ok($$select public.sutra_founder_decide_approval('12345678',
-  (select id from public.approvals where approval_type='project_budget' limit 1),'approve','Proceed')$$,
-  'founder can approve only after CEO, Product, CTO, CFO, and PM reviews');
-select is((select status from public.projects order by created_at desc limit 1),'approved','founder approval activates the proposal');
+select is((select status from public.approvals where approval_type='project_budget' limit 1),'approved',
+  'CFO and PM review automatically approve the initiative inside its founder-set ceiling');
+select is((select status from public.projects order by created_at desc limit 1),'approved','the initiative activates after its reviews fit the ceiling');
 select ok(exists(select 1 from public.tasks where task_type='product' and owner_agent_id=assigned_agent_id),
   'new tasks populate both current and legacy assignee columns');
-select is((select status from public.tasks where task_type='research' order by created_at limit 1),'ready','research becomes executable after approval');
+select is((select status from public.tasks where task_type='research' order by created_at limit 1),'ready','research becomes executable after budgeted activation');
 select is((select count(*)::integer from public.tasks where task_type='engineering' and status='backlog'),7,'engineering through sales handoff tasks are queued');
 create temporary table task_artifact_claim(payload jsonb) on commit drop;
 insert into task_artifact_claim select public.sutra_claim_task_agent_run('sutra-worker-12345678');

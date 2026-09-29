@@ -183,6 +183,31 @@ class InternalEndpointTests(unittest.TestCase):
         self.assertEqual(payload["p_actor_type"], "agent")
         self.assertEqual(payload["p_amount"], 2)
 
+    def test_project_spend_uses_all_in_budget_gate_and_idempotency(self):
+        project_id = "00000000-0000-4000-8000-000000000004"
+        with self.post({
+            "actor_id": "developer", "agent_id": AGENT_ID, "project_id": project_id,
+            "category": "hosting", "vendor": "Railway", "description": "Monthly preview host",
+            "amount": 8, "currency": "EUR", "idempotency_key": "preview-host-2026-10",
+        }, "unit-test-only-token") as response:
+            json.loads(response.read())
+        name, payload = self.app.store.calls[-1]
+        self.assertEqual(name, "sutra_authorize_initiative_cost")
+        self.assertEqual(payload["p_project_id"], project_id)
+        self.assertEqual(payload["p_idempotency_key"], "preview-host-2026-10")
+        self.assertEqual(payload["p_category"], "hosting")
+
+    def test_project_spend_without_idempotency_key_is_rejected(self):
+        project_id = "00000000-0000-4000-8000-000000000004"
+        before = len(self.app.store.calls)
+        with self.assertRaises(HTTPError) as caught:
+            self.post({
+                "actor_id": "developer", "agent_id": AGENT_ID, "project_id": project_id,
+                "category": "hosting", "description": "Monthly preview host", "amount": 8,
+            }, "unit-test-only-token")
+        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(len(self.app.store.calls), before)
+
     def test_malformed_and_oversized_fields_fail_closed(self):
         with self.assertRaises(HTTPError) as caught:
             self.post({"actor_id": "developer", "category": "ai_api", "description": "test", "amount": True}, "unit-test-only-token")

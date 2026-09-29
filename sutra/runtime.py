@@ -240,7 +240,7 @@ class SupabaseREST:
     def company_status(self) -> dict[str, list[dict[str, Any]]]:
         """Read a bounded, factual operating snapshot from authoritative company state."""
         paths = {
-            "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
+            "projects": "projects?select=id,name,status,requested_budget,currency,department_id,owner_agent_id,updated_at,budget_assessment,budget_assessment_status&status=in.(proposed,approved,active,paused)&order=updated_at.desc&limit=50",
             "objectives": "objectives?select=id,project_id,title,status,owner_agent_id&status=in.(proposed,active)&order=created_at&limit=100",
             "tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at,deferred_reason&status=in.(backlog,ready,in_progress,blocked,review,deferred)&order=updated_at.desc&limit=100",
             "completed_tasks": "tasks?select=id,title,status,project_id,owner_agent_id,updated_at&status=eq.done&order=updated_at.desc&limit=20",
@@ -250,6 +250,7 @@ class SupabaseREST:
             "departments": "departments?select=id,slug,name&limit=100",
             "budgets": "budgets?select=scope,scope_key,period,currency,limit_amount,warning_percent,hard_stop&active=eq.true&limit=100",
             "expenses": "expenses?select=amount,currency,status,category,project_id,department_id,agent_id&status=in.(approved,paid,requested)&limit=500",
+            "budget_ledger": "initiative_budget_ledger?select=project_id,category,vendor,reserved_amount,actual_amount,status,currency&limit=1000",
             "campaigns": "campaigns?select=id,project_id,name,channel,status,budget_amount,currency,created_at&order=created_at.desc&limit=100",
             "customers": "customers?select=id,name,company,source,status,updated_at&status=in.(lead,qualified,customer)&order=updated_at.desc&limit=100",
         }
@@ -288,6 +289,9 @@ class FounderCommand:
     task_reason: str = ""
     status_role: str = "company"
     retry_limit: int | None = None
+    project_id: str | None = None
+    new_budget: float | None = None
+    budget_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -299,6 +303,10 @@ class FounderResponse:
 MONEY_PATTERNS = (
     re.compile(r"(?:€|EUR\s*)\s*([0-9]+(?:[.,][0-9]{1,2})?)", re.IGNORECASE),
     re.compile(r"([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:€|EUR)", re.IGNORECASE),
+)
+PROJECT_BUDGET_SET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:increase|change|set)\s+(?:the\s+)?(?:all-in\s+)?(?:budget\s+(?:for\s+)?(?:initiative|project)|(?:initiative|project)\s+budget)\s+([0-9a-f-]{36})\s+to\s+(?:€|EUR\s*)?([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:€|EUR)?\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
 )
 APPROVAL_RE = re.compile(r"^\s*(approve|reject)\s+([0-9a-f-]{36})(?:\s+(.*))?\s*$", re.IGNORECASE)
 PM_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
@@ -315,6 +323,10 @@ CODEX_RETRY_LIMIT_SET_RE = re.compile(
 )
 CODEX_RETRY_LIMIT_GET_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?codex\s+no-request\s+retry\s+limit\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+INITIATIVE_INTENT_RE = re.compile(
+    r"\b(investigate|research|propose|product|initiative|launch|build|develop|create|market|sell|offer|provide|improve|start|deliver|support)\b",
     re.IGNORECASE,
 )
 REVIEW_TASK_ACTION_RE = re.compile(
@@ -343,6 +355,20 @@ def parse_founder_command(text: str) -> FounderCommand:
     match = APPROVAL_RE.fullmatch(text)
     if match:
         return FounderCommand("approval", text.strip(), match.group(2), match.group(1).lower(), match.group(3) or "")
+    match = PROJECT_BUDGET_SET_RE.fullmatch(text)
+    if match:
+        try:
+            project_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Initiative budget change needs a valid project ID") from exc
+        amount = float(match.group(2).replace(",", "."))
+        reason = match.group(3).strip()
+        if not math.isfinite(amount) or amount <= 0 or amount > 999999999999.99:
+            raise ValueError("Initiative budget must be positive and within the supported EUR range")
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Initiative budget change reason must contain 8 to 500 characters")
+        return FounderCommand("set_project_budget", text.strip(), project_id=project_id,
+                              new_budget=amount, budget_reason=reason)
     match = PM_RETRY_RE.fullmatch(text)
     if match:
         try:
@@ -448,8 +474,12 @@ def parse_founder_command(text: str) -> FounderCommand:
             if not math.isfinite(amount) or amount <= 0 or amount > 999999999999.99:
                 raise ValueError("Budget must be positive and within the supported EUR range")
             break
-    if amount is not None and any(phrase in lowered for phrase in ("investigate", "research", "proposal", "product", "prepare")):
+    budget_cue = bool(re.search(r"\b(budget|all[- ]in|maximum|cap|ceiling|spend limit|up to)\b", lowered))
+    initiative_intent = bool(INITIATIVE_INTENT_RE.search(text))
+    if amount is not None and budget_cue and initiative_intent:
         return FounderCommand("proposal", text.strip(), budget=amount)
+    if not lowered.startswith("retry ") and initiative_intent:
+        return FounderCommand("budget_required", text.strip())
     return FounderCommand("unsupported", text.strip())
 
 
@@ -597,6 +627,21 @@ class FounderCommandRouter:
             lines.append("Approve or reject only when ready: approve <approval-id> [comment] / reject <approval-id> [comment].")
             markup = {"inline_keyboard": keyboard} if keyboard else None
             return FounderResponse("\n".join(lines), markup)
+        if command.kind == "set_project_budget":
+            try:
+                result = self.store.rpc("sutra_founder_set_project_budget", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_project_id": command.project_id,
+                    "p_new_budget": command.new_budget,
+                    "p_reason": command.budget_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("The initiative budget was not changed. Only the configured founder can change it, and the new ceiling must cover actual, reserved, and unknown costs.")
+            return FounderResponse(
+                f"Audited all-in budget change for initiative {result.get('project_id')}: "
+                f"€{result.get('old_budget', 0):,.2f} → €{result.get('new_budget', 0):,.2f}. "
+                f"€{result.get('committed', 0):,.2f} is committed; €{result.get('remaining_budget', 0):,.2f} remains."
+            )
         if command.kind == "proposal":
             try:
                 result = self.store.rpc("sutra_submit_proposal", {
@@ -609,10 +654,17 @@ class FounderCommandRouter:
             except IntegrationError:
                 return FounderResponse("I couldn't record that proposal. No project or spending authorization was created; check the database connection and try again.")
             return FounderResponse(
-                "Proposal recorded for CEO → Product → CTO → CFO review, then founder approval.\n"
+                "Initiative recorded for CEO → Product → CTO → CFO → PM review. It will activate automatically only if the CFO's all-in estimate fits your ceiling; a budget gap or legal issue pauses the work for you.\n"
                 f"Project: {result.get('project_id')}\n"
                 f"Approval: {result.get('approval_id')}\n"
-                f"Requested maximum: €{command.budget:,.2f}. No spending is authorized until approval."
+                f"All-in initiative ceiling: €{command.budget:,.2f} EUR, covering model use, development, tools, hosting, marketing, and operations. "
+                "The team must assess whether the ceiling is realistic before committing costs. Any increase pauses for your decision."
+            )
+        if command.kind == "budget_required":
+            return FounderResponse(
+                "Before starting an initiative, give Sutra one all-in EUR maximum covering model use, development, tools, hosting, marketing, and operations. "
+                "Example: Investigate an AI QA product. Maximum all-in budget €500. Prepare a proposal. "
+                "Sutra will assess whether the cap is realistic; any increase requires your decision."
             )
         if command.kind == "approval":
             try:
@@ -776,6 +828,7 @@ class FounderCommandRouter:
             "Use: CEO, run one bounded Kimi usage probe. This authorizes one database-reserved request up to €0.10; it does not enable Kimi for role work.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
+            "Use: Increase initiative budget <project-id> to €<amount> because <reason>. This is founder-only and audit logged.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
         )
 
@@ -878,9 +931,35 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         status_text = str(project.get("status") or "unknown")
         amount = project.get("requested_budget")
         currency = str(project.get("currency") or "EUR")[:3]
-        budget = f"; requested ceiling {currency} {amount}" if isinstance(amount, (int, float)) else ""
+        ledger = [row for row in snapshot.get("budget_ledger", [])
+                  if row.get("project_id") == project.get("id")]
+        reserved = sum(float(row.get("reserved_amount") or 0) for row in ledger
+                       if row.get("status") in {"reserved", "unknown"})
+        actual = sum(float(row.get("actual_amount") or 0) for row in ledger
+                     if row.get("status") in {"actual", "overrun"})
+        unknown = sum(float(row.get("reserved_amount") or 0) for row in ledger
+                      if row.get("status") == "unknown")
+        budget = ""
+        if isinstance(amount, (int, float)):
+            budget = (f"; all-in cap {currency} {amount:,.2f}; actual {currency} {actual:,.2f}; "
+                      f"reserved/unknown {currency} {reserved:,.2f}; remaining "
+                      f"{currency} {max(0.0, float(amount) - actual - reserved):,.2f}")
         owner = agents.get(str(project.get("owner_agent_id")), {}).get("display_name", "Unassigned")
-        lines.append(f"• {name} — {status_text}; owner {owner}{budget}")
+        lines.append(f"• {name} — {status_text}; owner {owner}{budget}; ID {project.get('id', 'unknown')}")
+        if unknown:
+            lines.append(f"  €{unknown:,.2f} remains held because usage is unconfirmed.")
+        assessment = project.get("budget_assessment")
+        if isinstance(assessment, dict) and isinstance(assessment.get("estimated_total_eur"), (int, float)):
+            estimate = float(assessment["estimated_total_eur"])
+            confidence = assessment.get("confidence", "unknown")
+            lines.append(f"  CFO estimated all-in cost {currency} {estimate:,.2f}; confidence {confidence}.")
+            recommendation = assessment.get("recommended_action")
+            if recommendation == "request_budget_increase":
+                lines.append(f"  Budget increase requested: estimated gap {currency} {max(0.0, estimate-float(amount or 0)):,.2f}. Paid work requiring more than the current cap is paused.")
+            elif recommendation == "legal_escalation":
+                lines.append("  Legal issue escalated to the founder; no legally binding step is authorized.")
+            elif recommendation == "do_not_proceed":
+                lines.append("  CFO recommends stopping this initiative on the current evidence.")
         project_objectives = [objective for objective in objectives
                               if objective.get("project_id") == project.get("id")]
         for objective in project_objectives[:2]:

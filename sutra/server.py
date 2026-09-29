@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -434,7 +435,7 @@ class SutraHandler(BaseHTTPRequestHandler):
                     "p_comment": comment,
                 })
             else:
-                allowed = {"actor_id", "project_id", "department_id", "agent_id", "category", "vendor", "description", "amount", "currency"}
+                allowed = {"actor_id", "project_id", "department_id", "agent_id", "category", "vendor", "description", "amount", "currency", "idempotency_key"}
                 if set(payload) - allowed or not {"actor_id", "agent_id", "category", "description", "amount"}.issubset(payload):
                     raise ValueError("Malformed spend request")
                 for key in ("actor_id", "category", "description"):
@@ -458,18 +459,32 @@ class SutraHandler(BaseHTTPRequestHandler):
                 currency = payload.get("currency", "EUR")
                 if currency != "EUR":
                     raise ValueError("Only EUR is supported")
-                result = self.app.store.rpc("sutra_authorize_spend", {
-                    "p_actor_type": "agent",
-                    "p_actor_id": actor_id,
-                    "p_project_id": payload.get("project_id"),
-                    "p_department_id": payload.get("department_id"),
-                    "p_agent_id": agent_id,
-                    "p_category": payload["category"],
-                    "p_vendor": vendor,
-                    "p_description": payload["description"],
-                    "p_amount": amount,
-                    "p_currency": currency,
-                })
+                if payload.get("project_id") is not None:
+                    idempotency_key = payload.get("idempotency_key")
+                    if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", idempotency_key):
+                        raise ValueError("project costs require an 8 to 128 character idempotency_key")
+                    result = self.app.store.rpc("sutra_authorize_initiative_cost", {
+                        "p_actor_type": "agent", "p_actor_id": actor_id, "p_agent_id": agent_id,
+                        "p_project_id": payload["project_id"], "p_category": payload["category"],
+                        "p_vendor": vendor, "p_description": payload["description"],
+                        "p_amount": amount, "p_currency": currency,
+                        "p_idempotency_key": idempotency_key,
+                    })
+                else:
+                    if payload.get("idempotency_key") is not None:
+                        raise ValueError("idempotency_key is only accepted with a project cost")
+                    result = self.app.store.rpc("sutra_authorize_spend", {
+                        "p_actor_type": "agent",
+                        "p_actor_id": actor_id,
+                        "p_project_id": None,
+                        "p_department_id": payload.get("department_id"),
+                        "p_agent_id": agent_id,
+                        "p_category": payload["category"],
+                        "p_vendor": vendor,
+                        "p_description": payload["description"],
+                        "p_amount": amount,
+                        "p_currency": currency,
+                    })
         except ValueError as exc:
             self._json(400, {"error": "invalid_request", "message": str(exc)})
             return
