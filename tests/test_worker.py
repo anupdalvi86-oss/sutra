@@ -586,6 +586,32 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertNotEqual(store.complete_agent_run.call_args.args[2], "retry")
         self.assertEqual(store.complete_agent_run.call_args.args[3]["usage_envelope_shape"], "usage_missing")
 
+    def test_unverified_malformed_hermes_artifact_persists_only_safe_response_shape(self):
+        store = self.approved_store("ceo")
+        store.reconcile_agent_run_spend.side_effect = lambda *_args: {"status": "unknown"}
+        payload = {
+            "choices": [{"finish_reason": "stop", "message": {"content": "private-response-marker"}}],
+            "usage": {"prompt_tokens": 12345, "completion_tokens": 17, "total_tokens": 12362},
+        }
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        hermes = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-6-luna")
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna", worker_id="sutra-worker-12345678")
+
+        with patch("sutra.worker.urllib.request.urlopen", return_value=response):
+            self.assertEqual(worker.run_once(), "failed_unknown_spend")
+
+        output = store.complete_agent_run.call_args.args[3]
+        self.assertEqual(output["failure_detail_code"], "malformed_json")
+        self.assertEqual(output["usage_envelope_shape"],
+                         "usage_object:prompt_tokens=int,completion_tokens=int,total_tokens=int")
+        self.assertEqual(output["response_context_shape"], "keys=choices,usage,finish=stop")
+        self.assertNotIn("private-response-marker", json.dumps(output))
+        self.assertNotIn("12345", json.dumps(output))
+        self.assertNotIn("12362", json.dumps(output))
+
     def test_kimi_probe_never_calls_provider_again_after_first_claim(self):
         run = claimed_run("ceo")
         run["attempt"] = 2

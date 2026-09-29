@@ -833,6 +833,11 @@ class AgentWorker:
                 }
                 if exc.usage_envelope_shape is not None:
                     output["usage_envelope_shape"] = exc.usage_envelope_shape
+                diagnostics = getattr(self.hermes, "last_usage_diagnostics", None)
+                if isinstance(diagnostics, dict):
+                    response_shape = diagnostics.get("response_context_shape")
+                    if isinstance(response_shape, str) and len(response_shape) <= 160:
+                        output["response_context_shape"] = response_shape
                 self.store.complete_agent_run(self.worker_id, run, "failed",
                     output, "unknown_or_overrun_spend")
                 return "failed_unknown_spend"
