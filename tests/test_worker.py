@@ -533,6 +533,74 @@ class AgentArtifactTests(unittest.TestCase):
             "status": "unknown" if _args[-1] is None else "reconciled"}
         return store
 
+    def test_kimi_usage_probe_uses_one_exact_route_and_small_output_cap(self):
+        run = claimed_run("ceo")
+        run["attempt"] = 1
+        run["input"]["provider_usage_probe"] = "kimi"
+        store = self.approved_store()
+        store.claim_agent_run.return_value = run
+        store.reconcile_agent_run_spend.return_value = {"status": "reconciled"}
+        hermes = Mock()
+        hermes.review.return_value = (artifact("ceo"), {"prompt_tokens": 20, "completion_tokens": 10})
+        hermes.last_usage_diagnostics = {
+            "usage_envelope_shape": "usage_object:prompt_tokens=int,completion_tokens=int,total_tokens=int",
+            "response_context_shape": "keys=choices,usage,finish=stop",
+        }
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna",
+                             worker_id="sutra-worker-12345678",
+                             role_routes={"ceo": ("openai", "gpt-6-luna")})
+
+        self.assertEqual(worker.run_once(), "provider_probe_reconciled")
+        store.reserve_agent_run_spend.assert_called_once_with(
+            "sutra-worker-12345678", run, "kimi-coding", "kimi-k2.6")
+        hermes.review.assert_called_once_with(run, "kimi-coding", "kimi-k2.6", 64, 100_000)
+        store.reconcile_agent_run_spend.assert_called_once_with(
+            "sutra-worker-12345678", run, "reservation-1", "kimi-coding", "kimi-k2.6",
+            {"prompt_tokens": 20, "completion_tokens": 10})
+        output = store.complete_agent_run.call_args.args[3]
+        self.assertEqual(output["usage_state"], "reconciled")
+        self.assertEqual(output["usage_envelope_shape"], hermes.last_usage_diagnostics["usage_envelope_shape"])
+        self.assertNotIn("provider response", json.dumps(output))
+        self.assertEqual(store.complete_agent_run.call_args.args[2], "succeeded")
+
+    def test_kimi_probe_unknown_usage_is_terminal_and_keeps_route_out_of_normal_work(self):
+        run = claimed_run("ceo")
+        run["attempt"] = 1
+        run["input"]["provider_usage_probe"] = "kimi"
+        store = self.approved_store()
+        store.claim_agent_run.return_value = run
+        store.reconcile_agent_run_spend.return_value = {"status": "unknown"}
+        hermes = Mock()
+        hermes.review.side_effect = AgentOutputError(
+            "Hermes returned malformed JSON", usage=None, usage_envelope_shape="usage_missing")
+        hermes.last_usage_diagnostics = {
+            "usage_envelope_shape": "usage_missing", "response_context_shape": "keys=choices,finish=stop",
+        }
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna",
+                             worker_id="sutra-worker-12345678")
+
+        self.assertEqual(worker.run_once(), "failed_unknown_spend")
+        self.assertEqual(store.reconcile_agent_run_spend.call_args.args[3:5],
+                         ("kimi-coding", "kimi-k2.6"))
+        self.assertEqual(store.complete_agent_run.call_args.args[2], "failed")
+        self.assertNotEqual(store.complete_agent_run.call_args.args[2], "retry")
+        self.assertEqual(store.complete_agent_run.call_args.args[3]["usage_envelope_shape"], "usage_missing")
+
+    def test_kimi_probe_never_calls_provider_again_after_first_claim(self):
+        run = claimed_run("ceo")
+        run["attempt"] = 2
+        run["input"]["provider_usage_probe"] = "kimi"
+        store = self.approved_store()
+        store.claim_agent_run.return_value = run
+        hermes = Mock()
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna",
+                             worker_id="sutra-worker-12345678")
+
+        self.assertEqual(worker.run_once(), "failed_provider_probe_claim")
+        store.reserve_agent_run_spend.assert_not_called()
+        hermes.review.assert_not_called()
+        self.assertEqual(store.complete_agent_run.call_args.args[2], "failed")
+
     def test_worker_contention_never_claims_or_spends(self):
         store = self.approved_store()
         store.acquire_agent_worker_execution_lease.return_value = False

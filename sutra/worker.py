@@ -16,6 +16,8 @@ from .runtime import IntegrationError, open_outbound_request
 
 logger = logging.getLogger(__name__)
 
+KIMI_USAGE_PROBE_ROUTE = ("kimi-coding", "kimi-k2.6")
+
 
 def _safe_usage_route(provider: str, model: str) -> tuple[str, str]:
     """Return a bounded route label; never emit arbitrary database configuration."""
@@ -755,7 +757,20 @@ class AgentWorker:
             return "idle"
         agent = run.get("agent")
         role = agent.get("slug") if isinstance(agent, dict) else None
-        provider, model = self.role_routes.get(role, (self.provider, self.model))
+        run_input = run.get("input")
+        is_kimi_probe = isinstance(run_input, dict) and run_input.get("provider_usage_probe") == "kimi"
+        if is_kimi_probe:
+            if role != "ceo" or run.get("attempt") != 1:
+                self.store.complete_agent_run(self.worker_id, run, "failed", {
+                    "summary": "The one-shot Kimi probe claim was invalid or already attempted",
+                    "recommendation": "Queue another probe only through the founder command.",
+                    "evidence": [],
+                    "usage_state": "not_started",
+                }, "invalid_provider_probe_claim")
+                return "failed_provider_probe_claim"
+            provider, model = KIMI_USAGE_PROBE_ROUTE
+        else:
+            provider, model = self.role_routes.get(role, (self.provider, self.model))
         if not provider or not model:
             self.store.complete_agent_run(self.worker_id, run, "failed",
                 {"summary": "No exact model route is configured for this role"}, "missing_model_route")
@@ -763,6 +778,14 @@ class AgentWorker:
         try:
             reservation = self.store.reserve_agent_run_spend(self.worker_id, run, provider, model)
         except IntegrationError:
+            if is_kimi_probe:
+                self.store.complete_agent_run(self.worker_id, run, "failed", {
+                    "summary": "The Kimi probe spend reservation could not be verified",
+                    "recommendation": "No probe retry was made; inspect the spend ledger before requesting another.",
+                    "evidence": [],
+                    "usage_state": "not_started",
+                }, "spend_preflight_unavailable")
+                return "failed_provider_probe_preflight"
             self.store.complete_agent_run(self.worker_id, run, "retry",
                 {"summary": "Database spend preflight was unavailable; no model request was made"}, "spend_preflight_unavailable")
             return "retry"
@@ -777,9 +800,21 @@ class AgentWorker:
             self.store.complete_agent_run(self.worker_id, run, "failed",
                 {"summary": "Database spend profile returned invalid token bounds"}, "invalid_spend_profile")
             return "failed_spend_profile"
+        if is_kimi_probe:
+            # The probe is a single minimal response; the database reservation
+            # remains conservative and uses the full founder-configured profile.
+            max_output_tokens = min(max_output_tokens, 64)
         try:
             self.store.begin_agent_run_spend(self.worker_id, run, reservation_id)
         except IntegrationError:
+            if is_kimi_probe:
+                self.store.complete_agent_run(self.worker_id, run, "failed", {
+                    "summary": "The Kimi probe could not confirm its spend start",
+                    "recommendation": "The reservation remains held; no retry was attempted.",
+                    "evidence": [],
+                    "usage_state": "unverified",
+                }, "spend_start_unverified")
+                return "failed_provider_probe_start"
             return "spend_start_pending"
         try:
             result, usage = self.hermes.review(run, provider, model,
@@ -801,6 +836,21 @@ class AgentWorker:
                 self.store.complete_agent_run(self.worker_id, run, "failed",
                     output, "unknown_or_overrun_spend")
                 return "failed_unknown_spend"
+            if is_kimi_probe:
+                diagnostics = getattr(self.hermes, "last_usage_diagnostics", None)
+                output = {
+                    "summary": "The one-shot Kimi response reported usage that reconciled with its reservation.",
+                    "recommendation": "Kimi remains disabled for ordinary role work until the result is reviewed.",
+                    "evidence": [],
+                    "usage_state": "reconciled",
+                }
+                if isinstance(diagnostics, dict):
+                    for key in ("usage_envelope_shape", "response_context_shape"):
+                        value = diagnostics.get(key)
+                        if isinstance(value, str) and len(value) <= 160:
+                            output[key] = value
+                self.store.complete_agent_run(self.worker_id, run, "succeeded", output)
+                return "provider_probe_reconciled"
             self.store.complete_agent_run(self.worker_id, run, "retry", {
                 "summary": "Agent output failed schema or evidence validation",
                 "failure_category": exc.failure_category,
@@ -810,7 +860,16 @@ class AgentWorker:
             return "retry"
         except IntegrationError:
             try:
-                self._settle_spend(run, reservation_id, None, provider, model)
+                spend_status = self._settle_spend(run, reservation_id, None, provider, model)
+                if is_kimi_probe:
+                    self.store.complete_agent_run(self.worker_id, run, "failed", {
+                        "summary": "Kimi probe usage could not be verified",
+                        "recommendation": "The full reservation remains held; no retry was attempted.",
+                        "evidence": [],
+                        "usage_state": "unverified",
+                        "spend_status": spend_status,
+                    }, "unknown_spend")
+                    return "failed_provider_probe_unknown_spend"
                 self.store.complete_agent_run(self.worker_id, run, "failed",
                     {"summary": "Hermes call outcome or usage could not be verified; full reserve retained"}, "unknown_spend")
             except IntegrationError:
@@ -819,6 +878,14 @@ class AgentWorker:
         except Exception:
             try:
                 self._settle_spend(run, reservation_id, None, provider, model)
+                if is_kimi_probe:
+                    self.store.complete_agent_run(self.worker_id, run, "failed", {
+                        "summary": "Kimi probe execution failed after its reservation started",
+                        "recommendation": "The full reservation remains held; no retry was attempted.",
+                        "evidence": [],
+                        "usage_state": "unverified",
+                    }, "unknown_spend")
+                    return "failed_provider_probe_unknown_spend"
                 self.store.complete_agent_run(self.worker_id, run, "failed",
                     {"summary": "Agent execution failed; full reserve retained"}, "unknown_spend")
             except IntegrationError:
@@ -842,6 +909,21 @@ class AgentWorker:
             self.store.complete_agent_run(self.worker_id, run, "failed",
                 output, "unknown_or_overrun_spend")
             return "failed_unknown_spend"
+        if is_kimi_probe:
+            diagnostics = getattr(self.hermes, "last_usage_diagnostics", None)
+            output = {
+                "summary": "The one-shot Kimi response reported usage that reconciled with its reservation.",
+                "recommendation": "Kimi remains disabled for ordinary role work until the result is reviewed.",
+                "evidence": [],
+                "usage_state": "reconciled",
+            }
+            if isinstance(diagnostics, dict):
+                for key in ("usage_envelope_shape", "response_context_shape"):
+                    value = diagnostics.get(key)
+                    if isinstance(value, str) and len(value) <= 160:
+                        output[key] = value
+            self.store.complete_agent_run(self.worker_id, run, "succeeded", output)
+            return "provider_probe_reconciled"
         if isinstance(run.get("task_artifact"), dict):
             try:
                 self.store.submit_task_agent_artifact(self.worker_id, run, result)
