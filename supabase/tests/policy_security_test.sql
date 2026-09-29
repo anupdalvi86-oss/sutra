@@ -860,6 +860,21 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder' and a
   and details->>'scope_key'='developer' and details->>'limit_amount'='3'),
   'founder-authorized budget changes create an audit record with the configured limit');
 
+reset role;
+update public.github_task_dispatches set pull_request_number=160,
+  pull_request_url='https://github.com/acme/sutra/pull/160',
+  pull_request_head_sha=repeat('a',40),pull_request_merged=false,ci_conclusion=null,
+  ci_run_url=null,ci_head_sha=null
+where task_id=(select (payload->>'task_id')::uuid from github_dispatch_claim);
+set local role service_role;
+select is((select item->>'pull_request_number'
+  from jsonb_array_elements(public.sutra_company_github_dispatch_status()->'dispatches') item
+  where item->>'task_id'=(select (payload->>'task_id') from github_dispatch_claim)),
+  '160','company status includes a linked PR while CI evidence is still pending');
+select is((select item->>'pull_request_url'
+  from jsonb_array_elements(public.sutra_company_github_dispatch_status()->'dispatches') item
+  where item->>'task_id'=(select (payload->>'task_id') from github_dispatch_claim)),
+  'https://github.com/acme/sutra/pull/160','company status includes the linked PR URL');
 
 select * from finish();
 rollback;

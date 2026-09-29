@@ -128,6 +128,28 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("provider usage was reconciled, no PR was produced", reply)
         self.assertIn("no automatic retry is queued", reply)
 
+    def test_company_status_reports_open_pr_when_codex_run_failed_and_ci_is_unrecorded(self):
+        snapshot = status_fixture()
+        task = {"id": "codex-task", "title": "Implement approved task", "status": "blocked",
+                "project_id": "project-1", "owner_agent_id": "pm-id"}
+        snapshot["tasks"].append(task)
+        snapshot["agent_runs"].append({"task_id": "codex-task", "status": "failed",
+                                       "output": {"error_code": "codex_process_failed",
+                                                  "process_exit_code": 1,
+                                                  "codex_execution_status": "reconciled"}})
+        snapshot["github_dispatches"] = [{
+            "task_id": "codex-task", "task_title": "Implement approved task", "status": "created",
+            "pull_request_number": 160,
+            "pull_request_url": "https://github.com/anupdalvi86-oss/sutra/pull/160",
+            "pull_request_merged": False, "ci_conclusion": None,
+        }]
+
+        reply = render_status_brief(snapshot, "ceo")
+
+        self.assertIn("Implement approved task — owned by Product Manager; latest failed run recorded codex_process_failed; GitHub PR #160 is open and CI evidence has not been recorded.", reply)
+        self.assertIn("PR #160 open (https://github.com/anupdalvi86-oss/sutra/pull/160); CI evidence not recorded", reply)
+        self.assertNotIn("no PR was produced", reply)
+
     def test_delivery_health_is_scoped_to_company_and_engineering_roles(self):
         snapshot = status_fixture()
         snapshot["github_dispatches"] = [{
