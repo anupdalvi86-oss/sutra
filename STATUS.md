@@ -14,6 +14,12 @@ Hosted verification for [PR #209](https://github.com/anupdalvi86-oss/sutra/pull/
 
 The branch implements only the budget/review foundation. Parallel cross-department delegation, autonomous GitHub merge and release, deployment authorization, CRM/customer support integrations, and live marketing/sales execution still need separate stages. Legal escalation currently pauses and records the issue; a clear founder Telegram decision flow and legal document review path remain future work. Required founder setup to activate customer work includes selecting the CRM/support provider, supplying credentials privately, and defining approved customer-contact terms and limits. No live outreach or legal commitment is authorized by this change.
 
+## Staged parallel-agent change (review branch; not live)
+
+Branch `feat/parallel-agent-reviews` lets CPO market research and CTO feasibility start at the same proposal stage after CEO scoping; CFO waits for both and PM remains stage 5. It also replaces the single global Hermes worker lease with two database-coordinated slots and starts two isolated workers by default, configurable only between one and two. Spend reservations remain serialized against the EUR ledger lock, unknown reservations stay held, and existing policy/budget authorization applies unchanged. No approval, project budget, merge, release or customer-contact authority is added. The branch is not merged or deployed; production still uses the serial review and single worker.
+
+Local verification for this branch: 220 Python tests passed; a fresh disposable Supabase reset applied the complete migration set; all 17 pgTAP files passed 348 assertions; Bandit, `compileall`, and `git diff --check` passed. Database lint found zero errors and only existing warnings outside the new functions. Supabase advisors reported three existing duplicate-index warnings on `agents`, `projects`, and `spending_policies`; this branch adds no indexes. Hosted CI has not run yet.
+
 ## Working
 
 - **Supabase:** Production project `smqsrigsugjuvuombetq` is `ACTIVE_HEALTHY` on PostgreSQL 17.6. Production migrations are applied through `20260929191403_clarify_kimi_probe_iteration_audit`. Supabase remains the authoritative company state.

@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import os
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
@@ -9,7 +10,8 @@ from urllib.request import Request, urlopen
 from unittest.mock import patch
 
 from sutra.runtime import IntegrationError
-from sutra.server import GatewayProbe, SutraApplication, SutraHandler, parse_role_routes
+from sutra.server import (GatewayProbe, SutraApplication, SutraHandler,
+                          parse_agent_worker_concurrency, parse_role_routes)
 
 AGENT_ID = "00000000-0000-4000-8000-000000000002"
 
@@ -67,6 +69,37 @@ class InternalEndpointTests(unittest.TestCase):
         ):
             with self.subTest(malformed=malformed), self.assertRaises((ValueError, TypeError)):
                 parse_role_routes(malformed)
+
+    def test_agent_worker_concurrency_is_limited_to_database_slots(self):
+        self.assertEqual(parse_agent_worker_concurrency("1"), 1)
+        self.assertEqual(parse_agent_worker_concurrency("2"), 2)
+        for malformed in ("", "0", "3", "2.0", "workers=2"):
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                parse_agent_worker_concurrency(malformed)
+
+    def test_enabled_agent_worker_starts_two_isolated_workers_by_default(self):
+        app = SutraApplication()
+        app.store = FakeStore()
+        profile = {"configured": True, "provider": "openai", "model": "gpt-6-luna"}
+        with patch.dict(os.environ, {
+            "SUTRA_ENABLE_AGENT_WORKER": "true",
+            "SUTRA_HERMES_PROVIDER": "openai",
+            "SUTRA_HERMES_MODEL": "gpt-6-luna",
+            "HERMES_AGENT_API_URL": "http://sutra.railway.internal:8642",
+            "HERMES_AGENT_API_KEY": "worker-test-key",
+        }, clear=True), patch.object(app.store, "get_agent_model_spend_profile", return_value=profile), \
+                patch("sutra.server.HermesAgentClient"), patch("sutra.server.AgentWorker"), \
+                patch("sutra.server.threading.Thread") as thread_factory:
+            app.start()
+            self.assertEqual(app.agent_worker_status, "running")
+            self.assertEqual(len(app.agent_worker_threads), 2)
+            self.assertEqual(thread_factory.call_count, 2)
+            self.assertEqual(
+                [call.kwargs["name"] for call in thread_factory.call_args_list],
+                ["sutra-agent-worker-1", "sutra-agent-worker-2"],
+            )
+            self.assertIs(app.agent_worker_thread, app.agent_worker_threads[0])
+        app.close()
 
     def test_hermes_health_probe_allows_private_railway_http(self):
         class Response:
