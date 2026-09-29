@@ -605,6 +605,8 @@ select is((select output->>'failure_detail_code' from public.agent_runs where id
   'provider_rate_limited','safe diagnosis is persisted without provider response content');
 select is((select status from public.codex_task_executions where agent_run_id=(select (payload->>'run_id')::uuid from codex_run_claim)),
   'failed','the execution record distinguishes process failure from reconciled spend');
+select is((select status from public.tasks where id=(select (payload->>'task_id')::uuid from github_dispatch_claim)),
+  'blocked','a terminal Codex process failure moves its task to blocked');
 select is((select status from public.agent_run_spend_reservations where agent_run_id=(select (payload->>'run_id')::uuid from codex_run_claim)),
   'reconciled','trusted spend remains reconciled instead of being released after process failure');
 select ok((select count(*) from public.audit_log where action in
@@ -613,6 +615,12 @@ select ok((select count(*) from public.audit_log where action in
   and (select count(*) from public.audit_log where action='codex.runner_claimed')=1,
   'Codex runner claim, requests, provider usage, and process failure are audit logged');
 set local role service_role;
+select public.sutra_update_task((select id from public.agents where slug='developer'),
+  (select (payload->>'task_id')::uuid from github_dispatch_claim),'ready',
+  '{"reason":"test separate founder-approved implementation handoff"}'::jsonb);
+select public.sutra_update_task((select id from public.agents where slug='developer'),
+  (select (payload->>'task_id')::uuid from github_dispatch_claim),'in_progress',
+  '{"reason":"test implementation resumes under existing approved scope"}'::jsonb);
 select throws_ok($$select public.sutra_update_task((select id from public.agents where slug='developer'),
   (select (payload->>'task_id')::uuid from github_dispatch_claim),'done','{"pull_request":"draft","ci":"passed"}'::jsonb)$$,
   '42501',null,'generic task updates cannot bypass the merged PR and matching CI completion gate');
