@@ -1,5 +1,5 @@
 begin;
-select plan(15);
+select no_plan();
 
 select ok(has_function_privilege('service_role',
   'public.sutra_founder_retry_cpo_research_task(text,uuid)','execute'),
@@ -71,6 +71,25 @@ begin
               ('founder','12345678','founder.cpo_research_task_retry_requested','task',task_id::text,'{}'::jsonb);
     end if;
   end loop;
+  insert into public.tasks(project_id,title,description,acceptance_criteria,task_type,status,
+      owner_agent_id,assigned_agent_id)
+    values(project_id,'CPO legacy retry case',
+      'Recover the same bounded internal research task after a terminal legacy usage failure.',
+      '["Cited sources recorded"]'::jsonb,'research','blocked',cpo_id,cpo_id)
+    returning id into task_id;
+  insert into public.agent_runs(agent_id,project_id,task_id,trigger_type,status,input,output,
+      started_at,finished_at,attempt_count)
+    values(cpo_id,project_id,task_id,'task_artifact','failed','{"role":"cpo"}'::jsonb,
+      '{"error_code":"unknown_or_overrun_spend","summary":"Hermes usage exceeded or could not settle within its reserved profile"}'::jsonb,
+      now()-interval '1 minute',now(),2) returning id into failed_id;
+  insert into public.expenses(project_id,category,description,amount,currency,status,
+      requested_by,approved_at)
+    values(project_id,'ai_inference','Legacy CPO unknown usage fixture',reserve_amount,'EUR',
+      'approved','test',now()) returning id into expense_id;
+  insert into public.agent_run_spend_reservations(agent_run_id,attempt,expense_id,provider,model,
+      reserved_amount,usage,status,settled_at)
+    values(failed_id,2,expense_id,'openai','gpt-6-luna',reserve_amount,'{}'::jsonb,'unknown',now());
+  insert into cpo_retry_fixture values(5,task_id,failed_id);
 end;
 $$;
 grant select on cpo_retry_fixture to service_role;
@@ -108,6 +127,19 @@ set local role service_role;
 select throws_ok($$select public.sutra_founder_retry_cpo_research_task('12345678',
   (select task_id from cpo_retry_fixture where case_id=1))$$,
   '42501',null,'a queued retry cannot be submitted twice');
+insert into cpo_retry_result select public.sutra_founder_retry_cpo_research_task(
+  '12345678',(select task_id from cpo_retry_fixture where case_id=5));
+reset role;
+select is((select payload->>'status' from cpo_retry_result
+  where payload->>'task_id'=(select task_id::text from cpo_retry_fixture where case_id=5)),
+  'ready','founder may recover the exact legacy usage failure with missing detail metadata');
+select is((select (payload->>'legacy_failure_detail_missing')::boolean from cpo_retry_result
+  where payload->>'task_id'=(select task_id::text from cpo_retry_fixture where case_id=5)),
+  true,'the legacy metadata exception is explicit in the recovery result');
+select is((select status from public.agent_run_spend_reservations
+  where agent_run_id=(select failed_run_id from cpo_retry_fixture where case_id=5)),
+  'unknown','the legacy failure reservation remains held after recovery');
+set local role service_role;
 select throws_ok($$select public.sutra_founder_retry_cpo_research_task('12345678',
   (select task_id from cpo_retry_fixture where case_id=2))$$,
   '42501',null,'only the assigned CPO can retry this research task');

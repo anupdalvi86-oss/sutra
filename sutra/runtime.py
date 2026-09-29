@@ -940,7 +940,9 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             explanation = "the task is blocked, but its run did not persist a specific failure reason"
         else:
             project = projects_by_id.get(str(task.get("project_id")))
-            if project and project.get("status") == "proposed":
+            if project and project.get("status") == "rejected":
+                explanation = "its project-budget approval was rejected; no execution run or model spend was started"
+            elif project and project.get("status") == "proposed":
                 explanation = "its project is still proposed and awaits project-budget approval; no execution run or model spend was started"
             else:
                 explanation = "no execution run is linked to this task, so there is no recorded completion or blocker evidence"

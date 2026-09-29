@@ -320,7 +320,10 @@ class HermesAgentClient:
                     " For market research, evidence must contain 1-10 objects with exactly source, url, and claim; "
                     "each URL must be a direct HTTPS source you actually consulted. Distinguish sourced facts from "
                     "assumptions, avoid unsupported market-size claims, and include evidence for competitor and "
-                    "pricing statements. Return exactly the contract fields and assigned task_acceptance items. "
+                    "pricing statements. Keep the report compact for a strict output budget: use 3-5 strong sources, "
+                    "one concise sentence per array item, a summary and recommendation under 300 characters each, "
+                    "and task_acceptance evidence under 160 characters per criterion. Return exactly the contract "
+                    "fields and assigned task_acceptance items. "
                     "This is internal research only; do not contact customers, create leads, publish, or spend."
                 )
             elif role == "sales":
