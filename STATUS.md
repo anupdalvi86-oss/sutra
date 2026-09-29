@@ -10,6 +10,8 @@ This change is isolated in a managed worktree and is not applied to production S
 
 Validation of this branch on 2026-09-29: a fresh disposable Supabase database reset applied all migrations; 18 pgTAP files passed all 525 assertions; the Python suite passed 224 tests; Bandit passed at medium severity or higher; `compileall`, `git diff --check`, and a diff secret-pattern scan passed. Public-schema database lint reported 0 errors and 18 warnings in existing functions outside the new initiative authorization function. Production Supabase, Railway, Telegram and customer systems were not changed or exercised for this branch.
 
+Hosted verification for [PR #209](https://github.com/anupdalvi86-oss/sutra/pull/209) also passed all five required jobs: change detection, Python/security, database migration/pgTAP/lint, container builds, and secret scan. GitHub emitted existing Node.js 20 action deprecation notices; they did not fail the run.
+
 The branch implements only the budget/review foundation. Parallel cross-department delegation, autonomous GitHub merge and release, deployment authorization, CRM/customer support integrations, and live marketing/sales execution still need separate stages. Legal escalation currently pauses and records the issue; a clear founder Telegram decision flow and legal document review path remain future work. Required founder setup to activate customer work includes selecting the CRM/support provider, supplying credentials privately, and defining approved customer-contact terms and limits. No live outreach or legal commitment is authorized by this change.
 
 ## Working
