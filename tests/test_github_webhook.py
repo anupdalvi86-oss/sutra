@@ -73,6 +73,28 @@ class GitHubWebhookTests(unittest.TestCase):
         self.assertEqual(normalized["head_sha"], "c" * 40)
         self.assertEqual(normalized["pull_requests"], [{"number": 88, "head_sha": HEAD_SHA}])
 
+    def test_workflow_run_accepts_real_github_64_bit_run_ids(self):
+        run_id = 36_530_327_914
+        normalized = normalize_github_event(
+            "workflow_run", REPO,
+            workflow_run_event(
+                id=run_id,
+                html_url=f"https://github.com/{REPO}/actions/runs/{run_id}",
+            ),
+        )
+        self.assertIsNotNone(normalized)
+        self.assertEqual(normalized["run_id"], run_id)
+
+        mismatched_url = workflow_run_event(
+            id=run_id,
+            html_url=f"https://github.com/{REPO}/actions/runs/201",
+        )
+        self.assertIsNone(normalize_github_event("workflow_run", REPO, mismatched_url))
+        too_large = workflow_run_event(id=9_223_372_036_854_775_808)
+        self.assertIsNone(normalize_github_event("workflow_run", REPO, too_large))
+        boolean_id = workflow_run_event(id=True)
+        self.assertIsNone(normalize_github_event("workflow_run", REPO, boolean_id))
+
     def test_other_repositories_workflows_and_malformed_pull_requests_are_ignored(self):
         foreign = pull_request_event()
         foreign["repository"]["full_name"] = "other/repo"
