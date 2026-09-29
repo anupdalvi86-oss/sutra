@@ -285,18 +285,36 @@ class SupabaseREST:
             "customers": "customers?select=id,name,company,source,status,updated_at&status=in.(lead,qualified,customer)&order=updated_at.desc&limit=100",
             "customer_email_actions": "customer_email_actions?select=id,project_id,purpose,status,created_at&order=created_at.desc&limit=100",
         }
-        snapshot = {key: self.request(path) for key, path in paths.items()}
-        dispatch_status = self.rpc("sutra_company_github_dispatch_status", {})
-        dispatches = dispatch_status.get("dispatches")
-        if not isinstance(dispatches, list):
-            raise IntegrationError("Supabase returned an invalid GitHub dispatch status response")
-        snapshot["github_dispatches"] = dispatches
-        release_status = self.rpc("sutra_company_code_release_status", {})
-        if not isinstance(release_status, list) or not all(isinstance(item, dict) for item in release_status):
-            raise IntegrationError("Supabase returned an invalid code release status response")
-        snapshot["code_releases"] = release_status
-        if not all(isinstance(rows, list) for rows in snapshot.values()):
-            raise IntegrationError("Supabase returned an invalid company status response")
+        snapshot: dict[str, Any] = {}
+        status_errors: list[str] = []
+        for key, path in paths.items():
+            try:
+                rows = self.request(path)
+                if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+                    raise IntegrationError("invalid status rows")
+                snapshot[key] = rows
+            except IntegrationError:
+                # One failing integration/table must not hide the rest of the board report.
+                snapshot[key] = []
+                status_errors.append(key)
+        try:
+            dispatch_status = self.rpc("sutra_company_github_dispatch_status", {})
+            dispatches = dispatch_status.get("dispatches")
+            if not isinstance(dispatches, list) or not all(isinstance(row, dict) for row in dispatches):
+                raise IntegrationError("invalid GitHub dispatch status")
+            snapshot["github_dispatches"] = dispatches
+        except IntegrationError:
+            snapshot["github_dispatches"] = []
+            status_errors.append("github_dispatches")
+        try:
+            release_status = self.rpc("sutra_company_code_release_status", {})
+            if not isinstance(release_status, list) or not all(isinstance(item, dict) for item in release_status):
+                raise IntegrationError("invalid code release status")
+            snapshot["code_releases"] = release_status
+        except IntegrationError:
+            snapshot["code_releases"] = []
+            status_errors.append("code_releases")
+        snapshot["status_errors"] = status_errors
         return snapshot
 
     def founder_pending_approvals(self, founder_telegram_user_id: str) -> list[dict[str, Any]]:
@@ -626,7 +644,11 @@ class FounderCommandRouter:
         if command.kind == "status":
             try:
                 status = self.store.company_status()
-                status["legal_escalations"] = self.store.founder_legal_escalations(user_id)
+                try:
+                    status["legal_escalations"] = self.store.founder_legal_escalations(user_id)
+                except IntegrationError:
+                    status["legal_escalations"] = []
+                    status.setdefault("status_errors", []).append("legal_escalations")
             except IntegrationError:
                 return FounderResponse("I couldn't load company status. No company state was changed; check the database connection and try again.")
             return FounderResponse(render_status_brief(status, command.status_role))
@@ -1118,6 +1140,15 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     blocked_tasks = [t for t in scoped_tasks if t.get("status") == "blocked"]
     department_label = departments.get(str(dept_id), {}).get("name") if dept_id else None
     lines = [f"{label} operating brief — board update", ""]
+    status_errors = snapshot.get("status_errors", [])
+    if isinstance(status_errors, list) and status_errors:
+        safe_sources = [re.sub(r"[^a-z0-9_]+", "", str(source))[:40]
+                        for source in status_errors[:12]]
+        lines.extend([
+            "Data completeness warning",
+            "• This report is partial. Unavailable sources: " + ", ".join(safe_sources) + ". Counts below reflect returned data only.",
+            "",
+        ])
     if department_label and not is_company_wide:
         lines.append(f"Scope: {department_label}")
     lines.extend([

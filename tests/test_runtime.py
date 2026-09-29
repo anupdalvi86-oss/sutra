@@ -618,6 +618,7 @@ class FounderCommandTests(unittest.TestCase):
     def test_status_snapshot_reads_projects_tasks_approvals_and_financial_controls(self):
         expected = status_fixture()
         expected["code_releases"] = []
+        expected["status_errors"] = []
         store = SupabaseREST("https://sutra.example", "server-key")
         store.request = Mock(side_effect=[expected[key] for key in expected if key != "github_dispatches"])
         store.rpc = Mock(side_effect=[{"dispatches": expected["github_dispatches"]}, []])
@@ -644,14 +645,34 @@ class FounderCommandTests(unittest.TestCase):
             unittest.mock.call("sutra_company_code_release_status", {}),
         ])
 
-    def test_status_snapshot_rejects_partial_or_malformed_database_responses(self):
+    def test_status_snapshot_keeps_healthy_sections_when_one_source_is_unavailable(self):
         store = SupabaseREST("https://sutra.example", "server-key")
         malformed_responses = [[] for _ in range(14)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
         store.rpc = Mock(side_effect=[{"dispatches": []}, []])
-        with self.assertRaises(IntegrationError):
-            store.company_status()
+        status = store.company_status()
+        self.assertEqual(status["status_errors"], ["agents"])
+        self.assertEqual(status["agents"], [])
+        self.assertEqual(status["projects"], [])
+        self.assertEqual(status["code_releases"], [])
+
+    def test_status_snapshot_records_failed_rpc_without_discarding_other_sources(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        store.request = Mock(return_value=[])
+        store.rpc = Mock(side_effect=[IntegrationError("unavailable"), []])
+        status = store.company_status()
+        self.assertEqual(status["status_errors"], ["github_dispatches"])
+        self.assertEqual(status["github_dispatches"], [])
+        self.assertEqual(status["code_releases"], [])
+
+    def test_status_render_warns_that_partial_counts_are_incomplete(self):
+        snapshot = status_fixture()
+        snapshot["status_errors"] = ["projects", "customer_email_actions"]
+        reply = render_status_brief(snapshot, "CEO")
+        self.assertIn("Data completeness warning", reply)
+        self.assertIn("projects, customer_email_actions", reply)
+        self.assertIn("Counts below reflect returned data only", reply)
 
     def test_founder_legal_escalation_adapter_validates_database_response(self):
         store = SupabaseREST("https://sutra.example", "server-key")
