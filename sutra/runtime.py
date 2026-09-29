@@ -504,8 +504,9 @@ class FounderCommandRouter:
             return FounderResponse(
                 f"One-shot Kimi usage probe queued: {result.get('probe_id')}. "
                 f"Maximum reservation: €{amount_label}. "
-                "It uses the existing project and monthly spend hard stops, makes at most one provider request, "
-                "and does not enable Kimi for ordinary role work. Unknown prior reservations remain held."
+                "It makes one Sutra-to-Hermes run; Hermes may use up to three model iterations covered by the "
+                "database-priced reservation. Existing project and monthly spend hard stops apply. It does not "
+                "enable Kimi for ordinary role work. Unknown prior reservations remain held."
             )
         if command.kind in {"defer_review_task", "restore_review_task", "defer_review_chain"}:
             procedure = {

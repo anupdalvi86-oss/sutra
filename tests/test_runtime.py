@@ -62,6 +62,8 @@ class FounderCommandTests(unittest.TestCase):
         reply = self.router.handle(FOUNDER, FOUNDER, "CEO, run one bounded Kimi usage probe.").text
         self.assertIn("One-shot Kimi usage probe queued: probe-1", reply)
         self.assertIn("Maximum reservation: €0.10", reply)
+        self.assertIn("up to three model iterations", reply)
+        self.assertNotIn("one provider request", reply)
         self.assertIn("does not enable Kimi for ordinary role work", reply)
         self.store.rpc.assert_called_once_with("sutra_founder_queue_kimi_usage_probe", {
             "p_founder_telegram_user_id": FOUNDER,
