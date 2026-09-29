@@ -1,6 +1,6 @@
 # Sutra system status
 
-Updated: 2026-09-29, after PR #201 checks/merge, live Supabase status, and Railway deployment review
+Updated: 2026-09-29 17:26 UTC, after a fresh Railway queue check
 
 ## What is working
 
@@ -11,7 +11,7 @@ Updated: 2026-09-29, after PR #201 checks/merge, live Supabase status, and Railw
 - **GitHub/Codex:** Sutra can dispatch founder-approved Developer tasks and create branches and PRs. It cannot merge or release. Merged implementation work includes PRs [#160](https://github.com/anupdalvi86-oss/sutra/pull/160) and [#188](https://github.com/anupdalvi86-oss/sutra/pull/188), each with successful CI evidence. The AI QA scope and implementation-plan review documents merged in [#192](https://github.com/anupdalvi86-oss/sutra/pull/192) and [#191](https://github.com/anupdalvi86-oss/sutra/pull/191); these documents do not validate the product opportunity.
 - **Governance:** Founder-adjustable Codex no-request retry limit is database-controlled, founder-only, audited, and capped at three total attempts per execution. Changing the limit does not itself retry a task.
 
-During the 2026-09-29 follow-up check, Railway displayed the incident “API degradation causing slow or stuck deployments.” Its public status page remained at **Investigating** (latest update 2026-09-29 15:29 UTC). The API service still showed Online on its previous successful deployment while the deployment for PR #201's commit remained Queued for more than three minutes. Treat this as a provider-side deployment delay; no manual restart, variable edit, or rollback was made.
+During the 2026-09-29 follow-up check, Railway displayed the incident “API degradation causing slow or stuck deployments.” Its public status page remained at **Investigating** (latest update 2026-09-29 15:29 UTC). By 17:24 UTC, the PR #201 API deployment had been Queued for more than 14 minutes. The dashboard marked the service **Limited Access — Deploys have been paused temporarily**; the previous API release and Hermes still showed Online. Treat this as a provider-side deployment pause; no manual restart, variable edit, or rollback was made.
 
 ## Live company snapshot
 
@@ -32,7 +32,7 @@ PR [#197](https://github.com/anupdalvi86-oss/sutra/pull/197) was merged as `e3ca
 
 PRs [#191](https://github.com/anupdalvi86-oss/sutra/pull/191) and [#192](https://github.com/anupdalvi86-oss/sutra/pull/192) merged the proposed AI QA implementation plan and scope document. They preserve open product-validation questions and do not authorize spending or mark QA/Security complete.
 
-PR [#201](https://github.com/anupdalvi86-oss/sutra/pull/201) merged to `main` as `42cd8127efd4b63f7a00dbe6b87d1c7a59d081a8`. It persists bounded Hermes usage-envelope and response-shape labels when spend reconciliation remains unknown, without persisting provider response text or token values. Unknown reservations remain held, and reconciliation remains fail-closed. All five PR checks passed: Python tests/security analysis, 468 database policy tests and lint, container/Hermes checks, change detection, and secret scan. Railway received the deployment but has not started it; it remains queued during the active provider incident.
+PR [#201](https://github.com/anupdalvi86-oss/sutra/pull/201) merged to `main` as `42cd8127efd4b63f7a00dbe6b87d1c7a59d081a8`. It persists bounded Hermes usage-envelope and response-shape labels when spend reconciliation remains unknown, without persisting provider response text or token values. Unknown reservations remain held, and reconciliation remains fail-closed. All five PR checks passed: Python tests/security analysis, 468 database policy tests and lint, container/Hermes checks, change detection, and secret scan. Railway received the deployment but has not started it; it remains queued under Railway's temporary deploy pause.
 
 Railway deployment `c89e88eb-ec38-4fc5-aa14-8215861e14fe` completed successfully after a prolonged platform incident. The new API process returned HTTP 200 from `/health`, and deployment details identify commit `75b636f0e1cf9a20b26820f1e3885ab15881f1d9`.
 
@@ -48,7 +48,7 @@ Later, the founder-authorized QA/Security deferral for the discovery-gated proje
 4. **QA/Security:** QA and Security are now deferred and incomplete on two projects, per founder direction. Sutra is not release-ready until the applicable gates are restored and pass.
 5. **Credentials:** Credentials previously pasted into chat should be rotated directly in their providers and updated in Railway by the founder. No credential values are recorded in this file.
 6. **Kimi usage validation:** The active Kimi price profile is not routed to an operating role. A prior Kimi attempt returned no verifiable usage; its reservation remains unknown. Keep Kimi disabled for task execution until the database-reserved provider reproduction in [issue #86](https://github.com/anupdalvi86-oss/sutra/issues/86) reconciles through Sutra's usage RPC.
-7. **Railway deployment queue:** PR #201 is merged and passed CI, but Railway has not started the corresponding API deployment while its API degradation incident is being investigated. The previous API release remains Online. Verify the new commit and `/health` after Railway clears the queue.
+7. **Railway deployment pause:** PR #201 is merged and passed CI, but Railway has paused deploys and has not started the corresponding API deployment. The previous API release remains Online. Verify the new commit and `/health` after Railway resumes deploys.
 
 ## Verification performed
 
