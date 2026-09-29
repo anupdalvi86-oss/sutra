@@ -645,6 +645,16 @@ select is((public.sutra_record_github_webhook_event('sutra-github-webhook-123456
     'kind','workflow_run','workflow_name','CI','conclusion','failure','run_url','https://github.com/acme/sutra/actions/runs/200',
     'run_id',200,'head_sha',repeat('a',40),'pull_requests',jsonb_build_array(jsonb_build_object('number',88,'head_sha',repeat('a',40)))))->>'completed_tasks'),'0',
   'failed CI evidence never completes the Developer task');
+select throws_ok($$select public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
+  '00000000-0000-4000-8000-000000000093','acme/sutra','workflow_run',jsonb_build_object(
+    'kind','workflow_run','workflow_name','CI','conclusion','success','run_url','https://github.com/acme/sutra/actions/runs/202',
+    'run_id',201,'head_sha',repeat('a',40),'pull_requests',jsonb_build_array(jsonb_build_object('number',88,'head_sha',repeat('a',40)))))$$,
+  '22023',null,'workflow run URL must match its numeric run ID');
+select throws_ok($$select public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
+  '00000000-0000-4000-8000-000000000092','acme/sutra','workflow_run',jsonb_build_object(
+    'kind','workflow_run','workflow_name','CI','conclusion','success','run_url','https://github.com/acme/sutra/actions/runs/202',
+    'run_id',202,'head_sha',repeat('a',40),'pull_requests',jsonb_build_array(jsonb_build_object('number',88,'head_sha',repeat('b',40)))))$$,
+  '22023',null,'workflow run must match the immutable SHA of its associated pull request');
 select is((public.sutra_record_github_webhook_event('sutra-github-webhook-12345678',
   '00000000-0000-4000-8000-000000000095','acme/sutra','workflow_run',jsonb_build_object(
     'kind','workflow_run','workflow_name','CI','conclusion','success','run_url','https://github.com/acme/sutra/actions/runs/200',

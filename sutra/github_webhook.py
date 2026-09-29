@@ -117,6 +117,11 @@ def normalize_github_event(event_name: str, repository: str, payload: Any) -> di
             sha = head.get("sha") if isinstance(head, dict) else None
             if number is None or not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
                 return None
+            # The Actions API can return a run's *current* PR association even
+            # when that old run tested an earlier commit. Bind evidence to the
+            # immutable commit that the run actually tested.
+            if sha.casefold() != run_sha.casefold():
+                return None
             pull_requests.append({"number": number, "head_sha": sha.lower()})
         if len({item["number"] for item in pull_requests}) != len(pull_requests):
             return None
