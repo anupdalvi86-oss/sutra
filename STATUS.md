@@ -1,6 +1,6 @@
 # Sutra system status
 
-Updated: 2026-09-29, after PR #194 and the final Architect retry
+Updated: 2026-09-29, after PR #195 and the audited Architect task reconciliation
 
 ## What is working
 
@@ -18,7 +18,7 @@ Production counts queried from Supabase on 2026-09-29:
 - **Projects:** 3 approved and 1 rejected. The approved records are duplicate variants of the same AI QA opportunity, each showing a €500 requested ceiling; they are not three distinct validated opportunities and do not mean €1,500 was spent.
 - **Approvals:** 5 approved, 1 rejected, and none pending.
 - **Tasks:** 28 total: 13 done, 10 backlog, 2 blocked, 0 in progress, 2 deferred, and 1 cancelled. Duplicate project records repeat backlog work.
-- **Agent runs:** 68 succeeded, 14 failed, and 10 blocked.
+- **Agent runs:** 68 succeeded, 14 failed, and 11 blocked, including the audited task-status reconciliation event.
 - **Canonical delivery record:** One approved AI QA opportunity has completed CPO research, PM plan, architecture, Developer/Codex work, and internal CMO, Sales, and DevOps handoffs. The Developer work is represented by merged PR #160. QA and Security reviews are deferred and incomplete. Other duplicate project records have redundant backlog work; PR #188 records the approved discovery-plan work.
 - **Customer and campaign records:** none recorded. No external sales or marketing messages have been sent.
 
