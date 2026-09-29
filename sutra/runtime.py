@@ -273,6 +273,15 @@ class SupabaseREST:
             raise IntegrationError("Supabase returned an invalid founder approval queue")
         return approvals
 
+    def founder_legal_escalations(self, founder_telegram_user_id: str) -> list[dict[str, Any]]:
+        result = self.rpc("sutra_founder_list_legal_escalations", {
+            "p_founder_telegram_user_id": founder_telegram_user_id,
+        })
+        cases = result.get("escalations") if isinstance(result, dict) else None
+        if not isinstance(cases, list) or not all(isinstance(item, dict) for item in cases):
+            raise IntegrationError("Supabase returned an invalid legal escalation queue")
+        return cases
+
     def record_denied_identity(self, actor_hash: str) -> None:
         self.request("rpc/sutra_log_auth_denial", "POST", {"p_actor_hash": actor_hash})
 
@@ -292,6 +301,11 @@ class FounderCommand:
     project_id: str | None = None
     new_budget: float | None = None
     budget_reason: str = ""
+    legal_case_id: str | None = None
+    legal_disposition: str = ""
+    legal_reason: str = ""
+    authorization_id: str | None = None
+    authorization_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -335,6 +349,22 @@ REVIEW_TASK_ACTION_RE = re.compile(
 )
 REVIEW_CHAIN_DEFER_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?defer\s+qa\s+and\s+security\s+reviews\s+for\s+(?:task\s+)?([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+LEGAL_ESCALATIONS_RE = re.compile(
+    r"^\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?(?:open\s+)?legal\s+(?:issues|escalations?))\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+LEGAL_DISPOSITION_RE = re.compile(
+    r"^\s*(?:record|resolve)\s+legal\s+case\s+([0-9a-f-]{36})\s+as\s+(continue\s+within\s+budget|stop|seek\s+legal\s+counsel)\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+CODE_AUTHORITY_STATUS_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:show|list)\s+(?:the\s+)?standing\s+code\s+authority\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+CODE_AUTHORITY_REVOKE_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?revoke\s+(?:the\s+)?standing\s+code\s+authority\s+([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 STATUS_ROLE_RE = re.compile(r"^\s*(ceo|cto|cpo|cfo|coo|product manager|pm|architect|developer|qa|security|devops|cmo|marketing|sales|governance|audit)[, :]\s*(?:give me|show me|provide)?\s*(?:the\s+)?(?:company\s+)?(?:department\s+)?status(?:\s+report)?\s*[?.!]*\s*$", re.IGNORECASE)
@@ -433,6 +463,19 @@ def parse_founder_command(text: str) -> FounderCommand:
         return FounderCommand("set_codex_retry_limit", text.strip(), retry_limit=total_attempts)
     if CODEX_RETRY_LIMIT_GET_RE.fullmatch(text):
         return FounderCommand("get_codex_retry_limit", text.strip())
+    if CODE_AUTHORITY_STATUS_RE.fullmatch(text):
+        return FounderCommand("code_authority_status", text.strip())
+    match = CODE_AUTHORITY_REVOKE_RE.fullmatch(text)
+    if match:
+        try:
+            authorization_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Standing code authority needs a valid authorization ID") from exc
+        reason = match.group(2).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Authority revocation reason must contain 8 to 500 characters")
+        return FounderCommand("revoke_code_authority", text.strip(), authorization_id=authorization_id,
+                              authorization_reason=reason)
     if re.fullmatch(r"\s*CEO,\s*run one bounded Kimi usage probe\.\s*", text, re.IGNORECASE):
         return FounderCommand("kimi_usage_probe", text.strip())
     match = REVIEW_TASK_ACTION_RE.fullmatch(text)
@@ -459,6 +502,24 @@ def parse_founder_command(text: str) -> FounderCommand:
             raise ValueError("Review task reason must contain 8 to 500 characters")
         return FounderCommand("defer_review_chain", text.strip(), task_id=task_id, task_reason=reason)
     lowered = text.lower()
+    if LEGAL_ESCALATIONS_RE.fullmatch(text):
+        return FounderCommand("legal_escalations", text.strip())
+    match = LEGAL_DISPOSITION_RE.fullmatch(text)
+    if match:
+        try:
+            case_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Legal case disposition needs a valid case ID") from exc
+        reason = match.group(3).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Legal disposition reason must contain 8 to 500 characters")
+        disposition = {
+            "continue within budget": "continue_within_budget",
+            "stop": "stop_initiative",
+            "seek legal counsel": "seek_legal_counsel",
+        }[re.sub(r"\s+", " ", match.group(2).lower())]
+        return FounderCommand("record_legal_disposition", text.strip(), legal_case_id=case_id,
+                              legal_disposition=disposition, legal_reason=reason)
     if re.fullmatch(r"\s*(?:(?:ceo[, :]\s*)?(?:show|list)\s+(?:my\s+)?approvals?|what\s+needs\s+my\s+approval)\s*[?.!]*\s*", lowered):
         return FounderCommand("approvals", text.strip())
     role_match = STATUS_ROLE_RE.fullmatch(text)
@@ -514,9 +575,74 @@ class FounderCommandRouter:
         if command.kind == "status":
             try:
                 status = self.store.company_status()
+                status["legal_escalations"] = self.store.founder_legal_escalations(user_id)
             except IntegrationError:
                 return FounderResponse("I couldn't load company status. No company state was changed; check the database connection and try again.")
             return FounderResponse(render_status_brief(status, command.status_role))
+        if command.kind == "legal_escalations":
+            try:
+                cases = self.store.founder_legal_escalations(user_id)
+            except IntegrationError:
+                return FounderResponse("I couldn't load the legal escalation queue. No company state was changed; check the database connection and try again.")
+            if not cases:
+                return FounderResponse("No open legal escalations. Legal questions and binding commitments still require founder review.")
+            lines = [f"Open legal escalations ({len(cases)} shown):"]
+            for case in cases[:10]:
+                project_name = re.sub(r"\s+", " ", str(case.get("project_name") or "Initiative"))[:90]
+                summary = re.sub(r"\s+", " ", str(case.get("summary") or "Founder review required"))[:240]
+                case_id = str(case.get("id") or "unknown")[:36]
+                cap = case.get("budget_cap")
+                currency = re.sub(r"[^A-Z]", "", str(case.get("currency") or "EUR").upper())[:3] or "EUR"
+                cap_text = f"; all-in cap {currency} {cap:,.2f}" if isinstance(cap, (int, float)) else ""
+                lines.append(f"• {project_name} — {summary}{cap_text}")
+                lines.append(f"  Case ID: {case_id}; project remains paused.")
+            lines.append("Record a disposition with: record legal case <case-id> as continue within budget, stop, or seek legal counsel because <reason>.")
+            lines.append("Recording a disposition does not resume work or authorize contracts, legal commitments, or spending above the existing budget.")
+            return FounderResponse("\n".join(lines))
+        if command.kind == "code_authority_status":
+            try:
+                result = self.store.rpc("sutra_founder_code_authorization_status", {
+                    "p_founder_telegram_user_id": user_id,
+                })
+            except IntegrationError:
+                return FounderResponse("I couldn't load standing code authority. No authority was changed; check the database connection and try again.")
+            if result.get("active") is not True:
+                return FounderResponse("No active standing code authority is recorded for the Sutra repository.")
+            capabilities = result.get("capabilities")
+            capability_text = ", ".join(str(value) for value in capabilities[:7]) if isinstance(capabilities, list) else "capabilities unavailable"
+            return FounderResponse(
+                f"Standing code authority is active for {result.get('repository')}: {capability_text}. "
+                "This does not change spending limits or budgets. To revoke it, use: "
+                f"CEO, revoke standing code authority {result.get('authorization_id')} because <reason>."
+            )
+        if command.kind == "revoke_code_authority":
+            try:
+                result = self.store.rpc("sutra_founder_revoke_code_authorization", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_authorization_id": command.authorization_id,
+                    "p_reason": command.authorization_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("Standing code authority was not revoked. The database did not confirm a change; check the authorization ID and try again.")
+            return FounderResponse(
+                f"Standing code authority {result.get('authorization_id')} is revoked and the change is audit logged. "
+                "This does not change spending limits or previously recorded usage."
+            )
+        if command.kind == "record_legal_disposition":
+            try:
+                result = self.store.rpc("sutra_founder_record_legal_disposition", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_case_id": command.legal_case_id,
+                    "p_disposition": command.legal_disposition,
+                    "p_reason": command.legal_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("Legal disposition was not recorded. The case remains open; only the configured founder can record a disposition for an open case.")
+            return FounderResponse(
+                f"Founder disposition recorded for legal case {result.get('case_id')}: {result.get('disposition')}. "
+                "The initiative remains paused. This records your direction only; it does not restart work, "
+                "authorize a contract or binding commitment, or raise the initiative budget."
+            )
         if command.kind == "kimi_usage_probe":
             try:
                 result = self.store.rpc("sutra_founder_queue_kimi_usage_probe", {
@@ -815,7 +941,11 @@ class FounderCommandRouter:
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
+            "Use: CEO, show legal escalations. Record a disposition only after your legal review.\n"
+            "Use: record legal case <case-id> as continue within budget, stop, or seek legal counsel because <reason>.\n"
             "Use: CEO, show my approvals.\n"
+            "Use: CEO, show standing code authority.\n"
+            "Use: CEO, revoke standing code authority <authorization-id> because <reason>.\n"
             "Use: retry PM review <run-id>.\n"
             "Use: retry PM task <task-id> for a bounded failed product-plan task.\n"
             "Use: retry Architect task <task-id> for a bounded failed architecture task.\n"
@@ -906,6 +1036,10 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         scoped_completed_tasks = [row for row in completed_tasks if row.get("owner_agent_id") in team_agent_ids]
         scoped_project_ids = {row.get("id") for row in scoped_projects}
         scoped_approvals = [row for row in approvals if row.get("project_id") in scoped_project_ids]
+    scoped_project_ids = {str(row.get("id")) for row in scoped_projects if row.get("id")}
+    legal_cases = [case for case in snapshot.get("legal_escalations", [])
+                   if isinstance(case, dict) and (is_company_wide
+                      or str(case.get("project_id")) in scoped_project_ids)]
     task_statuses = ("backlog", "ready", "in_progress", "blocked", "review")
     counts = {state: sum(1 for task in scoped_tasks if task.get("status") == state) for state in task_statuses}
     deferred_reviews = [task for task in scoped_tasks if task.get("status") == "deferred"]
@@ -921,6 +1055,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         f"• Open work: {sum(counts.values())} tasks — {counts['backlog']} backlog, {counts['ready']} ready, {counts['in_progress']} in progress, {counts['review']} in review, {counts['blocked']} blocked",
         f"• Deferred QA/Security reviews: {len(deferred_reviews)} (incomplete)",
         f"• Pending approvals: {len(scoped_approvals)}",
+        f"• Legal escalations requiring founder review: {len(legal_cases)}",
         "",
         "Projects in motion",
     ])
@@ -1077,6 +1212,16 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         else:
             delivery = "no PR was produced"
         lines.append(f"• {title} — Codex execution failed{detail}{safe_detail}; {explanation}, {delivery}, and no automatic retry is queued.")
+    if legal_cases:
+        lines.extend(["", "Legal escalations requiring founder review"])
+        for case in legal_cases[:8]:
+            project_name = re.sub(r"\s+", " ", str(case.get("project_name") or "Initiative"))[:80]
+            summary = re.sub(r"\s+", " ", str(case.get("summary") or "Founder review required"))[:180]
+            case_id = str(case.get("id") or "unknown")[:36]
+            lines.append(f"• {project_name} — {summary}; initiative remains paused.")
+            lines.append(f"  Case ID: {case_id}. Review with: CEO, show legal escalations.")
+        if len(legal_cases) > 8:
+            lines.append(f"• {len(legal_cases) - 8} more legal cases omitted; use CEO, show legal escalations.")
     include_delivery = is_company_wide or agent_slug in {"cto", "developer", "devops"}
     visible_dispatches = dispatch_rows[:6] if include_delivery else []
     if visible_dispatches:
