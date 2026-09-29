@@ -97,6 +97,9 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Customer and lead pipeline", company)
         self.assertIn("No customer or lead records are currently recorded", company)
         self.assertIn("No customer or lead records are currently recorded", sales)
+        self.assertNotIn("\n• \n", company)
+        self.assertNotIn("\n• \n", marketing)
+        self.assertNotIn("\n• \n", sales)
 
     def test_company_status_surfaces_github_permission_blocker(self):
         snapshot = status_fixture()
