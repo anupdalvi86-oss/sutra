@@ -84,6 +84,20 @@ class FounderCommandTests(unittest.TestCase):
         self.assertNotIn("Marketing pipeline", sales)
         self.assertNotIn("Engineering delivery", sales)
 
+    def test_empty_marketing_and_sales_pipelines_are_explicit(self):
+        snapshot = status_fixture()
+        snapshot["campaigns"] = []
+        snapshot["customers"] = []
+        company = render_status_brief(snapshot, "ceo")
+        marketing = render_status_brief(snapshot, "cmo")
+        sales = render_status_brief(snapshot, "sales")
+        self.assertIn("Marketing pipeline", company)
+        self.assertIn("No campaign records are currently recorded", company)
+        self.assertIn("No campaign records are currently recorded", marketing)
+        self.assertIn("Customer and lead pipeline", company)
+        self.assertIn("No customer or lead records are currently recorded", company)
+        self.assertIn("No customer or lead records are currently recorded", sales)
+
     def test_company_status_surfaces_github_permission_blocker(self):
         snapshot = status_fixture()
         snapshot["github_dispatches"] = [{
