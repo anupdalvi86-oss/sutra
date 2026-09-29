@@ -809,6 +809,7 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         if run_key not in runs_by_task or (has_failure_detail and not current_has_failure_detail):
             runs_by_task[run_key] = run
     agents = {str(row.get("id")): row for row in snapshot["agents"]}
+    projects_by_id = {str(row.get("id")): row for row in projects if row.get("id")}
     departments = {str(row.get("id")): row for row in snapshot["departments"]}
     target_agent = next((row for row in agents.values() if row.get("slug") == agent_slug), None)
     dept_id = target_agent.get("department_id") if target_agent else None
@@ -934,7 +935,11 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
         elif run:
             explanation = "the task is blocked, but its run did not persist a specific failure reason"
         else:
-            explanation = "no execution run is linked to this task, so there is no recorded completion or blocker evidence"
+            project = projects_by_id.get(str(task.get("project_id")))
+            if project and project.get("status") == "proposed":
+                explanation = "its project is still proposed and awaits project-budget approval; no execution run or model spend was started"
+            else:
+                explanation = "no execution run is linked to this task, so there is no recorded completion or blocker evidence"
         dispatch = dispatch_by_task.get(str(task.get("id")), {})
         pull_request_number = dispatch.get("pull_request_number")
         if isinstance(pull_request_number, int) and not isinstance(pull_request_number, bool):
