@@ -2,6 +2,16 @@
 
 Updated: 2026-09-29, after PR #206 deployment and the second bounded Kimi probe
 
+## Staged initiative-budget change (review branch; not live)
+
+Branch `feat/all-in-initiative-budget` adds a founder-set all-in EUR ceiling for each new initiative, an auditable shared project-cost ledger, a structured CFO estimate, and automatic activation after the estimate fits the ceiling and the PM review succeeds. Routine in-cap expenses pass the central authorization RPC without a second approval. Matching company, project, department, agent, category, vendor, per-transaction, daily and monthly hard limits remain enforced. Unverified costs stay held. A budget gap pauses the initiative and records the estimated shortfall; the Telegram founder command to change a cap is `Increase initiative budget <project-id> to €<amount> because <reason>.` Only the configured founder can call the audited budget-change RPC.
+
+This change is isolated in a managed worktree and is not applied to production Supabase or deployed to Railway. Production continues to use the founder approval flow described below. Before deploying the API version from this branch, apply migration `20260929194504_initiative_budget_ledger.sql`. No money was spent and no customer or prospect was contacted during this work.
+
+Validation of this branch on 2026-09-29: a fresh disposable Supabase database reset applied all migrations; 18 pgTAP files passed all 525 assertions; the Python suite passed 224 tests; Bandit passed at medium severity or higher; `compileall`, `git diff --check`, and a diff secret-pattern scan passed. Public-schema database lint reported 0 errors and 18 warnings in existing functions outside the new initiative authorization function. Production Supabase, Railway, Telegram and customer systems were not changed or exercised for this branch.
+
+The branch implements only the budget/review foundation. Parallel cross-department delegation, autonomous GitHub merge and release, deployment authorization, CRM/customer support integrations, and live marketing/sales execution still need separate stages. Legal escalation currently pauses and records the issue; a clear founder Telegram decision flow and legal document review path remain future work. Required founder setup to activate customer work includes selecting the CRM/support provider, supplying credentials privately, and defining approved customer-contact terms and limits. No live outreach or legal commitment is authorized by this change.
+
 ## Working
 
 - **Supabase:** Production project `smqsrigsugjuvuombetq` is `ACTIVE_HEALTHY` on PostgreSQL 17.6. Production migrations are applied through `20260929191403_clarify_kimi_probe_iteration_audit`. Supabase remains the authoritative company state.

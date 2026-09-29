@@ -24,7 +24,9 @@ def status_fixture():
     return {
         "projects": [{"id": "project-1", "name": "AI QA opportunity", "status": "approved",
                       "requested_budget": 500, "currency": "EUR", "department_id": "finance-dept",
-                      "owner_agent_id": "ceo-id"}],
+                      "owner_agent_id": "ceo-id", "budget_assessment_status": "within_cap",
+                      "budget_assessment": {"estimated_total_eur": 400, "confidence": "medium",
+                                            "recommended_action": "proceed_within_cap"}}],
         "objectives": [{"id": "objective-1", "project_id": "project-1",
                         "title": "Validate buyer demand", "status": "active",
                         "owner_agent_id": "cpo-id"}],
@@ -44,6 +46,9 @@ def status_fixture():
         "budgets": [{"scope": "company", "scope_key": "*", "period": "monthly", "currency": "EUR",
                      "limit_amount": 8.0, "warning_percent": 80, "hard_stop": True}],
         "expenses": [{"amount": 0.15, "currency": "EUR", "status": "paid", "category": "ai_inference"}],
+        "budget_ledger": [{"project_id": "project-1", "category": "ai_model_usage",
+                           "reserved_amount": 0, "actual_amount": 0.15, "status": "actual",
+                           "currency": "EUR"}],
         "campaigns": [{"id": "campaign-1", "project_id": "project-1", "name": "QA pilot positioning",
                        "channel": "internal", "status": "draft", "budget_amount": 0, "currency": "EUR"}],
         "customers": [{"id": "lead-1", "name": "Synthetic lead", "company": "Example Co",
@@ -298,7 +303,8 @@ class FounderCommandTests(unittest.TestCase):
                                   "owner_agent_id": "pm-id"})
         reply = render_status_brief(snapshot, "ceo")
         self.assertIn("Projects in motion", reply)
-        self.assertIn("AI QA opportunity — approved; owner Chief Executive; requested ceiling EUR 500", reply)
+        self.assertIn("AI QA opportunity — approved; owner Chief Executive; all-in cap EUR 500.00", reply)
+        self.assertIn("CFO estimated all-in cost EUR 400.00; confidence medium", reply)
         self.assertIn("Open tasks", reply)
         self.assertIn("[backlog] Prepare user interview plan — Product Manager", reply)
         self.assertIn("[blocked] Review product plan — Product Manager", reply)
@@ -469,13 +475,15 @@ class FounderCommandTests(unittest.TestCase):
                             and "limit=20" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("approvals?") and "required_roles" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("budgets?") and "hard_stop" in path for path in requested_paths))
+        self.assertTrue(any(path.startswith("initiative_budget_ledger?") and "actual_amount" in path
+                            for path in requested_paths))
         self.assertTrue(any(path.startswith("campaigns?") and "budget_amount" in path for path in requested_paths))
         self.assertTrue(any(path.startswith("customers?") and "email" not in path for path in requested_paths))
         store.rpc.assert_called_once_with("sutra_company_github_dispatch_status", {})
 
     def test_status_snapshot_rejects_partial_or_malformed_database_responses(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        malformed_responses = [[] for _ in range(12)]
+        malformed_responses = [[] for _ in range(13)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
         store.rpc = Mock(return_value={"dispatches": []})
@@ -486,7 +494,9 @@ class FounderCommandTests(unittest.TestCase):
         self.store.rpc.return_value = {"project_id": "project-1", "approval_id": "approval-1"}
         text = "Investigate an AI QA product. Initial budget maximum €500. Prepare a proposal."
         reply = self.router.handle(FOUNDER, FOUNDER, text).text
-        self.assertIn("No spending is authorized until approval", reply)
+        self.assertIn("All-in initiative ceiling", reply)
+        self.assertIn("Any increase pauses for your decision", reply)
+        self.assertIn("CEO → Product → CTO → CFO → PM review", reply)
         args = self.store.rpc.call_args
         self.assertEqual(args.args[0], "sutra_submit_proposal")
         self.assertEqual(args.args[1]["p_founder_telegram_user_id"], FOUNDER)
@@ -905,12 +915,44 @@ class FounderCommandTests(unittest.TestCase):
         self.store.company_status.assert_not_called()
 
     def test_malformed_or_unbudgeted_proposals_do_not_write(self):
-        self.assertEqual(parse_founder_command("Investigate a product").kind, "unsupported")
+        self.assertEqual(parse_founder_command("Investigate a product").kind, "budget_required")
+        self.assertEqual(parse_founder_command("Build a customer support product for small teams.").kind, "budget_required")
         with self.assertRaises(ValueError):
             parse_founder_command(" ")
         with self.assertRaises(ValueError):
             parse_founder_command("x" * 3001)
         self.router.handle(FOUNDER, FOUNDER, "change everything")
+        self.store.rpc.assert_not_called()
+
+    def test_founder_can_change_initiative_budget_with_reason(self):
+        project_id = "00000000-0000-4000-8000-000000000004"
+        parsed = parse_founder_command(
+            f"Increase initiative budget {project_id} to €750 because supplier estimate increased."
+        )
+        self.assertEqual(parsed.kind, "set_project_budget")
+        self.assertEqual(parsed.project_id, project_id)
+        self.assertEqual(parsed.new_budget, 750)
+        self.store.rpc.return_value = {
+            "project_id": project_id, "old_budget": 500, "new_budget": 750,
+            "committed": 200, "remaining_budget": 550,
+        }
+        reply = self.router.handle(
+            FOUNDER, FOUNDER,
+            f"Increase initiative budget {project_id} to €750 because supplier estimate increased.",
+        ).text
+        self.assertIn("Audited all-in budget change", reply)
+        self.assertIn("€550.00 remains", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_project_budget", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": project_id,
+            "p_new_budget": 750,
+            "p_reason": "supplier estimate increased",
+        })
+
+    def test_non_founder_cannot_change_initiative_budget(self):
+        project_id = "00000000-0000-4000-8000-000000000004"
+        response = self.router.handle("not-founder", "not-founder", "change budget").text
+        self.assertIn("restricted", response)
         self.store.rpc.assert_not_called()
 
     def test_money_and_name_parsing(self):
