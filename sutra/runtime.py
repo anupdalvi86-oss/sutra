@@ -407,6 +407,8 @@ def parse_founder_command(text: str) -> FounderCommand:
         return FounderCommand("set_codex_retry_limit", text.strip(), retry_limit=total_attempts)
     if CODEX_RETRY_LIMIT_GET_RE.fullmatch(text):
         return FounderCommand("get_codex_retry_limit", text.strip())
+    if re.fullmatch(r"\s*CEO,\s*run one bounded Kimi usage probe\.\s*", text, re.IGNORECASE):
+        return FounderCommand("kimi_usage_probe", text.strip())
     match = REVIEW_TASK_ACTION_RE.fullmatch(text)
     if match:
         try:
@@ -485,6 +487,26 @@ class FounderCommandRouter:
             except IntegrationError:
                 return FounderResponse("I couldn't load company status. No company state was changed; check the database connection and try again.")
             return FounderResponse(render_status_brief(status, command.status_role))
+        if command.kind == "kimi_usage_probe":
+            try:
+                result = self.store.rpc("sutra_founder_queue_kimi_usage_probe", {
+                    "p_founder_telegram_user_id": user_id,
+                })
+            except IntegrationError:
+                return FounderResponse(
+                    "The Kimi usage probe was not queued. No provider request was made; "
+                    "the database must confirm the founder, active price profile, budget, and probe slot."
+                )
+            amount = result.get("maximum_reservation_eur")
+            amount_label = f"{amount:.2f}" if (
+                isinstance(amount, (int, float)) and not isinstance(amount, bool) and math.isfinite(amount)
+            ) else "0.10"
+            return FounderResponse(
+                f"One-shot Kimi usage probe queued: {result.get('probe_id')}. "
+                f"Maximum reservation: €{amount_label}. "
+                "It uses the existing project and monthly spend hard stops, makes at most one provider request, "
+                "and does not enable Kimi for ordinary role work. Unknown prior reservations remain held."
+            )
         if command.kind in {"defer_review_task", "restore_review_task", "defer_review_chain"}:
             procedure = {
                 "defer_review_task": "sutra_founder_defer_task",
@@ -750,6 +772,7 @@ class FounderCommandRouter:
             "Use: retry Codex task <task-id> after a verified no-request runner failure.\n"
             "Use: CEO, show Codex no-request retry limit.\n"
             "Use: CEO, set Codex no-request retry limit to <1-3> total attempts. This only changes the audited founder setting; it does not retry a task.\n"
+            "Use: CEO, run one bounded Kimi usage probe. This authorizes one database-reserved request up to €0.10; it does not enable Kimi for role work.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."

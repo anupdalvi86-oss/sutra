@@ -57,6 +57,31 @@ class FounderCommandTests(unittest.TestCase):
         self.store = Mock()
         self.router = FounderCommandRouter(self.store, FOUNDER)
 
+    def test_kimi_probe_command_queues_one_founder_only_bounded_request(self):
+        self.store.rpc.return_value = {"probe_id": "probe-1", "maximum_reservation_eur": 0.10}
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, run one bounded Kimi usage probe.").text
+        self.assertIn("One-shot Kimi usage probe queued: probe-1", reply)
+        self.assertIn("Maximum reservation: €0.10", reply)
+        self.assertIn("does not enable Kimi for ordinary role work", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_queue_kimi_usage_probe", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
+    def test_kimi_probe_command_is_founder_only_and_database_failure_is_fail_closed(self):
+        reply = self.router.handle("987654321", "987654321",
+                                   "CEO, run one bounded Kimi usage probe.").text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+        self.store.rpc.side_effect = IntegrationError("probe denied")
+        reply = self.router.handle(FOUNDER, FOUNDER,
+                                   "CEO, run one bounded Kimi usage probe.").text
+        self.assertIn("probe was not queued", reply)
+        self.assertIn("No provider request was made", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_queue_kimi_usage_probe", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
     def test_status_reads_authoritative_counts(self):
         self.store.company_status.return_value = status_fixture()
         reply = self.router.handle(FOUNDER, FOUNDER, "CEO, give me company status.").text
