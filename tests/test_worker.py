@@ -187,6 +187,21 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertIn('"first_contact_draft":"..."', prompt)
         self.assertIn("do not identify or invent a real lead", prompt)
 
+    def test_cpo_research_prompt_keeps_the_report_within_the_output_budget(self):
+        response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("cpo"))}}],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+        fake_response = Mock()
+        fake_response.__enter__ = Mock(return_value=fake_response)
+        fake_response.__exit__ = Mock(return_value=False)
+        fake_response.read.return_value = json.dumps(response).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=fake_response) as request:
+            client = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-6-luna")
+            client.review(task_artifact_run("cpo"), max_output_tokens=2200)
+        prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
+        self.assertIn("Keep the report compact for a strict output budget", prompt)
+        self.assertIn("use 3-5 strong sources", prompt)
+        self.assertIn("task_acceptance evidence under 160 characters", prompt)
+
     def test_product_task_prompt_shows_exact_criterion_evidence_contract(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output())}}],
                     "usage": {"prompt_tokens": 20, "completion_tokens": 30}}

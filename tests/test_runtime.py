@@ -96,6 +96,20 @@ class FounderCommandTests(unittest.TestCase):
         )
         self.assertIn("CFO review followed by founder approval — EUR 500; awaiting cfo, founder", reply)
 
+    def test_board_status_explains_blocked_work_on_role_rejected_project(self):
+        snapshot = status_fixture()
+        snapshot["projects"][0]["status"] = "rejected"
+        snapshot["tasks"][0]["project_id"] = "project-1"
+        snapshot["tasks"][0]["status"] = "blocked"
+        snapshot["agent_runs"] = []
+
+        reply = render_status_brief(snapshot, "ceo")
+
+        self.assertIn(
+            "Review product plan — owned by Product Manager; its project-budget approval was rejected; "
+            "no execution run or model spend was started.", reply,
+        )
+
     def test_board_status_includes_objectives_campaigns_and_customer_pipeline(self):
         reply = render_status_brief(status_fixture(), "ceo")
         self.assertIn("Objective [active]: Validate buyer demand", reply)
