@@ -303,6 +303,7 @@ PM_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+review\s+([0-9a-f-]{
 AGENT_REVIEW_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+agent\s+review\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 PRODUCT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+pm\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 ARCHITECT_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+architect\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
+CPO_RESEARCH_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+cpo\s+research\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 GITHUB_DISPATCH_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+github\s+dispatch\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 CODEX_TASK_RETRY_RE = re.compile(r"^\s*(?:ceo[, :]\s*)?retry\s+codex\s+task\s+([0-9a-f-]{36})\s*[.!]?\s*$", re.IGNORECASE)
 CODEX_RETRY_LIMIT_SET_RE = re.compile(
@@ -359,6 +360,13 @@ def parse_founder_command(text: str) -> FounderCommand:
         except ValueError as exc:
             raise ValueError("Architect task retry needs a valid task ID") from exc
         return FounderCommand("retry_architect_task", text.strip(), task_id=task_id)
+    match = CPO_RESEARCH_TASK_RETRY_RE.fullmatch(text)
+    if match:
+        try:
+            task_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("CPO research retry needs a valid task ID") from exc
+        return FounderCommand("retry_cpo_research", text.strip(), task_id=task_id)
     match = GITHUB_DISPATCH_RETRY_RE.fullmatch(text)
     if match:
         try:
@@ -558,6 +566,18 @@ class FounderCommandRouter:
                 f"Architect task queued: {result.get('task_id')}. A new run uses the normal spend reservation and monthly hard cap. "
                 "Unknown earlier usage remains reserved; project approval and spending authority are unchanged."
             )
+        if command.kind == "retry_cpo_research":
+            try:
+                result = self.store.rpc("sutra_founder_retry_cpo_research_task", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_task_id": command.task_id,
+                })
+            except IntegrationError:
+                return FounderResponse("CPO research was not retried. Only the same blocked, founder-approved CPO research task with a terminal malformed-response failure and preserved unknown usage is eligible.")
+            return FounderResponse(
+                f"CPO research task queued: {result.get('task_id')} using OpenAI GPT-6 Luna. A new run still needs the normal spend reservation and monthly hard cap. "
+                "The prior unknown reservation remains held; no project spending, merge, or release authority was added."
+            )
         if command.kind == "retry_github_dispatch":
             try:
                 result = self.store.rpc("sutra_founder_retry_github_task_dispatch", {
@@ -624,6 +644,7 @@ class FounderCommandRouter:
             "Use: retry PM review <run-id>.\n"
             "Use: retry PM task <task-id> for a bounded failed product-plan task.\n"
             "Use: retry Architect task <task-id> for a bounded failed architecture task.\n"
+            "Use: retry CPO research <task-id> for the same blocked approved research task.\n"
             "Use: retry GitHub dispatch <task-id> after fixing a GitHub permission failure.\n"
             "Use: retry Codex task <task-id> after a verified no-request runner failure.\n"
             "Use: CEO, show Codex no-request retry limit.\n"
