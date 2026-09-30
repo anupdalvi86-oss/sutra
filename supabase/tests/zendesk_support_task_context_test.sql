@@ -89,6 +89,12 @@ select public.sutra_submit_task_agent_artifact('sutra-worker-12345678',
 select is((select artifact->'support_reply_draft'->>'ticket_id' from public.task_agent_artifacts
   where task_id=(select task_id from zendesk_task_context_ids)),'987650001',
   'the task persists a validated support reply draft');
+select is((select details->>'reason_code' from public.audit_log
+  where action='support.reply_delivery_blocked'
+    and resource_id=(select id::text from public.task_agent_artifacts
+      where task_id=(select task_id from zendesk_task_context_ids))
+  order by created_at desc limit 1),null,
+  'a qualifying assigned support reply has no enqueue block reason');
 select is((select status from public.zendesk_reply_actions
   where task_id=(select task_id from zendesk_task_context_ids)),'queued',
   'a qualifying private reply draft queues once under a configured reservation ceiling');
