@@ -615,6 +615,20 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("couldn't load company status", reply)
         self.assertIn("No company state was changed", reply)
 
+    def test_supabase_http_errors_expose_only_a_safe_status_category(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        upstream = urllib.error.HTTPError(
+            "https://sutra.example/rest/v1/rpc/secret", 403, "private database detail",
+            {}, None,
+        )
+        with patch("sutra.runtime.open_outbound_request", side_effect=upstream):
+            with self.assertRaises(IntegrationError) as caught:
+                store.request("rpc/sutra_claim_ready_code_release", "POST", {})
+
+        self.assertEqual(caught.exception.code, "supabase_http_403")
+        self.assertNotIn("private database detail", str(caught.exception))
+        self.assertNotIn("secret", str(caught.exception))
+
     def test_status_snapshot_reads_projects_tasks_approvals_and_financial_controls(self):
         expected = status_fixture()
         expected["code_releases"] = []

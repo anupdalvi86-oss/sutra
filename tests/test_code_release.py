@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import threading
 import unittest
 from unittest.mock import Mock
 
 from sutra.code_release import CodeReleaseWorker
 from sutra.github_dispatch import GitHubAPIError, GitHubIssues
+from sutra.runtime import IntegrationError
 
 
 SHA = "a" * 40
@@ -97,6 +99,40 @@ class CodeReleaseWorkerTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.worker.run_once()
         self.github.pull_request_release_state.assert_not_called()
+
+    def test_cycle_logs_safe_failure_stage_and_backs_off_without_exposing_message(self):
+        self.worker.run_once = Mock(side_effect=[
+            IntegrationError("secret response body", code="supabase_http_403"),
+            IntegrationError("another secret", code="supabase_http_403"),
+            False,
+        ])
+
+        class StopAfterThreeWaits:
+            def __init__(self):
+                self.waits = []
+
+            def is_set(self):
+                return len(self.waits) >= 3
+
+            def wait(self, seconds):
+                self.waits.append(seconds)
+
+        stop = StopAfterThreeWaits()
+        self.worker._stage = "database_claim"
+        with self.assertLogs("sutra.code_release", level="WARNING") as logs:
+            self.worker.run(stop, idle_seconds=30)
+
+        self.assertEqual(stop.waits, [30, 60, 30])
+        self.assertIn("stage=database_claim error_code=supabase_http_403 retry_in_seconds=30", logs.output[0])
+        self.assertIn("retry_in_seconds=60", logs.output[1])
+        self.assertNotIn("secret response body", "\n".join(logs.output))
+        self.assertNotIn("another secret", "\n".join(logs.output))
+
+    def test_cycle_error_code_rejects_unallowlisted_values(self):
+        self.assertEqual(CodeReleaseWorker._cycle_error_code(
+            IntegrationError("unsafe", code="authorization:token")), "integration_error")
+        self.assertEqual(CodeReleaseWorker._cycle_error_code(
+            GitHubAPIError("github_permission_denied")), "github_permission_denied")
 
 
 class GitHubReleaseApiTests(unittest.TestCase):

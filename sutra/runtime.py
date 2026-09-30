@@ -20,6 +20,12 @@ from typing import Any, Callable
 class IntegrationError(RuntimeError):
     """An external integration returned an invalid or unsuccessful response."""
 
+    def __init__(self, message: str, *, code: str = "integration_error"):
+        super().__init__(message)
+        # Callers may safely log this bounded category. Never log response bodies,
+        # request URLs, headers, or the exception's upstream message.
+        self.code = code if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code) else "integration_error"
+
 
 def validate_outbound_request(request: urllib.request.Request) -> None:
     """Allow HTTPS integrations and only the private Railway HTTP network."""
@@ -75,8 +81,14 @@ class SupabaseREST:
                 if len(raw) > 1_000_000:
                     raise IntegrationError("Supabase response exceeded the size limit")
                 return json.loads(raw) if raw else None
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise IntegrationError("Supabase request failed") from exc
+        except urllib.error.HTTPError as exc:
+            status = exc.code if isinstance(exc.code, int) and 100 <= exc.code <= 599 else None
+            code = f"supabase_http_{status}" if status is not None else "supabase_http_error"
+            raise IntegrationError("Supabase request failed", code=code) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise IntegrationError("Supabase request failed", code="supabase_network_error") from exc
+        except json.JSONDecodeError as exc:
+            raise IntegrationError("Supabase returned invalid JSON", code="supabase_invalid_json") from exc
 
     def rpc(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.request(f"rpc/{name}", "POST", payload)
