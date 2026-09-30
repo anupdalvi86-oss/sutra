@@ -41,6 +41,7 @@ The production initiative ledger has 40 `actual` entries totaling €0.40 and 16
 
 ## Current sprint additions
 
+- Closed a critical budget gap in the release branch: Hermes and Codex inference now acquire the shared EUR/project locks and compare the fresh reservation against the initiative ledger before authorizing a provider call. Reserved and unknown amounts count in full; actual/overrun amounts use reconciled actuals. A new pgTAP regression test proves an unknown Kimi reserve blocks an over-cap OpenAI reservation while an in-cap reservation still succeeds. Production is unchanged until the sprint PR is merged and deployed.
 - Added one bounded automatic retry for exhausted malformed task artifacts only after spend usage reconciles. It requires an active founder-approved initiative assessed within its all-in budget, no legal hold, and the same assigned agent. Unknown reservations are untouched, the next provider call still needs a fresh existing-policy reservation, and each task can receive this automatic requeue only once. The focused database test passed in the full pgTAP run. The automatic requeue stays excluded for Codex execution, unreconciled provider outcomes, unassessed/over-cap projects, and legal holds.
 
 ## Remaining gaps and blockers
