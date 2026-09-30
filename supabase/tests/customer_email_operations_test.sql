@@ -1,5 +1,5 @@
 begin;
-select plan(28);
+select plan(30);
 
 select ok((select relrowsecurity from pg_class where oid='public.customer_email_actions'::regclass),
   'customer email actions have row level security enabled');
