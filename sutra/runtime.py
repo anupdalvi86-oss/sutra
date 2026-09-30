@@ -373,6 +373,25 @@ class SupabaseREST:
                 snapshot[key] = []
                 status_errors.append(key)
         try:
+            support_status = self.request("rpc/sutra_company_support_case_status", "POST", {})
+            if not isinstance(support_status, dict):
+                raise IntegrationError("invalid support status")
+            total = support_status.get("total")
+            open_count = support_status.get("open")
+            by_status = support_status.get("by_status")
+            open_by_priority = support_status.get("open_by_priority")
+            if (type(total) is not int or total < 0 or type(open_count) is not int or open_count < 0
+                    or open_count > total or not isinstance(by_status, dict)
+                    or not isinstance(open_by_priority, dict)
+                    or any(not isinstance(key, str) or type(value) is not int or value < 0
+                           for key, value in (*by_status.items(), *open_by_priority.items()))
+                    or sum(by_status.values()) != total or sum(open_by_priority.values()) != open_count):
+                raise IntegrationError("invalid support status")
+            snapshot["support_case_status"] = support_status
+        except IntegrationError:
+            snapshot["support_case_status"] = None
+            status_errors.append("support_cases")
+        try:
             dispatch_status = self.rpc("sutra_company_github_dispatch_status", {})
             dispatches = dispatch_status.get("dispatches")
             if not isinstance(dispatches, list) or not all(isinstance(row, dict) for row in dispatches):
@@ -1632,6 +1651,30 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             for action in email_actions[:6]:
                 purpose = str(action.get("purpose") or "customer")[:24]
                 lines.append(f"• [{action.get('status', 'unknown')}] {purpose} email action — ID {action.get('id', 'unknown')}")
+    include_support_operations = is_company_wide or agent_slug in {"coo", "sales"}
+    if include_support_operations:
+        lines.extend(["", "Customer support queue"])
+        support_status = snapshot.get("support_case_status")
+        if not isinstance(support_status, dict):
+            lines.append("• Support queue data is unavailable; no case counts inferred.")
+        else:
+            total = support_status["total"]
+            open_count = support_status["open"]
+            resolved_count = total - open_count
+            if not total:
+                lines.append("• No support tickets recorded.")
+            else:
+                lines.append(f"• {open_count} open; {resolved_count} solved or closed; {total} total.")
+                statuses = support_status["by_status"]
+                if statuses:
+                    lines.append("• By status: " + ", ".join(
+                        f"{status}: {count}" for status, count in sorted(statuses.items())
+                    ))
+                priorities = support_status["open_by_priority"]
+                if priorities:
+                    lines.append("• Open priority: " + ", ".join(
+                        f"{priority}: {count}" for priority, count in sorted(priorities.items())
+                    ))
     lines.extend(["", "Approvals requiring attention"])
     if not scoped_approvals:
         lines.append("• None pending.")

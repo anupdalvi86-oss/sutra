@@ -55,6 +55,11 @@ def status_fixture():
         "customers": [{"id": "lead-1", "name": "Synthetic lead", "company": "Example Co",
                        "source": "test fixture", "status": "qualified"}],
         "customer_email_actions": [],
+        "support_case_status": {
+            "total": 4, "open": 3,
+            "by_status": {"open": 2, "pending": 1, "solved": 1},
+            "open_by_priority": {"urgent": 2, "normal": 1},
+        },
         "legal_escalations": [],
         "github_dispatches": [],
     }
@@ -287,6 +292,9 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("[draft] QA pilot positioning — internal", reply)
         self.assertIn("Customer communications", reply)
         self.assertIn("No budgeted customer email actions are queued or recorded", reply)
+        self.assertIn("Customer support queue", reply)
+        self.assertIn("3 open; 1 solved or closed; 4 total", reply)
+        self.assertIn("Open priority: normal: 1, urgent: 2", reply)
 
     def test_status_reports_customer_email_action_state_without_disclosing_content(self):
         snapshot = status_fixture()
@@ -314,6 +322,26 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Customer and lead pipeline", sales)
         self.assertNotIn("Marketing pipeline", sales)
         self.assertNotIn("Engineering delivery", sales)
+        self.assertIn("Customer support queue", sales)
+        self.assertNotIn("Customer support queue", marketing)
+
+    def test_support_status_is_scoped_to_operations_and_empty_queue_is_explicit(self):
+        snapshot = status_fixture()
+        snapshot["support_case_status"] = {
+            "total": 0, "open": 0, "by_status": {}, "open_by_priority": {},
+        }
+        company = render_status_brief(snapshot, "ceo")
+        operations = render_status_brief(snapshot, "coo")
+        developer = render_status_brief(snapshot, "developer")
+        self.assertIn("No support tickets recorded", company)
+        self.assertIn("No support tickets recorded", operations)
+        self.assertNotIn("Customer support queue", developer)
+
+    def test_support_status_failure_is_not_reported_as_an_empty_queue(self):
+        snapshot = status_fixture()
+        snapshot["support_case_status"] = None
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("Support queue data is unavailable; no case counts inferred", reply)
 
     def test_empty_marketing_and_sales_pipelines_are_explicit(self):
         snapshot = status_fixture()
@@ -679,7 +707,9 @@ class FounderCommandTests(unittest.TestCase):
             "agents", "departments", "budgets", "expenses", "budget_ledger", "campaigns",
             "customers", "customer_email_actions",
         )
-        store.request = Mock(side_effect=[expected[key] for key in request_order] + [expected["code_releases"]])
+        store.request = Mock(side_effect=[expected[key] for key in request_order] + [
+            expected["support_case_status"], expected["code_releases"],
+        ])
         store.rpc = Mock(return_value={"dispatches": expected["github_dispatches"]})
         expected.pop("legal_escalations")
         self.assertEqual(store.company_status(), expected)
@@ -699,6 +729,7 @@ class FounderCommandTests(unittest.TestCase):
         self.assertTrue(any(path.startswith("customers?") and "email" not in path for path in requested_paths))
         self.assertTrue(any(path.startswith("customer_email_actions?") and "body_text" not in path
                             and "recipient_email" not in path for path in requested_paths))
+        self.assertIn("rpc/sutra_company_support_case_status", requested_paths)
         self.assertEqual(store.request.call_args_list[-1], unittest.mock.call(
             "rpc/sutra_company_code_release_status", "POST", {}))
         self.assertEqual(store.rpc.call_args_list, [
@@ -707,12 +738,12 @@ class FounderCommandTests(unittest.TestCase):
 
     def test_status_snapshot_keeps_healthy_sections_when_one_source_is_unavailable(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        malformed_responses = [[] for _ in range(15)]
+        malformed_responses = [[] for _ in range(16)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
         store.rpc = Mock(return_value={"dispatches": []})
         status = store.company_status()
-        self.assertEqual(status["status_errors"], ["agents"])
+        self.assertEqual(status["status_errors"], ["agents", "support_cases"])
         self.assertEqual(status["agents"], [])
         self.assertEqual(status["projects"], [])
         self.assertEqual(status["code_releases"], [])
@@ -722,7 +753,7 @@ class FounderCommandTests(unittest.TestCase):
         store.request = Mock(return_value=[])
         store.rpc = Mock(side_effect=IntegrationError("unavailable"))
         status = store.company_status()
-        self.assertEqual(status["status_errors"], ["github_dispatches"])
+        self.assertEqual(status["status_errors"], ["support_cases", "github_dispatches"])
         self.assertEqual(status["github_dispatches"], [])
         self.assertEqual(status["code_releases"], [])
 
