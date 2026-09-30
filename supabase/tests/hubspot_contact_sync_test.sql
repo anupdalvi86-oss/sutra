@@ -125,7 +125,7 @@ select is((public.sutra_finish_customer_crm_sync_action('sutra-worker-hubspot123
   'revoked authorization releases reservation without calling HubSpot');
 select is((select status from public.initiative_budget_ledger where id=(
   select initiative_ledger_id from public.customer_crm_sync_actions where idempotency_key='crm-action-0001')),
-  'actual','known no-request outcome releases the unused reservation');
+  'released','known no-request outcome releases the unused reservation');
 
 select is((public.sutra_queue_customer_crm_sync(
   (select agent_id from crm_ids),(select task_id from crm_ids),(select project_id from crm_ids),
@@ -154,7 +154,7 @@ select is((select status from public.customer_crm_sync_actions where idempotency
   'cancelled','consent withdrawal prevents queued CRM export');
 select is((select status from public.initiative_budget_ledger where id=(
   select initiative_ledger_id from public.customer_crm_sync_actions where idempotency_key='crm-action-0003')),
-  'actual','consent withdrawal settles the unused reservation as known zero');
+  'released','consent withdrawal settles the unused reservation as known zero');
 
 select * from finish();
 rollback;
