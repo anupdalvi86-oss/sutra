@@ -21,6 +21,7 @@ from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .codex_runner import CodexTaskRunner
 from .code_release import CodeReleaseWorker
 from .customer_email import CustomerEmailDeliveryWorker, ResendEmailProvider
+from .customer_support import normalize_zendesk_ticket_event, verify_zendesk_signature
 from .drafts import DraftNotFound, DraftRequestError, DraftService, UserScopedSupabase
 from .github_webhook import normalize_github_event, verify_github_signature
 from .runtime import (
@@ -110,6 +111,7 @@ class SutraApplication:
         self.customer_email_worker_status = "disabled"
         self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+        self.zendesk_webhook_secret = os.environ.get("ZENDESK_WEBHOOK_SECRET", "")
         # Keep the synthetic prototype local-only, even if a hosted service is mislabeled.
         draft_supabase = urlsplit(self.supabase_url)
         local_draft_database = (
@@ -307,6 +309,12 @@ class SutraApplication:
             except IntegrationError:
                 database = "unreachable"
         gateway = GatewayProbe.state()
+        zendesk_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
+        zendesk_state = (
+            "configured" if zendesk_enabled and self.zendesk_webhook_secret
+            else "blocked_runtime_configuration" if zendesk_enabled
+            else "disabled"
+        )
         return {
             "status": "ok" if self.store and database == "reachable" else "degraded",
             "service": "sutra",
@@ -319,6 +327,7 @@ class SutraApplication:
             "code_release_worker": self.code_release_status,
             "customer_email_worker": self.customer_email_worker_status,
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
+            "zendesk_webhook": zendesk_state,
         }
 
     def readiness(self) -> dict[str, Any]:
@@ -334,6 +343,7 @@ class SutraApplication:
             "code_release_worker": health["code_release_worker"],
             "customer_email_worker": health["customer_email_worker"],
             "github_webhook": health["github_webhook"],
+            "zendesk_webhook": health["zendesk_webhook"],
         }
         blockers = []
         if health["database"] != "reachable":
@@ -361,6 +371,9 @@ class SutraApplication:
             blockers.append("code_release_worker")
         if customer_email_enabled and health["customer_email_worker"] != "running":
             blockers.append("customer_email_worker")
+        zendesk_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
+        if zendesk_enabled and health["zendesk_webhook"] != "configured":
+            blockers.append("zendesk_webhook")
         ready = not blockers
         return {
             "status": "ready" if ready else "not_ready",
@@ -445,6 +458,9 @@ class SutraHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/webhooks/github":
             self._github_webhook()
+            return
+        if path == "/webhooks/zendesk":
+            self._zendesk_webhook()
             return
         if path == "/v1/drafts":
             self._draft_request("POST", path)
@@ -703,6 +719,35 @@ class SutraHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid_github_event"})
         except IntegrationError:
             self._json(503, {"error": "github_event_persistence_unavailable"})
+
+    def _zendesk_webhook(self) -> None:
+        enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
+        if not enabled or self.app.store is None or not self.app.zendesk_webhook_secret:
+            self._json(503, {"error": "zendesk_webhook_disabled"})
+            return
+        try:
+            raw = self._read_raw_json()
+            timestamp = self.headers.get("X-Zendesk-Webhook-Timestamp", "")
+            signature = self.headers.get("X-Zendesk-Webhook-Signature", "")
+            if not verify_zendesk_signature(self.app.zendesk_webhook_secret, timestamp, raw, signature):
+                self._json(401, {"error": "invalid_signature"})
+                return
+            payload = json.loads(raw)
+            normalized = normalize_zendesk_ticket_event(payload)
+            if normalized is None:
+                self._json(400, {"error": "invalid_ticket_event"})
+                return
+            result = self.app.store.rpc("sutra_ingest_zendesk_ticket_event", {
+                "p_ticket_id": normalized["ticket_id"],
+                "p_status": normalized["status"],
+                "p_priority": normalized["priority"],
+                "p_provider_updated_at": normalized["updated_at"],
+            })
+            self._json(202, result)
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "invalid_ticket_event"})
+        except IntegrationError:
+            self._json(503, {"error": "support_event_persistence_unavailable"})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Exclude request bodies, credentials, and founder commands from logs.
