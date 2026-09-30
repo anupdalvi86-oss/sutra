@@ -7,12 +7,15 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import logging
 import re
+import threading
 import time
 from typing import Any
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 
 from .runtime import IntegrationError, open_outbound_request
 
@@ -22,6 +25,8 @@ _TIMESTAMP = re.compile(r"^[0-9]{1,12}$")
 _STATUSES = {"new", "open", "pending", "hold", "solved", "closed"}
 _PRIORITIES = {"low", "normal", "high", "urgent"}
 _ZENDESK_SUBDOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+logger = logging.getLogger(__name__)
 
 
 class ZendeskTicketReader:
@@ -132,6 +137,154 @@ class ZendeskTaskContextProvider:
         if authorization.get("ticket_id") != matches[0]:
             raise IntegrationError("Supabase returned mismatched support authorization")
         return self.reader.read_ticket(matches[0])
+
+
+@dataclass(frozen=True)
+class ZendeskReplyResult:
+    outcome: str  # sent, failed, or unknown
+    error_code: str | None = None
+
+
+class ZendeskReplyClient:
+    """Add one public reply to one authorized, open ticket."""
+
+    def __init__(self, reader: ZendeskTicketReader):
+        self.reader = reader
+
+    @staticmethod
+    def _updated_stamp(ticket: Any, ticket_id: str) -> str | None:
+        if (not isinstance(ticket, dict) or str(ticket.get("id")) != ticket_id
+                or ticket.get("status") not in {"new", "open"}):
+            return None
+        stamp = ticket.get("updated_at")
+        if not isinstance(stamp, str) or len(stamp) > 40:
+            return None
+        try:
+            parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return stamp if parsed.tzinfo is not None else None
+
+    def send(self, action: Any, authorize: Any) -> ZendeskReplyResult:
+        if (not isinstance(action, dict)
+                or set(action) != {"ticket_id", "reply_text", "idempotency_key"}
+                or not isinstance(action.get("ticket_id"), str)
+                or not _TICKET_ID.fullmatch(action["ticket_id"])
+                or not isinstance(action.get("reply_text"), str)
+                or not 8 <= len(action["reply_text"].strip()) <= 4000
+                or not isinstance(action.get("idempotency_key"), str)
+                or not _IDEMPOTENCY_KEY.fullmatch(action["idempotency_key"])
+                or not callable(authorize)):
+            return ZendeskReplyResult("failed", "invalid_action")
+
+        ticket_id = action["ticket_id"]
+        for conflict_retry in range(2):
+            try:
+                payload = self.reader._get_json(f"tickets/{ticket_id}.json")
+            except IntegrationError:
+                return ZendeskReplyResult("failed", "ticket_read_failed")
+            updated_stamp = self._updated_stamp(payload.get("ticket"), ticket_id)
+            if updated_stamp is None:
+                return ZendeskReplyResult("failed", "ticket_not_actionable")
+            # Revalidate after the latest ticket read and immediately before each
+            # consequential Zendesk write. A safe-update 409 proves no write occurred.
+            try:
+                if not authorize():
+                    return ZendeskReplyResult("failed", "authorization_revoked")
+            except IntegrationError:
+                return ZendeskReplyResult("failed", "authorization_revoked")
+
+            request_body = json.dumps({"ticket": {
+                "comment": {"body": action["reply_text"].strip(), "public": True},
+                "safe_update": True,
+                "updated_stamp": updated_stamp,
+            }}, separators=(",", ":")).encode("utf-8")
+            request = urllib.request.Request(
+                f"{self.reader.base_url}/tickets/{ticket_id}.json",
+                data=request_body,
+                method="PUT",
+                headers={"Authorization": self.reader.authorization,
+                         "Content-Type": "application/json", "Accept": "application/json"},
+            )
+            try:
+                with self.reader.opener(request, timeout=self.reader.timeout) as response:
+                    raw = response.read(65_537)
+                    if len(raw) > 65_536:
+                        return ZendeskReplyResult("unknown", "provider_response_too_large")
+                    try:
+                        result = json.loads(raw) if raw else None
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        return ZendeskReplyResult("unknown", "malformed_provider_response")
+                    updated_ticket = result.get("ticket") if isinstance(result, dict) else None
+                    new_stamp = self._updated_stamp(updated_ticket, ticket_id)
+                    if new_stamp is None:
+                        return ZendeskReplyResult("unknown", "malformed_provider_response")
+                    return ZendeskReplyResult("sent")
+            except urllib.error.HTTPError as exc:
+                if exc.code == 409 and conflict_retry == 0:
+                    continue
+                if 400 <= exc.code < 500 and exc.code not in {408, 409, 425, 429}:
+                    return ZendeskReplyResult("failed", "provider_rejected")
+                if exc.code == 409:
+                    return ZendeskReplyResult("failed", "safe_update_conflict")
+                return ZendeskReplyResult("unknown", "provider_outcome_unknown")
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+                return ZendeskReplyResult("unknown", "provider_outcome_unknown")
+        return ZendeskReplyResult("failed", "safe_update_conflict")
+
+
+class ZendeskReplyDeliveryWorker:
+    """Deliver one database-authorized ticket reply, preserving ambiguous cost."""
+
+    def __init__(self, store: Any, provider: ZendeskReplyClient,
+                 worker_id: str = "sutra-worker-zendesk0001"):
+        if not isinstance(worker_id, str) or not re.fullmatch(r"sutra-worker-[a-z0-9]{8,64}", worker_id):
+            raise ValueError("Invalid Zendesk reply worker ID")
+        self.store = store
+        self.provider = provider
+        self.worker_id = worker_id
+
+    def run_once(self) -> bool:
+        claim = self.store.claim_zendesk_reply_action(self.worker_id)
+        if claim is None:
+            return False
+        if (not isinstance(claim, dict) or not isinstance(claim.get("action_id"), str)
+                or not isinstance(claim.get("claim_token"), str)
+                or not isinstance(claim.get("ledger_id"), str)
+                or not isinstance(claim.get("action"), dict)):
+            raise IntegrationError("Supabase returned an invalid Zendesk reply claim")
+        action_id, claim_token = claim["action_id"], claim["claim_token"]
+
+        def authorized() -> bool:
+            return self.store.validate_zendesk_reply_claim(self.worker_id, action_id, claim_token)
+
+        try:
+            still_authorized = authorized()
+        except IntegrationError:
+            still_authorized = False
+        if still_authorized:
+            result = self.provider.send(claim["action"], authorized)
+        else:
+            result = ZendeskReplyResult("failed", "authorization_revoked")
+        actual_cost = 0 if result.outcome == "failed" else None
+        cost_known = result.outcome == "failed"
+        self.store.finish_zendesk_reply_action(
+            self.worker_id, action_id, claim_token, result.outcome, result.error_code,
+            actual_cost, cost_known,
+        )
+        logger.info("zendesk_reply_delivery_finished action_id=%s outcome=%s error_code=%s",
+                    action_id, result.outcome, result.error_code or "none")
+        return True
+
+    def run(self, stop_event: threading.Event, idle_seconds: float = 2.0) -> None:
+        while not stop_event.is_set():
+            try:
+                worked = self.run_once()
+            except Exception as exc:  # Never log ticket content or credentials.
+                logger.warning("zendesk_reply_delivery_cycle_failed error_type=%s", type(exc).__name__)
+                worked = False
+            if not worked:
+                stop_event.wait(idle_seconds)
 
 
 def verify_zendesk_signature(

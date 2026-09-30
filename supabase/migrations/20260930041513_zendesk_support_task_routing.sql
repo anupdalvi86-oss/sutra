@@ -121,13 +121,13 @@ begin
   end if;
 
   task_description:='Zendesk ticket ID: '||case_row.external_ticket_id||E'\n'
-    ||'Classify this open support request and prepare a private unsent reply draft. '
-    ||'Use only the authorized task-scoped Zendesk context reader. Do not send a customer message.';
+    ||'Classify this open support request and prepare a bounded support reply draft. '
+    ||'Use only the authorized task-scoped Zendesk context reader. A separate outbox and opt-in worker control any customer delivery.';
   insert into public.tasks(project_id,title,description,acceptance_criteria,task_type,status,
       owner_agent_id,assigned_agent_id)
     values(configured_project_id,'Triage Zendesk support case',task_description,
-      jsonb_build_array('Classify the request and prepare a bounded private unsent reply draft.',
-        'Escalate legal questions without drafting a reply.','Do not send a customer message.'),
+      jsonb_build_array('Classify the request and prepare a bounded support reply draft.',
+        'Escalate legal questions without drafting a reply.','Do not access Zendesk outside the task-scoped reader.'),
       'customer_outreach','ready',sales_id,sales_id)
     returning id into task_id;
   insert into public.zendesk_support_task_routes(support_case_id,task_id,project_id,routing_state)

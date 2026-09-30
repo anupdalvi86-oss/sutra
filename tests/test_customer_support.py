@@ -5,10 +5,12 @@ import json
 import os
 import time
 import unittest
+from unittest.mock import Mock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from sutra.customer_support import (ZendeskTaskContextProvider, ZendeskTicketReader,
+from sutra.customer_support import (ZendeskReplyClient, ZendeskReplyDeliveryWorker,
+                                    ZendeskReplyResult, ZendeskTaskContextProvider, ZendeskTicketReader,
                                     normalize_zendesk_ticket_event, verify_zendesk_signature)
 from sutra.runtime import IntegrationError
 from sutra.server import SutraApplication
@@ -118,6 +120,161 @@ class ZendeskTicketReadTests(unittest.TestCase):
         with self.assertRaisesRegex(IntegrationError, "exactly one"):
             provider(run)
         self.assertEqual(len(events), 2)
+
+
+class ZendeskReplyClientTests(unittest.TestCase):
+    class Response:
+        def __init__(self, value):
+            self.value = json.dumps(value).encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def read(self, size=-1):
+            return self.value[:size]
+
+    def action(self, **overrides):
+        return {"ticket_id": "123", "reply_text": "Please try account recovery again.",
+                "idempotency_key": "zendesk-reply-action-0001", **overrides}
+
+    @staticmethod
+    def ticket(updated_at="2026-09-30T09:00:00Z", status="open"):
+        return {"ticket": {"id": 123, "status": status, "updated_at": updated_at}}
+
+    def reader(self, opener):
+        return ZendeskTicketReader("sutra", "agent@example.test", "token", opener=opener)
+
+    def test_sends_one_public_reply_with_fresh_safe_update_and_database_recheck(self):
+        replies = [self.Response(self.ticket()), self.Response(self.ticket("2026-09-30T09:01:00Z"))]
+        requests = []
+        def opener(request, timeout):
+            requests.append(request)
+            return replies.pop(0)
+        checks = []
+        result = ZendeskReplyClient(self.reader(opener)).send(self.action(), lambda: checks.append(True) or True)
+        self.assertEqual(result, ZendeskReplyResult("sent"))
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(checks, [True])
+        self.assertEqual(requests[1].get_method(), "PUT")
+        self.assertEqual(requests[1].get_header("Authorization"), "Basic " + base64.b64encode(
+            b"agent@example.test/token:token").decode())
+        self.assertEqual(json.loads(requests[1].data), {"ticket": {
+            "comment": {"body": "Please try account recovery again.", "public": True},
+            "safe_update": True, "updated_stamp": "2026-09-30T09:00:00Z"}})
+
+    def test_safe_update_conflict_refetches_and_reauthorizes_once(self):
+        requests = []
+        stamps = ["2026-09-30T09:00:00Z", "2026-09-30T09:02:00Z"]
+        def opener(request, timeout):
+            requests.append(request)
+            if request.get_method() == "GET":
+                return self.Response(self.ticket(stamps.pop(0)))
+            if len([item for item in requests if item.get_method() == "PUT"]) == 1:
+                raise HTTPError(request.full_url, 409, "conflict", {}, None)
+            return self.Response(self.ticket("2026-09-30T09:03:00Z"))
+        checks = []
+        result = ZendeskReplyClient(self.reader(opener)).send(self.action(), lambda: checks.append(True) or True)
+        self.assertEqual(result, ZendeskReplyResult("sent"))
+        self.assertEqual([item.get_method() for item in requests], ["GET", "PUT", "GET", "PUT"])
+        self.assertEqual(checks, [True, True])
+        self.assertEqual(json.loads(requests[-1].data)["ticket"]["updated_stamp"], "2026-09-30T09:02:00Z")
+
+    def test_safe_update_conflict_retry_is_bounded(self):
+        requests = []
+        def opener(request, timeout):
+            requests.append(request)
+            if request.get_method() == "GET":
+                return self.Response(self.ticket(f"2026-09-30T09:0{len(requests)}:00Z"))
+            raise HTTPError(request.full_url, 409, "safe conflict", {}, None)
+        checks = []
+        result = ZendeskReplyClient(self.reader(opener)).send(self.action(), lambda: checks.append(True) or True)
+        self.assertEqual(result, ZendeskReplyResult("failed", "safe_update_conflict"))
+        self.assertEqual([item.get_method() for item in requests], ["GET", "PUT", "GET", "PUT"])
+        self.assertEqual(checks, [True, True])
+
+    def test_revoked_authorization_or_closed_ticket_prevents_public_write(self):
+        requests = []
+        reader = self.reader(lambda req, timeout: requests.append(req) or self.Response(self.ticket()))
+        result = ZendeskReplyClient(reader).send(self.action(), lambda: False)
+        self.assertEqual(result, ZendeskReplyResult("failed", "authorization_revoked"))
+        self.assertEqual([item.get_method() for item in requests], ["GET"])
+
+        requests.clear()
+        reader = self.reader(lambda req, timeout: requests.append(req) or self.Response(self.ticket(status="closed")))
+        result = ZendeskReplyClient(reader).send(self.action(), lambda: True)
+        self.assertEqual(result, ZendeskReplyResult("failed", "ticket_not_actionable"))
+        self.assertEqual([item.get_method() for item in requests], ["GET"])
+
+    def test_ambiguous_write_is_terminal_and_known_provider_rejection_is_failed(self):
+        def timeout_after_write(request, timeout):
+            if request.get_method() == "GET":
+                return self.Response(self.ticket())
+            raise TimeoutError("response lost")
+        result = ZendeskReplyClient(self.reader(timeout_after_write)).send(self.action(), lambda: True)
+        self.assertEqual(result, ZendeskReplyResult("unknown", "provider_outcome_unknown"))
+
+        def reject(request, timeout):
+            if request.get_method() == "GET":
+                return self.Response(self.ticket())
+            raise HTTPError(request.full_url, 403, "rejected", {}, None)
+        result = ZendeskReplyClient(self.reader(reject)).send(self.action(), lambda: True)
+        self.assertEqual(result, ZendeskReplyResult("failed", "provider_rejected"))
+
+    def test_malformed_action_fails_without_network(self):
+        opener = Mock()
+        result = ZendeskReplyClient(self.reader(opener)).send(self.action(ticket_id="../../users"), lambda: True)
+        self.assertEqual(result, ZendeskReplyResult("failed", "invalid_action"))
+        opener.assert_not_called()
+
+
+class ZendeskReplyDeliveryWorkerTests(unittest.TestCase):
+    def claim(self):
+        return {"action_id": "reply-action-0001", "claim_token": "claim-token-0001",
+                "ledger_id": "ledger-entry-0001", "action": {"ticket_id": "123"}}
+
+    def test_empty_queue_has_no_provider_activity(self):
+        store = Mock()
+        store.claim_zendesk_reply_action.return_value = None
+        provider = Mock()
+        worker = ZendeskReplyDeliveryWorker(store, provider)
+        self.assertFalse(worker.run_once())
+        provider.send.assert_not_called()
+
+    def test_rechecks_authorization_and_keeps_unknown_reservation(self):
+        store = Mock()
+        store.claim_zendesk_reply_action.return_value = self.claim()
+        store.validate_zendesk_reply_claim.return_value = True
+        provider = Mock()
+        def send(action, authorize):
+            self.assertEqual(action, self.claim()["action"])
+            self.assertTrue(authorize())
+            return ZendeskReplyResult("unknown", "provider_outcome_unknown")
+        provider.send.side_effect = send
+        worker = ZendeskReplyDeliveryWorker(store, provider)
+        self.assertTrue(worker.run_once())
+        provider.send.assert_called_once()
+        store.finish_zendesk_reply_action.assert_called_once_with(
+            "sutra-worker-zendesk0001", "reply-action-0001", "claim-token-0001",
+            "unknown", "provider_outcome_unknown", None, False)
+
+    def test_revoked_claim_never_calls_provider_and_releases_known_zero(self):
+        store = Mock()
+        store.claim_zendesk_reply_action.return_value = self.claim()
+        store.validate_zendesk_reply_claim.return_value = False
+        provider = Mock()
+        worker = ZendeskReplyDeliveryWorker(store, provider)
+        self.assertTrue(worker.run_once())
+        provider.send.assert_not_called()
+        store.finish_zendesk_reply_action.assert_called_once_with(
+            "sutra-worker-zendesk0001", "reply-action-0001", "claim-token-0001",
+            "failed", "authorization_revoked", 0, True)
+
+    def test_malformed_claim_fails_closed(self):
+        store = Mock()
+        store.claim_zendesk_reply_action.return_value = {"action_id": "reply-action-0001"}
+        worker = ZendeskReplyDeliveryWorker(store, Mock())
+        with self.assertRaisesRegex(IntegrationError, "invalid Zendesk reply claim"):
+            worker.run_once()
 
 
 class ZendeskWebhookServerTests(unittest.TestCase):

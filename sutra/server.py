@@ -23,6 +23,7 @@ from .code_release import CodeReleaseWorker
 from .customer_email import CustomerEmailDeliveryWorker, ResendEmailProvider
 from .crm_hubspot import HubSpotContactClient, HubSpotContactSyncWorker
 from .customer_support import (ZendeskTaskContextProvider, ZendeskTicketReader,
+                               ZendeskReplyClient, ZendeskReplyDeliveryWorker,
                                normalize_zendesk_ticket_event, verify_zendesk_signature)
 from .drafts import DraftNotFound, DraftRequestError, DraftService, UserScopedSupabase
 from .github_webhook import normalize_github_event, verify_github_signature
@@ -111,6 +112,8 @@ class SutraApplication:
         self.code_release_status = "disabled"
         self.customer_email_worker_thread: threading.Thread | None = None
         self.customer_email_worker_status = "disabled"
+        self.zendesk_reply_worker_thread: threading.Thread | None = None
+        self.zendesk_reply_worker_status = "disabled"
         self.hubspot_sync_worker_thread: threading.Thread | None = None
         self.hubspot_sync_worker_status = "disabled"
         self.hubspot_private_app_token = os.environ.get("HUBSPOT_PRIVATE_APP_TOKEN", "").strip()
@@ -284,6 +287,25 @@ class SutraApplication:
                     self.customer_email_worker_status = "running"
                 except ValueError:
                     self.customer_email_worker_status = "blocked_runtime_configuration"
+        if os.environ.get("SUTRA_ENABLE_ZENDESK_REPLY_WORKER", "false").lower() == "true":
+            send_mode = os.environ.get("SUTRA_ZENDESK_REPLY_SEND_MODE", "disabled").strip().lower()
+            try:
+                reader = ZendeskTicketReader(
+                    os.environ.get("ZENDESK_SUBDOMAIN", ""),
+                    os.environ.get("ZENDESK_AGENT_EMAIL", ""),
+                    os.environ.get("ZENDESK_API_TOKEN", ""),
+                )
+                if not self.store or send_mode != "live":
+                    raise ValueError("Zendesk reply delivery needs Supabase and explicit live mode")
+                worker_id = "sutra-worker-zendesk" + uuid.uuid4().hex[:12]
+                worker = ZendeskReplyDeliveryWorker(self.store, ZendeskReplyClient(reader), worker_id)
+                self.zendesk_reply_worker_thread = threading.Thread(
+                    target=worker.run, args=(self.telegram_stop,), daemon=True,
+                    name="sutra-zendesk-reply-worker")
+                self.zendesk_reply_worker_thread.start()
+                self.zendesk_reply_worker_status = "running"
+            except ValueError:
+                self.zendesk_reply_worker_status = "blocked_runtime_configuration"
         if os.environ.get("SUTRA_ENABLE_HUBSPOT_SYNC_WORKER", "false").lower() == "true":
             if not self.store or not self.hubspot_private_app_token:
                 self.hubspot_sync_worker_status = "blocked_runtime_configuration"
@@ -366,6 +388,7 @@ class SutraApplication:
             "codex_runner": self.codex_runner_status,
             "code_release_worker": self.code_release_status,
             "customer_email_worker": self.customer_email_worker_status,
+            "zendesk_reply_worker": self.zendesk_reply_worker_status,
             "hubspot_sync_worker": self.hubspot_sync_worker_status,
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
             "zendesk_webhook": zendesk_state,
@@ -384,6 +407,7 @@ class SutraApplication:
             "codex_runner": health["codex_runner"],
             "code_release_worker": health["code_release_worker"],
             "customer_email_worker": health["customer_email_worker"],
+            "zendesk_reply_worker": health["zendesk_reply_worker"],
             "hubspot_sync_worker": health["hubspot_sync_worker"],
             "github_webhook": health["github_webhook"],
             "zendesk_webhook": health["zendesk_webhook"],
@@ -398,6 +422,7 @@ class SutraApplication:
         codex_enabled = os.environ.get("SUTRA_ENABLE_CODEX_RUNNER", "false").lower() == "true"
         code_release_enabled = os.environ.get("SUTRA_ENABLE_CODE_RELEASE_WORKER", "false").lower() == "true"
         customer_email_enabled = os.environ.get("SUTRA_ENABLE_CUSTOMER_EMAIL_WORKER", "false").lower() == "true"
+        zendesk_reply_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_REPLY_WORKER", "false").lower() == "true"
         hubspot_enabled = os.environ.get("SUTRA_ENABLE_HUBSPOT_SYNC_WORKER", "false").lower() == "true"
         if telegram_enabled and health["telegram"] != "running":
             blockers.append("telegram")
@@ -416,6 +441,8 @@ class SutraApplication:
             blockers.append("code_release_worker")
         if customer_email_enabled and health["customer_email_worker"] != "running":
             blockers.append("customer_email_worker")
+        if zendesk_reply_enabled and health["zendesk_reply_worker"] != "running":
+            blockers.append("zendesk_reply_worker")
         if hubspot_enabled and health["hubspot_sync_worker"] != "running":
             blockers.append("hubspot_sync_worker")
         zendesk_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
@@ -447,6 +474,8 @@ class SutraApplication:
             self.code_release_thread.join(timeout=2)
         if self.customer_email_worker_thread:
             self.customer_email_worker_thread.join(timeout=2)
+        if self.zendesk_reply_worker_thread:
+            self.zendesk_reply_worker_thread.join(timeout=2)
         if self.hubspot_sync_worker_thread:
             self.hubspot_sync_worker_thread.join(timeout=2)
 

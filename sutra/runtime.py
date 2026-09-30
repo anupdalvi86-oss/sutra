@@ -304,6 +304,35 @@ class SupabaseREST:
             raise IntegrationError("Supabase returned an invalid customer email result")
         return result
 
+    def claim_zendesk_reply_action(self, worker_id: str) -> dict[str, Any] | None:
+        result = self.rpc("sutra_claim_zendesk_reply_action", {"p_worker_id": worker_id})
+        if result is None:
+            return None
+        if not isinstance(result, dict) or result.get("status") != "claimed":
+            raise IntegrationError("Supabase returned an invalid Zendesk reply claim")
+        return result
+
+    def validate_zendesk_reply_claim(self, worker_id: str, action_id: str,
+                                     claim_token: str) -> bool:
+        result = self.rpc("sutra_validate_zendesk_reply_claim", {
+            "p_worker_id": worker_id, "p_action_id": action_id, "p_claim_token": claim_token,
+        })
+        if not isinstance(result, bool):
+            raise IntegrationError("Supabase returned an invalid Zendesk reply authorization")
+        return result
+
+    def finish_zendesk_reply_action(self, worker_id: str, action_id: str, claim_token: str,
+                                    status: str, error_code: str | None,
+                                    actual_cost_eur: float | None, cost_known: bool) -> dict[str, Any]:
+        result = self.rpc("sutra_finish_zendesk_reply_action", {
+            "p_worker_id": worker_id, "p_action_id": action_id, "p_claim_token": claim_token,
+            "p_status": status, "p_error_code": error_code,
+            "p_actual_cost_eur": actual_cost_eur, "p_cost_known": cost_known,
+        })
+        if not isinstance(result, dict) or result.get("status") != status:
+            raise IntegrationError("Supabase returned an invalid Zendesk reply result")
+        return result
+
     def claim_customer_crm_sync_action(self, worker_id: str) -> dict[str, Any] | None:
         result = self.rpc("sutra_claim_customer_crm_sync_action", {"p_worker_id": worker_id})
         if result is None:
@@ -471,6 +500,8 @@ class FounderCommand:
     zendesk_support_project_id: str | None = None
     zendesk_support_routing_enabled: bool | None = None
     zendesk_support_routing_reason: str = ""
+    zendesk_reply_cost_ceiling: float | None = None
+    zendesk_reply_cost_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -510,6 +541,14 @@ EMAIL_COST_CEILING_SET_RE = re.compile(
 )
 EMAIL_COST_CEILING_GET_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_REPLY_COST_SET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?zendesk\s+reply\s+cost\s+ceiling\s+to\s+(?:€|EUR\s*)?([0-9]+(?:[.,][0-9]{1,6})?)\s*(?:€|EUR)?\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_REPLY_COST_GET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?zendesk\s+reply\s+cost\s+ceiling\s*[?.!]*\s*$",
     re.IGNORECASE,
 )
 ZENDESK_SUPPORT_ROUTING_SET_RE = re.compile(
@@ -670,6 +709,20 @@ def parse_founder_command(text: str) -> FounderCommand:
         return FounderCommand("get_email_cost_ceiling", text.strip())
     if re.match(r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\b", text, re.IGNORECASE):
         raise ValueError("Customer email cost ceiling must be EUR 0.01 to 100.00 in cents, followed by a reason")
+    match = ZENDESK_REPLY_COST_SET_RE.fullmatch(text)
+    if match:
+        amount = float(match.group(1).replace(",", "."))
+        reason = match.group(2).strip()
+        if not math.isfinite(amount) or not 0.01 <= amount <= 100 or round(amount, 2) != amount:
+            raise ValueError("Zendesk reply cost ceiling must be EUR 0.01 to 100.00 in cents")
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Zendesk reply cost ceiling reason must contain 8 to 500 characters")
+        return FounderCommand("set_zendesk_reply_cost_ceiling", text.strip(),
+                              zendesk_reply_cost_ceiling=amount, zendesk_reply_cost_reason=reason)
+    if ZENDESK_REPLY_COST_GET_RE.fullmatch(text):
+        return FounderCommand("get_zendesk_reply_cost_ceiling", text.strip())
+    if re.match(r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?zendesk\s+reply\s+cost\s+ceiling\b", text, re.IGNORECASE):
+        raise ValueError("Zendesk reply cost ceiling must be EUR 0.01 to 100.00 in cents, followed by a reason")
     match = ZENDESK_SUPPORT_ROUTING_SET_RE.fullmatch(text)
     if match:
         try:
@@ -1254,6 +1307,28 @@ class FounderCommandRouter:
             return FounderResponse(
                 f"Customer email maximum reserved cost per message {'changed' if result.get('changed') else 'already set'} to EUR {result.get('max_message_cost_eur')}. The change is audit logged; no email was sent and no queue was started."
             )
+        if command.kind == "get_zendesk_reply_cost_ceiling":
+            try:
+                result = self.store.rpc("sutra_founder_get_zendesk_reply_cost_ceiling", {
+                    "p_founder_telegram_user_id": user_id,
+                })
+            except IntegrationError:
+                return FounderResponse("I couldn't read the Zendesk reply cost ceiling. No setting changed; check the database connection and try again.")
+            if result.get("configured") is not True:
+                return FounderResponse("Zendesk reply delivery is blocked until you set its audited per-reply cost ceiling. The delivery worker is separately disabled by default.")
+            return FounderResponse(f"Zendesk reply maximum reserved cost is EUR {result.get('max_reply_cost_eur')}. This database ceiling does not enable the worker; live delivery also requires the private worker configuration.")
+        if command.kind == "set_zendesk_reply_cost_ceiling":
+            try:
+                result = self.store.rpc("sutra_founder_set_zendesk_reply_cost_ceiling", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_max_reply_cost_eur": command.zendesk_reply_cost_ceiling,
+                    "p_reason": command.zendesk_reply_cost_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("Zendesk reply cost ceiling unchanged. Only the configured founder can set EUR 0.01–100.00 with an 8–500 character reason; active replies or underfunded queued reservations can prevent the change.")
+            return FounderResponse(
+                f"Zendesk reply maximum reserved cost per message {'changed' if result.get('changed') else 'already set'} to EUR {result.get('max_reply_cost_eur')}. The change is audit logged; it did not queue a reply or enable delivery."
+            )
         if command.kind == "get_zendesk_support_routing":
             try:
                 result = self.store.rpc("sutra_founder_get_zendesk_support_routing", {
@@ -1295,6 +1370,8 @@ class FounderCommandRouter:
             "Use: CEO, set Codex no-request retry limit to <1-3> total attempts. This only changes the audited founder setting; it does not retry a task.\n"
             "Use: CEO, show customer email cost ceiling.\n"
             "Use: CEO, set customer email cost ceiling to €0.05 because <reason>. This is a founder-only, audit-logged database control; it sends no email.\n"
+            "Use: CEO, show Zendesk reply cost ceiling.\n"
+            "Use: CEO, set Zendesk reply cost ceiling to €0.05 because <reason>. This is a founder-only, audit-logged database control; it queues no reply and does not enable live delivery.\n"
             "Use: CEO, show Zendesk ticket routing.\n"
             "Use: CEO, route Zendesk tickets to initiative <project-id> because <reason>. The initiative must already be founder-approved, assessed within its all-in budget, and legally clear.\n"
             "Use: CEO, stop Zendesk ticket routing because <reason>. This affects future webhook events; already assigned tasks remain subject to their own controls.\n"

@@ -292,6 +292,42 @@ class FounderCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
             parse_founder_command(f"route Zendesk tickets to initiative {project_id} because short")
 
+    def test_zendesk_reply_ceiling_commands_are_founder_only_and_do_not_enable_sending(self):
+        command = "CEO, set Zendesk reply cost ceiling to €0.05 because reserve a bounded support reply cost."
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "set_zendesk_reply_cost_ceiling")
+        self.assertEqual(parsed.zendesk_reply_cost_ceiling, 0.05)
+        self.assertEqual(parsed.zendesk_reply_cost_reason, "reserve a bounded support reply cost")
+        self.store.rpc.return_value = {"changed": True, "max_reply_cost_eur": 0.05}
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("audit logged", reply)
+        self.assertIn("did not queue a reply or enable delivery", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_zendesk_reply_cost_ceiling", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_max_reply_cost_eur": 0.05,
+            "p_reason": "reserve a bounded support reply cost",
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"configured": False}
+        status = self.router.handle(FOUNDER, FOUNDER, "CEO, show Zendesk reply cost ceiling.").text
+        self.assertIn("blocked until you set", status)
+        self.store.rpc.assert_called_once_with("sutra_founder_get_zendesk_reply_cost_ceiling", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
+        self.store.rpc.reset_mock()
+        reply = self.router.handle("987654321", "987654321", command).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+        for malformed in (
+            "set Zendesk reply cost ceiling to €0 because invalid lower bound",
+            "set Zendesk reply cost ceiling to €0.055 because fraction must be cents",
+            "set Zendesk reply cost ceiling to €0.05 because short",
+        ):
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                parse_founder_command(malformed)
+
     def test_board_status_explains_blocked_work_waiting_on_proposed_project_approval(self):
         snapshot = status_fixture()
         snapshot["projects"].append({
