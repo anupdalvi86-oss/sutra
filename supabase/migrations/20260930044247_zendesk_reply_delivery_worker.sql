@@ -175,7 +175,11 @@ begin
   end if;
 
   begin
-    ledger_result:=public.sutra_authorize_initiative_cost('agent',agent_row.slug,agent_row.id,
+    -- The artifact insert can complete the task before this AFTER trigger runs.
+    -- Reserve as the internal service actor after independently rechecking the
+    -- exact assigned Sales task above; agent reservations correctly reject
+    -- completed tasks in the shared authorization function.
+    ledger_result:=public.sutra_authorize_initiative_cost('system','sutra',null,
       project_row.id,'support_reply','zendesk','Zendesk reply delivery for assigned task '||task_row.id::text,
       ceiling_eur,'EUR','zendesk-reply-action-'||artifact_row.id::text);
     if ledger_result->>'status' not in ('reserved','already_reserved') then
