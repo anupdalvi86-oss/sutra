@@ -87,8 +87,10 @@ grant select on model_budget_fixture to service_role;
 
 create temporary table capped_model_claim(payload jsonb) on commit drop;
 create temporary table safe_model_claim(payload jsonb) on commit drop;
+create temporary table safe_model_reservation(payload jsonb) on commit drop;
 grant insert,select on capped_model_claim to service_role;
 grant insert,select on safe_model_claim to service_role;
+grant insert,select on safe_model_reservation to service_role;
 set local role service_role;
 insert into capped_model_claim select public.sutra_claim_task_agent_run('sutra-worker-cap12345678');
 select throws_ok($$select public.sutra_reserve_agent_run_spend_from_profile(
@@ -96,7 +98,7 @@ select throws_ok($$select public.sutra_reserve_agent_run_spend_from_profile(
   (select (payload->>'lease_token')::uuid from capped_model_claim),'openai','gpt-6-luna')$$,
   '23514',null,'model inference cannot exceed remaining all-in initiative funds');
 insert into safe_model_claim select public.sutra_claim_task_agent_run('sutra-worker-safe1234');
-insert into safe_model_claim select public.sutra_reserve_agent_run_spend_from_profile(
+insert into safe_model_reservation select public.sutra_reserve_agent_run_spend_from_profile(
   'sutra-worker-safe1234',(select (payload->>'run_id')::uuid from safe_model_claim),
   (select (payload->>'lease_token')::uuid from safe_model_claim),'openai','gpt-6-luna');
 reset role;
@@ -108,7 +110,7 @@ select is((select status from public.initiative_budget_ledger
 select is((select count(*)::integer from public.agent_run_spend_reservations
   where agent_run_id=(select (payload->>'run_id')::uuid from capped_model_claim)),0,
   'the over-cap run receives no new model reservation');
-select is((select payload->>'status' from safe_model_claim),'approved',
+select is((select payload->>'status' from safe_model_reservation),'approved',
   'a reservation that fits within the all-in cap still succeeds');
 select is((select status from public.initiative_budget_ledger
   where project_id=(select safe_project_id from model_budget_fixture)
@@ -116,7 +118,7 @@ select is((select status from public.initiative_budget_ledger
   'the successful model reservation is mirrored to the shared initiative ledger');
 select ok(exists(select 1 from public.audit_log where action='agent_run.spend_reserved'
   and resource_type='agent_run_spend_reservation'
-  and resource_id=(select (payload->>'reservation_id') from safe_model_claim)),
+    and resource_id=(select (payload->>'reservation_id') from safe_model_reservation)),
   'successful model reservations retain the existing audit event');
 
 select * from finish();
