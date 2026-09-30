@@ -76,7 +76,7 @@ select ok(exists(select 1 from public.zendesk_support_task_routes r
 select is((select count(*)::integer from public.tasks where project_id=(select project_id from zendesk_routing_fixture)
     and description like '%Zendesk ticket ID: 987651001%'),1,
   'one webhook event creates only one support task');
-select is(((public.sutra_ingest_zendesk_ticket_event('987651001','open','high',
+select is((public.sutra_ingest_zendesk_ticket_event('987651001','open','high',
     '2026-09-30T09:00:00Z'::timestamptz,true)->>'changed')::boolean,false,
   'a replayed webhook event is a no-op and cannot create a duplicate task');
 
