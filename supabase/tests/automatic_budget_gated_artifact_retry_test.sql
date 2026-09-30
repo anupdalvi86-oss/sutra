@@ -1,6 +1,12 @@
 begin;
 select no_plan();
 
+insert into public.company_settings(key,value,governance_sensitive,founder_only,updated_by)
+values('founder_telegram_user_id','"12345678"'::jsonb,true,true,'test')
+on conflict(key) do update set value=excluded.value,governance_sensitive=true,founder_only=true;
+select public.sutra_set_agent_model_spend_profile(
+  '12345678','openai','gpt-6-luna',0.2,0.5,100000,10000,true);
+
 create temporary table automatic_retry_fixture(task_id uuid,project_id uuid,run_id uuid) on commit drop;
 do $$
 declare

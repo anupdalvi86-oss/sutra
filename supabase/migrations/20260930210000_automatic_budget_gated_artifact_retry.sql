@@ -47,7 +47,7 @@ begin
       order by candidate.finished_at desc,candidate.id desc limit 1
     ) r on true
     where t.status='blocked' and a.slug in
-        ('product_manager','architect','coo','devops','cmo','sales','governance_audit')
+        ('cpo','product_manager','architect','coo','devops','cmo','sales','governance_audit')
       and p.status='active' and p.budget_assessment_status='within_cap'
       and p.budget_assessment->>'recommended_action'='proceed_within_cap'
       and case when jsonb_typeof(p.budget_assessment->'estimated_total_eur')='number'
@@ -98,7 +98,7 @@ begin
   else
     select t.* into task_row from public.tasks t join public.agents a on a.id=t.owner_agent_id and a.active
       join public.projects p on p.id=t.project_id and p.status in ('approved','active')
-    where t.status='ready' and a.slug in ('product_manager','architect','coo','devops','cmo','sales','governance_audit')
+    where t.status='ready' and a.slug in ('cpo','product_manager','architect','coo','devops','cmo','sales','governance_audit')
       and not exists(select 1 from public.task_agent_artifacts x where x.task_id=t.id)
       and not exists(select 1 from public.agent_runs r where r.task_id=t.id and r.trigger_type='task_artifact'
         and r.status in ('succeeded','queued','running'))
