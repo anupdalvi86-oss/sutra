@@ -520,6 +520,7 @@ class FounderCommand:
     zendesk_support_routing_reason: str = ""
     zendesk_reply_cost_ceiling: float | None = None
     zendesk_reply_cost_reason: str = ""
+    initiative_followup: str = ""
 
 
 @dataclass(frozen=True)
@@ -534,6 +535,10 @@ MONEY_PATTERNS = (
 )
 PROJECT_BUDGET_SET_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:increase|change|set)\s+(?:the\s+)?(?:all-in\s+)?(?:budget\s+(?:for\s+)?(?:initiative|project)|(?:initiative|project)\s+budget)\s+([0-9a-f-]{36})\s+to\s+(?:€|EUR\s*)?([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:€|EUR)?\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+INITIATIVE_FOLLOWUP_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:continue|add)(?:\s+work)?\s+(?:on\s+)?(?:initiative|project)\s+([0-9a-f-]{36})\s*:\s*(.+?)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 APPROVAL_RE = re.compile(r"^\s*(approve|reject)\s+([0-9a-f-]{36})(?:\s+(.*))?\s*$", re.IGNORECASE)
@@ -649,6 +654,17 @@ def parse_founder_command(text: str) -> FounderCommand:
             raise ValueError("Initiative budget change reason must contain 8 to 500 characters")
         return FounderCommand("set_project_budget", text.strip(), project_id=project_id,
                               new_budget=amount, budget_reason=reason)
+    match = INITIATIVE_FOLLOWUP_RE.fullmatch(text)
+    if match:
+        try:
+            project_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Initiative follow-up needs a valid project ID") from exc
+        request = match.group(2).strip()
+        if len(request) < 12 or len(request) > 2000 or any(ord(char) < 32 for char in request):
+            raise ValueError("Initiative follow-up must contain 12 to 2000 printable characters")
+        return FounderCommand("initiative_followup", text.strip(), project_id=project_id,
+                              initiative_followup=request)
     match = PM_RETRY_RE.fullmatch(text)
     if match:
         try:
@@ -1131,6 +1147,28 @@ class FounderCommandRouter:
                 f"€{result.get('old_budget', 0):,.2f} → €{result.get('new_budget', 0):,.2f}. "
                 f"€{result.get('committed', 0):,.2f} is committed; €{result.get('remaining_budget', 0):,.2f} remains."
             )
+        if command.kind == "initiative_followup":
+            try:
+                result = self.store.rpc("sutra_founder_add_initiative_followup", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_project_id": command.project_id,
+                    "p_request": command.initiative_followup,
+                })
+            except IntegrationError:
+                return FounderResponse(
+                    "I couldn't add that follow-up. The database requires an approved initiative with a positive, "
+                    "CFO-assessed budget and no legal hold; the existing budget must remain unchanged."
+                )
+            budget = result.get("requested_budget")
+            remaining = result.get("remaining_budget")
+            currency = result.get("currency") if result.get("currency") == "EUR" else "EUR"
+            budget_text = f"€{budget:,.2f}" if isinstance(budget, (int, float)) and not isinstance(budget, bool) else "unchanged"
+            remaining_text = f"€{remaining:,.2f}" if isinstance(remaining, (int, float)) and not isinstance(remaining, bool) else "unknown"
+            return FounderResponse(
+                f"Follow-up task {result.get('task_id')} added to initiative {result.get('project_id')} and assigned to the Product Manager. "
+                f"The existing all-in budget remains {budget_text} {currency}; {remaining_text} remains uncommitted. "
+                "No spend was reserved. Any execution must pass the existing budget and legal checks."
+            )
         if command.kind == "proposal":
             try:
                 result = self.store.rpc("sutra_submit_proposal", {
@@ -1153,7 +1191,8 @@ class FounderCommandRouter:
             return FounderResponse(
                 "Before starting an initiative, give Sutra one all-in EUR maximum covering model use, development, tools, hosting, marketing, and operations. "
                 "Example: Investigate an AI QA product. Maximum all-in budget €500. Prepare a proposal. "
-                "Sutra will assess whether the cap is realistic; any increase requires your decision."
+                "Sutra will assess whether the cap is realistic; any increase requires your decision. For work on an existing initiative, use: "
+                "Continue initiative <project-id>: <follow-up work>. That preserves its existing budget."
             )
         if command.kind == "approval":
             try:
@@ -1396,6 +1435,7 @@ class FounderCommandRouter:
             "Use: CEO, run one bounded Kimi usage probe. This authorizes one database-reserved request up to €0.10; it does not enable Kimi for role work.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
+            "Use: Continue initiative <project-id>: <follow-up work>. This preserves its existing budget.\n"
             "Use: Increase initiative budget <project-id> to €<amount> because <reason>. This is founder-only and audit logged.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
         )

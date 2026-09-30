@@ -1421,6 +1421,48 @@ class FounderCommandTests(unittest.TestCase):
         self.router.handle(FOUNDER, FOUNDER, "change everything")
         self.store.rpc.assert_not_called()
 
+    def test_follow_up_to_existing_initiative_preserves_its_budget(self):
+        project_id = "00000000-0000-4000-8000-000000000071"
+        command = f"Continue initiative {project_id}: Add an export flow for the pilot customers."
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "initiative_followup")
+        self.assertEqual(parsed.project_id, project_id)
+        self.assertEqual(parsed.initiative_followup, "Add an export flow for the pilot customers")
+
+        task_id = "00000000-0000-4000-8000-000000000072"
+        self.store.rpc.return_value = {
+            "status": "created", "project_id": project_id, "task_id": task_id,
+            "requested_budget": 500, "remaining_budget": 320, "currency": "EUR",
+            "budget_changed": False, "spend_reserved": False,
+        }
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn(f"Follow-up task {task_id}", reply)
+        self.assertIn("existing all-in budget remains €500.00 EUR", reply)
+        self.assertIn("€320.00 remains uncommitted", reply)
+        self.assertIn("No spend was reserved", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_add_initiative_followup", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": project_id,
+            "p_request": "Add an export flow for the pilot customers",
+        })
+
+    def test_follow_up_command_is_founder_only_and_validates_scope(self):
+        project_id = "00000000-0000-4000-8000-000000000071"
+        command = f"Continue initiative {project_id}: Add a usage report for the pilot team."
+        reply = self.router.handle("987654321", "987654321", command).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+        malformed = "Continue initiative not-a-uuid: Add a usage report for the pilot team."
+        self.assertEqual(parse_founder_command(malformed).kind, "budget_required")
+        with self.assertRaisesRegex(ValueError, "12 to 2000"):
+            parse_founder_command(f"Continue initiative {project_id}: too short")
+
+        self.store.rpc.side_effect = IntegrationError("legal hold")
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("approved initiative with a positive", reply)
+        self.assertIn("existing budget must remain unchanged", reply)
+
     def test_founder_can_change_initiative_budget_with_reason(self):
         project_id = "00000000-0000-4000-8000-000000000004"
         parsed = parse_founder_command(
