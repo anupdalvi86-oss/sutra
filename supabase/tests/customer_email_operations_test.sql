@@ -186,13 +186,13 @@ select is((select payload->>'status' from task_outreach_submit),'succeeded',
 select is((select count(*)::integer from public.customer_email_actions
   where task_id=(select (payload->'task_artifact'->>'task_id')::uuid from task_outreach_claim)),1,
   'a task artifact queues only the explicitly assigned opted-in customer');
-select is((select (payload->'customer_action_results'->0->>'status') from public.task_agent_artifacts
+select is((select (artifact->'customer_action_results'->0->>'status') from public.task_agent_artifacts
   where task_id=(select (payload->'task_artifact'->>'task_id')::uuid from task_outreach_claim)),'queued',
   'the artifact records the queued outcome without asking for routine founder approval');
-select is((select payload->'customer_action_results'->1->>'reason' from public.task_agent_artifacts
+select is((select artifact->'customer_action_results'->1->>'reason' from public.task_agent_artifacts
   where task_id=(select (payload->'task_artifact'->>'task_id')::uuid from task_outreach_claim)),
   'consent_or_authorization_blocked','missing customer consent blocks the action and preserves the work artifact');
-select is((select payload->'customer_action_results'->2->>'reason' from public.task_agent_artifacts
+select is((select artifact->'customer_action_results'->2->>'reason' from public.task_agent_artifacts
   where task_id=(select (payload->'task_artifact'->>'task_id')::uuid from task_outreach_claim)),
   'customer_not_in_task_scope','customer IDs absent from the assigned task cannot be contacted');
 select ok(exists(select 1 from public.audit_log where action='customer.action_blocked'
@@ -322,7 +322,7 @@ select is((select budget_assessment_status from public.projects where id=(select
 select is((select count(*)::integer from public.legal_escalations
   where project_id=(select project_id from task_legal_fixture) and status='open'),1,
   'the founder legal queue receives one durable task-generated case');
-select is((select payload->'customer_action_results'->1->>'reason' from public.task_agent_artifacts
+select is((select artifact->'customer_action_results'->1->>'reason' from public.task_agent_artifacts
   where task_id=(select (payload->'task_artifact'->>'task_id')::uuid from task_legal_claim)),
   'legal_review_required','a legal escalation prevents the same task from contacting the customer');
 select is((select count(*)::integer from public.customer_email_actions
