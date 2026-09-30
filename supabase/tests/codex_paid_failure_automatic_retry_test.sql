@@ -22,10 +22,10 @@ declare project_id uuid; task_id uuid; developer_id uuid; run_id uuid; lease_tok
 begin
   select id into developer_id from public.agents where slug='developer' and active;
   authorization_id:=(select (payload->>'authorization_id')::uuid from paid_retry_authorization);
-  -- The trusted model profile reserves EUR 0.01 per run. The first cap allows
-  -- both attempts; the second allows the initial reservation and its settled
-  -- usage, but not another EUR 0.01 reservation.
-  foreach cap in array array[0.03::numeric,0.01::numeric] loop
+  -- The trusted model profile reserves EUR 0.03 per run. The first cap allows
+  -- both attempts; the second allows the initial reserve and settled EUR 0.01
+  -- usage, but not a second EUR 0.03 reservation.
+  foreach cap in array array[0.05::numeric,0.03::numeric] loop
     insert into public.projects(slug,name,description,status,budget_amount,budget_currency,
       requested_budget,currency,created_by,budget_assessment_status,budget_assessed_at,budget_assessment)
     values('auto-paid-retry-'||gen_random_uuid(),'Codex paid retry fixture',
@@ -96,46 +96,46 @@ from paid_retry_fixture f;
 reset role;
 
 select is((select payload #>> '{automatic_retry,status}' from paid_retry_finish_result r
-  join paid_retry_fixture f using(task_id) where f.budget_cap=0.03),'queued',
+  join paid_retry_fixture f using(task_id) where f.budget_cap=0.05),'queued',
   'known paid failure queues an automatic retry when the shared initiative cap has room');
 select is((select (payload #>> '{automatic_retry,attempt_number}')::integer from paid_retry_finish_result r
-  join paid_retry_fixture f using(task_id) where f.budget_cap=0.03),2,
+  join paid_retry_fixture f using(task_id) where f.budget_cap=0.05),2,
   'automatic retry begins the second total execution attempt');
-select is((select status from public.tasks where id=(select task_id from paid_retry_fixture where budget_cap=0.03)),
+select is((select status from public.tasks where id=(select task_id from paid_retry_fixture where budget_cap=0.05)),
   'in_progress','the same Developer task resumes under its existing approval');
-select is((select status from public.codex_task_executions where task_id=(select task_id from paid_retry_fixture where budget_cap=0.03)),
+select is((select status from public.codex_task_executions where task_id=(select task_id from paid_retry_fixture where budget_cap=0.05)),
   'running','the metered runner receives the new execution only after reservation');
-select is((select request_count from public.codex_task_executions where task_id=(select task_id from paid_retry_fixture where budget_cap=0.03)),
+select is((select request_count from public.codex_task_executions where task_id=(select task_id from paid_retry_fixture where budget_cap=0.05)),
   0,'the new execution starts with fresh request counters');
-select is((select status from public.agent_run_spend_reservations where id=(select reservation_id from paid_retry_fixture where budget_cap=0.03)),
+select is((select status from public.agent_run_spend_reservations where id=(select reservation_id from paid_retry_fixture where budget_cap=0.05)),
   'reconciled','the prior metered usage is reconciled and retained');
-select is((select request_count from public.codex_task_execution_attempts where task_id=(select task_id from paid_retry_fixture where budget_cap=0.03)),
+select is((select request_count from public.codex_task_execution_attempts where task_id=(select task_id from paid_retry_fixture where budget_cap=0.05)),
   3,'the prior provider requests are preserved in attempt history');
 select ok(exists(select 1 from public.agent_run_spend_reservations s
     join public.codex_task_executions e on e.reservation_id=s.id
-    where e.task_id=(select task_id from paid_retry_fixture where budget_cap=0.03)
+    where e.task_id=(select task_id from paid_retry_fixture where budget_cap=0.05)
       and s.status='reserved'),
   'fresh attempt reserves through the active database model price and spend policy');
 select ok(exists(select 1 from public.audit_log where action='codex.automatic_retry_queued'
-  and resource_id=(select task_id::text from paid_retry_fixture where budget_cap=0.03)
+  and resource_id=(select task_id::text from paid_retry_fixture where budget_cap=0.05)
   and details->>'prior_reservation_preserved'='true'
   and details->>'spending_authority_changed'='false'
   and details->>'merge_release_authority_changed'='false'),
   'automatic retry is audited without adding financial or release authority');
 
 select is((select payload #>> '{automatic_retry,status}' from paid_retry_finish_result r
-  join paid_retry_fixture f using(task_id) where f.budget_cap=0.01),'stopped_by_spend_gate',
+  join paid_retry_fixture f using(task_id) where f.budget_cap=0.03),'stopped_by_spend_gate',
   'automatic retry stops when the completed usage leaves insufficient initiative budget');
-select is((select status from public.tasks where id=(select task_id from paid_retry_fixture where budget_cap=0.01)),
+select is((select status from public.tasks where id=(select task_id from paid_retry_fixture where budget_cap=0.03)),
   'blocked','budget denial leaves the task visibly blocked');
-select is((select status from public.codex_task_executions where task_id=(select task_id from paid_retry_fixture where budget_cap=0.01)),
+select is((select status from public.codex_task_executions where task_id=(select task_id from paid_retry_fixture where budget_cap=0.03)),
   'failed','budget denial preserves the completed failed execution');
-select is((select count(*)::integer from public.agent_runs where task_id=(select task_id from paid_retry_fixture where budget_cap=0.01)),
+select is((select count(*)::integer from public.agent_runs where task_id=(select task_id from paid_retry_fixture where budget_cap=0.03)),
   1,'budget denial does not create an unreserved execution');
-select is((select status from public.agent_run_spend_reservations where id=(select reservation_id from paid_retry_fixture where budget_cap=0.01)),
+select is((select status from public.agent_run_spend_reservations where id=(select reservation_id from paid_retry_fixture where budget_cap=0.03)),
   'reconciled','budget denial does not release or rewrite the failed attempt usage');
 select ok(exists(select 1 from public.audit_log where action='codex.automatic_retry_stopped_by_spend_gate'
-  and resource_id=(select task_id::text from paid_retry_fixture where budget_cap=0.01)
+  and resource_id=(select task_id::text from paid_retry_fixture where budget_cap=0.03)
   and details->>'error_class'='budget_hard_stop'
   and details->>'prior_reservation_preserved'='true'),
   'the blocked automatic retry records a sanitized budget-stop audit event');
