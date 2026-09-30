@@ -22,7 +22,8 @@ from .codex_runner import CodexTaskRunner
 from .code_release import CodeReleaseWorker
 from .customer_email import CustomerEmailDeliveryWorker, ResendEmailProvider
 from .crm_hubspot import HubSpotContactClient, HubSpotContactSyncWorker
-from .customer_support import normalize_zendesk_ticket_event, verify_zendesk_signature
+from .customer_support import (ZendeskTaskContextProvider, ZendeskTicketReader,
+                               normalize_zendesk_ticket_event, verify_zendesk_signature)
 from .drafts import DraftNotFound, DraftRequestError, DraftService, UserScopedSupabase
 from .github_webhook import normalize_github_event, verify_github_signature
 from .runtime import (
@@ -116,6 +117,8 @@ class SutraApplication:
         self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
         self.zendesk_webhook_secret = os.environ.get("ZENDESK_WEBHOOK_SECRET", "")
+        self.zendesk_support_context_provider: ZendeskTaskContextProvider | None = None
+        self.zendesk_support_context_status = "disabled"
         # Keep the synthetic prototype local-only, even if a hosted service is mislabeled.
         draft_supabase = urlsplit(self.supabase_url)
         local_draft_database = (
@@ -173,11 +176,25 @@ class SutraApplication:
                         self.agent_worker_status = "blocked_model_profile"
                         break
                 if self.agent_worker_status not in {"blocked_model_profile", "blocked_runtime_configuration"}:
+                    support_context_enabled = os.environ.get(
+                        "SUTRA_ENABLE_ZENDESK_SUPPORT_CONTEXT", "false").lower() == "true"
+                    if support_context_enabled:
+                        try:
+                            reader = ZendeskTicketReader(
+                                os.environ.get("ZENDESK_SUBDOMAIN", ""),
+                                os.environ.get("ZENDESK_AGENT_EMAIL", ""),
+                                os.environ.get("ZENDESK_API_TOKEN", ""),
+                            )
+                            self.zendesk_support_context_provider = ZendeskTaskContextProvider(self.store, reader)
+                            self.zendesk_support_context_status = "configured"
+                        except ValueError:
+                            self.zendesk_support_context_status = "blocked_runtime_configuration"
                     for slot in range(worker_concurrency):
                         # Each worker owns its own Hermes client because usage
                         # diagnostics are request-local mutable state.
                         hermes = HermesAgentClient(hermes_url, hermes_key, provider, model)
-                        worker = AgentWorker(self.store, hermes, provider, model, role_routes=role_routes)
+                        worker = AgentWorker(self.store, hermes, provider, model, role_routes=role_routes,
+                            support_context_provider=self.zendesk_support_context_provider)
                         thread = threading.Thread(
                             target=worker.run, args=(self.telegram_stop,), daemon=True,
                             name=f"sutra-agent-worker-{slot + 1}")
@@ -334,6 +351,10 @@ class SutraApplication:
             else "blocked_runtime_configuration" if zendesk_enabled
             else "disabled"
         )
+        support_context_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_SUPPORT_CONTEXT", "false").lower() == "true"
+        support_context_state = (
+            self.zendesk_support_context_status if support_context_enabled else "disabled"
+        )
         return {
             "status": "ok" if self.store and database == "reachable" else "degraded",
             "service": "sutra",
@@ -348,6 +369,7 @@ class SutraApplication:
             "hubspot_sync_worker": self.hubspot_sync_worker_status,
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
             "zendesk_webhook": zendesk_state,
+            "zendesk_support_context": support_context_state,
         }
 
     def readiness(self) -> dict[str, Any]:
@@ -365,6 +387,7 @@ class SutraApplication:
             "hubspot_sync_worker": health["hubspot_sync_worker"],
             "github_webhook": health["github_webhook"],
             "zendesk_webhook": health["zendesk_webhook"],
+            "zendesk_support_context": health["zendesk_support_context"],
         }
         blockers = []
         if health["database"] != "reachable":
@@ -398,6 +421,9 @@ class SutraApplication:
         zendesk_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
         if zendesk_enabled and health["zendesk_webhook"] != "configured":
             blockers.append("zendesk_webhook")
+        support_context_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_SUPPORT_CONTEXT", "false").lower() == "true"
+        if support_context_enabled and health["zendesk_support_context"] != "configured":
+            blockers.append("zendesk_support_context")
         ready = not blockers
         return {
             "status": "ready" if ready else "not_ready",

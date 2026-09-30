@@ -252,6 +252,25 @@ class AgentArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(AgentOutputError, "Only Sales or Marketing"):
             validate_agent_artifact("product_manager", output, task_artifact_run("product_manager"))
 
+    def test_zendesk_reply_draft_requires_ephemeral_authorized_context_and_matching_id(self):
+        run = task_artifact_run("sales")
+        run["task_artifact"]["description"] = "Zendesk ticket ID: 123"
+        output = task_artifact_output("sales")
+        output["support_reply_draft"] = {"ticket_id": "123", "category": "access", "urgency": "high",
+                                          "reply_text": "Please try the password reset flow; I can help further."}
+        with self.assertRaisesRegex(AgentOutputError, "authorized ephemeral ticket context"):
+            validate_agent_artifact("sales", output, run)
+        run["task_artifact"]["zendesk_support_context"] = {"ticket_id": "123", "status": "open"}
+        validated = validate_agent_artifact("sales", output, run)
+        self.assertEqual(validated["support_reply_draft"]["ticket_id"], "123")
+        output["support_reply_draft"]["ticket_id"] = "456"
+        with self.assertRaisesRegex(AgentOutputError, "authorized ticket"):
+            validate_agent_artifact("sales", output, run)
+        output["support_reply_draft"]["ticket_id"] = "123"
+        output["legal_escalation"] = "The request asks for a binding service guarantee."
+        with self.assertRaisesRegex(AgentOutputError, "legal escalation must not include"):
+            validate_agent_artifact("sales", output, run)
+
     def test_architect_task_prompt_shows_exact_technical_design_contract(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("architect"))}}],
                     "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
@@ -610,6 +629,38 @@ class AgentArtifactTests(unittest.TestCase):
         store.reconcile_agent_run_spend.side_effect = lambda *_args: {
             "status": "unknown" if _args[-1] is None else "reconciled"}
         return store
+
+    def test_assigned_ticket_task_requires_context_provider_before_any_model_request(self):
+        run = task_artifact_run("sales")
+        run["task_artifact"]["description"] = "Zendesk ticket ID: 123"
+        store = self.approved_store("sales")
+        store.claim_agent_run.return_value = run
+        hermes = Mock()
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna", worker_id="sutra-worker-12345678")
+        self.assertEqual(worker.run_once(), "failed_support_context_unavailable")
+        store.reserve_agent_run_spend.assert_not_called()
+        hermes.review.assert_not_called()
+        self.assertEqual(store.complete_agent_run.call_args.args[4], "zendesk_support_context_unavailable")
+
+    def test_assigned_ticket_task_passes_only_authorized_ephemeral_context_to_hermes(self):
+        run = task_artifact_run("sales")
+        run["task_artifact"]["description"] = "Zendesk ticket ID: 123"
+        store = self.approved_store("sales")
+        store.claim_agent_run.return_value = run
+        store.reconcile_agent_run_spend.return_value = {"status": "reconciled"}
+        store.submit_task_agent_artifact.return_value = {"status": "succeeded"}
+        context = {"ticket_id": "123", "status": "open", "subject": "Login failure",
+                   "description": "I cannot access my account.", "recent_public_comments": []}
+        provider = Mock(return_value=context)
+        hermes = Mock()
+        hermes.review.return_value = (task_artifact_output("sales"),
+                                      {"prompt_tokens": 20, "completion_tokens": 30})
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna", worker_id="sutra-worker-12345678",
+                             support_context_provider=provider)
+        self.assertEqual(worker.run_once(), "task_artifact_succeeded")
+        provider.assert_called_once_with(run)
+        self.assertEqual(hermes.review.call_args.kwargs["support_context"], context)
+        store.submit_task_agent_artifact.assert_called_once()
 
     def test_kimi_usage_probe_uses_one_exact_route_and_small_output_cap(self):
         run = claimed_run("ceo")

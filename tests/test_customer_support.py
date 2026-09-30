@@ -8,7 +8,9 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from sutra.customer_support import normalize_zendesk_ticket_event, verify_zendesk_signature
+from sutra.customer_support import (ZendeskTaskContextProvider, ZendeskTicketReader,
+                                    normalize_zendesk_ticket_event, verify_zendesk_signature)
+from sutra.runtime import IntegrationError
 from sutra.server import SutraApplication
 
 
@@ -48,6 +50,74 @@ class ZendeskWebhookTests(unittest.TestCase):
             {**self.payload, "updated_at": "2026-09-30T09:00:00"},
         ):
             self.assertIsNone(normalize_zendesk_ticket_event(update))
+
+
+class ZendeskTicketReadTests(unittest.TestCase):
+    class Response:
+        def __init__(self, value):
+            self.value = json.dumps(value).encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def read(self, size=-1):
+            return self.value[:size]
+
+    def test_reads_bounded_ticket_and_public_comments_without_metadata(self):
+        values = [
+            {"ticket": {"id": 123, "subject": "Cannot sign in", "description": "Login fails.",
+                         "status": "open", "priority": "high", "requester": {"email": "private@example.test"}}},
+            {"comments": [
+                {"public": False, "plain_body": "Internal staff note."},
+                {"public": True, "plain_body": "I cannot log in."},
+            ]},
+        ]
+        requests = []
+        def opener(request, timeout):
+            requests.append(request)
+            return self.Response(values.pop(0))
+        reader = ZendeskTicketReader("sutra", "agent@example.test", "secret-token", opener=opener)
+        result = reader.read_ticket("123")
+        self.assertEqual(result, {"ticket_id": "123", "status": "open", "priority": "high",
+                                  "subject": "Cannot sign in", "description": "Login fails.",
+                                  "recent_public_comments": ["I cannot log in."]})
+        self.assertEqual(len(requests), 2)
+        self.assertNotIn("private@example.test", json.dumps(result))
+        self.assertEqual(requests[0].get_header("Authorization"), "Basic " + base64.b64encode(
+            b"agent@example.test/token:secret-token").decode())
+        self.assertIn("sort_order=desc", requests[1].full_url)
+
+    def test_rejects_unsafe_subdomains_and_closed_tickets(self):
+        for subdomain in ("https://example.com", "example.com/evil", "user@example.com"):
+            with self.assertRaises(ValueError):
+                ZendeskTicketReader(subdomain, "agent@example.test", "token")
+        reader = ZendeskTicketReader("sutra", "agent@example.test", "token",
+            opener=lambda *_args, **_kwargs: self.Response({"ticket": {"id": 123, "status": "solved"}}))
+        with self.assertRaisesRegex(IntegrationError, "closed"):
+            reader.read_ticket("123")
+
+    def test_support_context_is_database_authorized_before_provider_fetch(self):
+        events = []
+        class Store:
+            def rpc(self, name, payload):
+                events.append((name, payload))
+                return {"ticket_id": "123"}
+        class Reader:
+            def read_ticket(self, ticket_id):
+                events.append(("provider_read", ticket_id))
+                return {"ticket_id": ticket_id, "status": "open"}
+        provider = ZendeskTaskContextProvider(Store(), Reader())
+        run = {"agent": {"id": "agent-id", "slug": "sales"},
+               "task_artifact": {"task_id": "task-id", "title": "Reply to Zendesk ticket",
+                 "description": "Zendesk ticket ID: 123", "acceptance_criteria": ["Classify the case"]}}
+        self.assertEqual(provider(run), {"ticket_id": "123", "status": "open"})
+        self.assertEqual(events[0], ("sutra_authorize_zendesk_task_context", {
+            "p_agent_id": "agent-id", "p_task_id": "task-id", "p_ticket_id": "123"}))
+        self.assertEqual(events[1], ("provider_read", "123"))
+        run["task_artifact"]["description"] = "Zendesk ticket ID: 123; Zendesk ticket ID: 456"
+        with self.assertRaisesRegex(IntegrationError, "exactly one"):
+            provider(run)
+        self.assertEqual(len(events), 2)
 
 
 class ZendeskWebhookServerTests(unittest.TestCase):
