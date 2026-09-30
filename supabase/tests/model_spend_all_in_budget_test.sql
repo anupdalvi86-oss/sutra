@@ -10,7 +10,8 @@ select public.sutra_set_agent_model_spend_profile(
   '12345678','kimi-coding','kimi-k2.6',0.2,0.5,100000,10000,true);
 
 create temporary table model_budget_fixture(
-  project_id uuid, task_id uuid, pm_id uuid, cpo_id uuid, safe_project_id uuid, safe_task_id uuid
+  project_id uuid, task_id uuid, pm_id uuid, cpo_id uuid, safe_project_id uuid, safe_task_id uuid,
+  capped_run_id uuid, capped_lease_token uuid, safe_run_id uuid, safe_lease_token uuid
 ) on commit drop;
 do $$
 declare
@@ -23,6 +24,10 @@ declare
   safe_task_id uuid;
   failed_run_id uuid;
   expense_id uuid;
+  capped_run_id uuid:=gen_random_uuid();
+  capped_lease_token uuid:=gen_random_uuid();
+  safe_run_id uuid:=gen_random_uuid();
+  safe_lease_token uuid:=gen_random_uuid();
 begin
   select id into pm_id from public.agents where slug='product_manager' and active;
   select id into cpo_id from public.agents where slug='cpo' and active;
@@ -80,7 +85,20 @@ begin
       '["Reservation appears in the shared ledger"]'::jsonb,'planning','ready',pm_id,pm_id)
     returning id into safe_task_id;
 
-  insert into model_budget_fixture values(project_id,task_id,pm_id,cpo_id,safe_project_id,safe_task_id);
+  update public.tasks set status='in_progress' where id in (task_id,safe_task_id);
+  insert into public.agent_runs(agent_id,project_id,task_id,trigger_type,status,input,output,
+      started_at,lease_token,lease_expires_at,attempt_count)
+    values(pm_id,project_id,task_id,'task_artifact','running','{"role":"product_manager"}'::jsonb,
+      '{}'::jsonb,now(),capped_lease_token,now()+interval '10 minutes',1);
+  insert into public.agent_runs(agent_id,project_id,task_id,trigger_type,status,input,output,
+      started_at,lease_token,lease_expires_at,attempt_count)
+    values(pm_id,safe_project_id,safe_task_id,'task_artifact','running','{"role":"product_manager"}'::jsonb,
+      '{}'::jsonb,now(),safe_lease_token,now()+interval '10 minutes',1);
+  select id into capped_run_id from public.agent_runs where lease_token=capped_lease_token;
+  select id into safe_run_id from public.agent_runs where lease_token=safe_lease_token;
+
+  insert into model_budget_fixture values(project_id,task_id,pm_id,cpo_id,safe_project_id,safe_task_id,
+    capped_run_id,capped_lease_token,safe_run_id,safe_lease_token);
 end;
 $$;
 grant select on model_budget_fixture to service_role;
@@ -92,12 +110,14 @@ grant insert,select on capped_model_claim to service_role;
 grant insert,select on safe_model_claim to service_role;
 grant insert,select on safe_model_reservation to service_role;
 set local role service_role;
-insert into capped_model_claim select public.sutra_claim_task_agent_run('sutra-worker-cap12345678');
+insert into capped_model_claim select jsonb_build_object('run_id',capped_run_id,'lease_token',capped_lease_token)
+  from model_budget_fixture;
 select throws_ok($$select public.sutra_reserve_agent_run_spend_from_profile(
   'sutra-worker-cap12345678',(select (payload->>'run_id')::uuid from capped_model_claim),
   (select (payload->>'lease_token')::uuid from capped_model_claim),'openai','gpt-6-luna')$$,
   '23514',null,'model inference cannot exceed remaining all-in initiative funds');
-insert into safe_model_claim select public.sutra_claim_task_agent_run('sutra-worker-safe1234');
+insert into safe_model_claim select jsonb_build_object('run_id',safe_run_id,'lease_token',safe_lease_token)
+  from model_budget_fixture;
 insert into safe_model_reservation select public.sutra_reserve_agent_run_spend_from_profile(
   'sutra-worker-safe1234',(select (payload->>'run_id')::uuid from safe_model_claim),
   (select (payload->>'lease_token')::uuid from safe_model_claim),'openai','gpt-6-luna');
