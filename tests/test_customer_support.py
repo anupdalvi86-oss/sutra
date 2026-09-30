@@ -167,7 +167,28 @@ class ZendeskWebhookServerTests(unittest.TestCase):
         name, args = self.app.store.calls[-1]
         self.assertEqual(name, "sutra_ingest_zendesk_ticket_event")
         self.assertEqual(args, {"p_ticket_id": "234", "p_status": "pending", "p_priority": "high",
-                                "p_provider_updated_at": "2026-09-30T09:00:00.000000Z"})
+                                "p_provider_updated_at": "2026-09-30T09:00:00.000000Z",
+                                "p_route_tasks": False})
+
+        configured_context = self.app.zendesk_support_context_provider
+        try:
+            self.app.zendesk_support_context_provider = object()
+            routed_payload = {"id": 235, "status": "open", "priority": "normal",
+                              "updated_at": "2026-09-30T09:01:00Z"}
+            routed_body = json.dumps(routed_payload, separators=(",", ":")).encode()
+            routed_signature = base64.b64encode(hmac.new(
+                self.app.zendesk_webhook_secret.encode(), timestamp.encode() + routed_body, hashlib.sha256
+            ).digest()).decode()
+            routed_request = Request(f"{self.base}/webhooks/zendesk", data=routed_body, headers={
+                "Content-Type": "application/json", "X-Zendesk-Webhook-Timestamp": timestamp,
+                "X-Zendesk-Webhook-Signature": routed_signature,
+            }, method="POST")
+            with patch_env("SUTRA_ENABLE_ZENDESK_WEBHOOK", "true"):
+                with urlopen(routed_request, timeout=2) as response:
+                    self.assertEqual(response.status, 202)
+            self.assertTrue(self.app.store.calls[-1][1]["p_route_tasks"])
+        finally:
+            self.app.zendesk_support_context_provider = configured_context
 
 
 class patch_env:

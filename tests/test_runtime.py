@@ -244,6 +244,54 @@ class FounderCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
             parse_founder_command(f"record CRM consent for {customer_id} because short")
 
+    def test_zendesk_routing_commands_are_founder_only_and_database_gated(self):
+        project_id = "00000000-0000-4000-8000-000000000041"
+        route = f"CEO, route Zendesk tickets to initiative {project_id} because assessed support budget is approved."
+        parsed = parse_founder_command(route)
+        self.assertEqual(parsed.kind, "set_zendesk_support_routing")
+        self.assertEqual(parsed.zendesk_support_project_id, project_id)
+        self.assertIs(parsed.zendesk_support_routing_enabled, True)
+        self.assertEqual(parsed.zendesk_support_routing_reason, "assessed support budget is approved")
+        self.store.rpc.return_value = {"configured": True, "changed": True, "project_id": project_id}
+        reply = self.router.handle(FOUNDER, FOUNDER, route).text
+        self.assertIn(f"New and reopened Zendesk tickets now route to initiative {project_id}", reply)
+        self.assertIn("model work still needs its normal database reservation", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_zendesk_support_routing", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": project_id,
+            "p_reason": "assessed support budget is approved",
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"configured": False}
+        status = self.router.handle(FOUNDER, FOUNDER, "CEO, show Zendesk ticket routing.").text
+        self.assertIn("Zendesk ticket routing is disabled", status)
+        self.store.rpc.assert_called_once_with("sutra_founder_get_zendesk_support_routing", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
+        self.store.rpc.reset_mock()
+        stop = "CEO, stop Zendesk ticket routing because support ownership is changing."
+        parsed = parse_founder_command(stop)
+        self.assertIs(parsed.zendesk_support_routing_enabled, False)
+        self.store.rpc.return_value = {"configured": False, "changed": True}
+        reply = self.router.handle(FOUNDER, FOUNDER, stop).text
+        self.assertIn("routing is disabled and audit logged", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_zendesk_support_routing", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": None,
+            "p_reason": "support ownership is changing",
+        })
+
+        self.store.rpc.reset_mock()
+        reply = self.router.handle("987654321", "987654321", route).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+        with self.assertRaisesRegex(ValueError,"valid initiative UUID"):
+            parse_founder_command("route Zendesk tickets to initiative not-a-uuid because invalid project id")
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command(f"route Zendesk tickets to initiative {project_id} because short")
+
     def test_board_status_explains_blocked_work_waiting_on_proposed_project_approval(self):
         snapshot = status_fixture()
         snapshot["projects"].append({

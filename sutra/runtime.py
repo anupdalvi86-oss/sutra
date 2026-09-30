@@ -468,6 +468,9 @@ class FounderCommand:
     crm_customer_id: str | None = None
     crm_consent: bool | None = None
     crm_consent_evidence: str = ""
+    zendesk_support_project_id: str | None = None
+    zendesk_support_routing_enabled: bool | None = None
+    zendesk_support_routing_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -507,6 +510,18 @@ EMAIL_COST_CEILING_SET_RE = re.compile(
 )
 EMAIL_COST_CEILING_GET_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_SUPPORT_ROUTING_SET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?route\s+zendesk\s+tickets?\s+to\s+(?:initiative|project)\s+([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_SUPPORT_ROUTING_STOP_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:stop|disable)\s+zendesk\s+ticket\s+routing\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_SUPPORT_ROUTING_GET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?zendesk\s+ticket\s+routing\s*[?.!]*\s*$",
     re.IGNORECASE,
 )
 INITIATIVE_INTENT_RE = re.compile(
@@ -655,6 +670,29 @@ def parse_founder_command(text: str) -> FounderCommand:
         return FounderCommand("get_email_cost_ceiling", text.strip())
     if re.match(r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\b", text, re.IGNORECASE):
         raise ValueError("Customer email cost ceiling must be EUR 0.01 to 100.00 in cents, followed by a reason")
+    match = ZENDESK_SUPPORT_ROUTING_SET_RE.fullmatch(text)
+    if match:
+        try:
+            project_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Zendesk routing needs a valid initiative ID") from exc
+        reason = match.group(2).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Zendesk routing reason must contain 8 to 500 characters")
+        return FounderCommand("set_zendesk_support_routing", text.strip(),
+            zendesk_support_project_id=project_id,zendesk_support_routing_enabled=True,
+            zendesk_support_routing_reason=reason)
+    match = ZENDESK_SUPPORT_ROUTING_STOP_RE.fullmatch(text)
+    if match:
+        reason = match.group(1).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Zendesk routing reason must contain 8 to 500 characters")
+        return FounderCommand("set_zendesk_support_routing", text.strip(),
+            zendesk_support_routing_enabled=False,zendesk_support_routing_reason=reason)
+    if ZENDESK_SUPPORT_ROUTING_GET_RE.fullmatch(text):
+        return FounderCommand("get_zendesk_support_routing", text.strip())
+    if re.match(r"^\s*(?:ceo[, :]\s*)?route\s+zendesk\s+tickets?\b", text, re.IGNORECASE):
+        raise ValueError("Route Zendesk tickets with a valid initiative UUID and an 8 to 500 character reason")
     if CODE_AUTHORITY_STATUS_RE.fullmatch(text):
         return FounderCommand("code_authority_status", text.strip())
     match = CODE_AUTHORITY_REVOKE_RE.fullmatch(text)
@@ -1216,6 +1254,28 @@ class FounderCommandRouter:
             return FounderResponse(
                 f"Customer email maximum reserved cost per message {'changed' if result.get('changed') else 'already set'} to EUR {result.get('max_message_cost_eur')}. The change is audit logged; no email was sent and no queue was started."
             )
+        if command.kind == "get_zendesk_support_routing":
+            try:
+                result = self.store.rpc("sutra_founder_get_zendesk_support_routing", {
+                    "p_founder_telegram_user_id": user_id,
+                })
+            except IntegrationError:
+                return FounderResponse("I couldn't read Zendesk support routing. No setting changed; check the database connection and try again.")
+            if result.get("configured") is not True:
+                return FounderResponse("Zendesk ticket routing is disabled. Enable it with: CEO, route Zendesk tickets to initiative <project-id> because <reason>. The initiative must already be founder-approved, active, assessed within its all-in budget, and legally clear.")
+            return FounderResponse(f"New and reopened Zendesk tickets route to initiative {result.get('project_id')}. The change is audited. Disabling routing affects future webhook events; existing assigned tasks remain governed by their own initiative and spend checks.")
+        if command.kind == "set_zendesk_support_routing":
+            try:
+                result = self.store.rpc("sutra_founder_set_zendesk_support_routing", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_project_id": command.zendesk_support_project_id,
+                    "p_reason": command.zendesk_support_routing_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("Zendesk routing was not changed. The database requires a founder-approved initiative with a sufficient within-cap assessment, remaining funds, and no legal hold or open legal escalation.")
+            if result.get("configured") is not True:
+                return FounderResponse("Zendesk ticket routing is disabled and audit logged. Existing assigned tasks remain subject to their current spend and legal controls.")
+            return FounderResponse(f"New and reopened Zendesk tickets now route to initiative {result.get('project_id')}. The founder setting is audit logged; model work still needs its normal database reservation and customer messages are not sent.")
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
@@ -1235,6 +1295,9 @@ class FounderCommandRouter:
             "Use: CEO, set Codex no-request retry limit to <1-3> total attempts. This only changes the audited founder setting; it does not retry a task.\n"
             "Use: CEO, show customer email cost ceiling.\n"
             "Use: CEO, set customer email cost ceiling to €0.05 because <reason>. This is a founder-only, audit-logged database control; it sends no email.\n"
+            "Use: CEO, show Zendesk ticket routing.\n"
+            "Use: CEO, route Zendesk tickets to initiative <project-id> because <reason>. The initiative must already be founder-approved, assessed within its all-in budget, and legally clear.\n"
+            "Use: CEO, stop Zendesk ticket routing because <reason>. This affects future webhook events; already assigned tasks remain subject to their own controls.\n"
             "Use: CEO, run one bounded Kimi usage probe. This authorizes one database-reserved request up to €0.10; it does not enable Kimi for role work.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"

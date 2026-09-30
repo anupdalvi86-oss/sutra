@@ -824,6 +824,7 @@ class SutraHandler(BaseHTTPRequestHandler):
                 "p_status": normalized["status"],
                 "p_priority": normalized["priority"],
                 "p_provider_updated_at": normalized["updated_at"],
+                "p_route_tasks": self.app.zendesk_support_context_provider is not None,
             })
             self._json(202, result)
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
