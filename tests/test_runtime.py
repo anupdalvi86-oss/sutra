@@ -981,6 +981,54 @@ class FounderCommandTests(unittest.TestCase):
             "p_total_attempts": 3,
         })
 
+    def test_founder_can_read_and_set_audited_email_cost_ceiling_without_sending(self):
+        self.store.rpc.return_value = {"configured": True, "previous_max_message_cost_eur": None,
+                                      "max_message_cost_eur": 0.05, "changed": True, "no_email_sent": True}
+        command = "CEO, set customer email cost ceiling to €0.05 because bounded provider cost per message."
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "set_email_cost_ceiling")
+        self.assertEqual(parsed.email_cost_ceiling, 0.05)
+        self.assertEqual(parsed.email_cost_reason, "bounded provider cost per message")
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("changed to EUR 0.05", reply)
+        self.assertIn("audit logged", reply)
+        self.assertIn("no email was sent", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_customer_email_cost_ceiling", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_max_message_cost_eur": 0.05,
+            "p_reason": "bounded provider cost per message",
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"configured": True, "max_message_cost_eur": 0.05}
+        reply = self.router.handle(FOUNDER, FOUNDER, "CEO, show customer email cost ceiling.").text
+        self.assertIn("EUR 0.05", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_get_customer_email_cost_ceiling", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
+    def test_email_cost_ceiling_commands_fail_closed_for_nonfounder_and_bad_values(self):
+        for amount in ("0", "100.01"):
+            with self.subTest(amount=amount), self.assertRaises(ValueError):
+                parse_founder_command(f"set customer email cost ceiling to €{amount} because valid audit reason")
+        for amount in ("0.005", "1.001", "NaN"):
+            with self.subTest(amount=amount), self.assertRaisesRegex(ValueError, "in cents"):
+                parse_founder_command(f"set customer email cost ceiling to €{amount} because valid audit reason")
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command("set customer email cost ceiling to €0.05 because short")
+        self.assertEqual(parse_founder_command("set customer email ceiling to €0.05 because reason long enough").kind,
+                         "unsupported")
+        reply = self.router.handle("987654321", "987654321",
+                                   "CEO, set customer email cost ceiling to €0.05 because test reason is long enough.").text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+        self.store.rpc.side_effect = IntegrationError("database rejects setting")
+        reply = self.router.handle(FOUNDER, FOUNDER,
+                                   "CEO, set customer email cost ceiling to €0.05 because test reason is long enough.").text
+        self.assertIn("ceiling unchanged", reply)
+        self.assertIn("Only the configured founder", reply)
+
     def test_codex_retry_rejects_wrong_founder_or_group_chat(self):
         for user_id, chat_id in (("987654321", "987654321"), (FOUNDER, "-100123")):
             with self.subTest(user_id=user_id, chat_id=chat_id):
