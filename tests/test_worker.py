@@ -121,7 +121,11 @@ def task_artifact_output(role="product_manager"):
         "architect": {"design": "A clear component and interface design.", "components": ["API service"], "security_risks": ["Protect service credentials"]},
         "coo": {"operational_dependencies": ["On-call owner"], "readiness_checklist": ["Recovery procedure"], "incident_plan": "Route incidents to the service owner."},
         "devops": {"deployment_steps": ["Deploy candidate"], "health_checks": ["Verify health endpoint"], "rollback_steps": ["Restore previous image"]},
-        "cmo": {"audience": "Engineering leaders evaluating quality tooling.", "positioning": "Reduce repetitive quality checks.", "draft_copy": "A draft for founder review only.", "claims": ["Supports this workflow"], "success_metrics": ["Qualified interest"]},
+        "cmo": {"campaign_name": "Engineering quality workflow discovery", "channel": "Owned email and product site",
+                "audience": "Engineering leaders evaluating quality tooling.", "positioning": "Reduce repetitive quality checks.",
+                "draft_copy": "A draft for internal planning only.", "claims": ["Supports this workflow"],
+                "success_metrics": ["Qualified interest"], "budget_amount_eur": 0,
+                "budget_rationale": "No external campaign will run during internal planning."},
         "sales": {"ideal_customer_profile": "Software teams with repeatable release processes.", "lead_criteria": ["Relevant team size"], "qualification_questions": ["How do you verify releases?"], "first_contact_draft": "A concise introduction for an assigned, consented customer."},
         "governance_audit": {"controls_checked": ["Approval gate"], "findings": ["No open finding"], "recommendation": "Retain the existing founder approval gate."},
     }
@@ -163,6 +167,18 @@ class AgentArtifactTests(unittest.TestCase):
         campaign["evidence"] = []
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cmo", campaign, task_artifact_run("cmo"))
+
+    def test_campaign_drafts_require_bounded_channel_and_eur_budget_estimate(self):
+        run = task_artifact_run("cmo")
+        valid = task_artifact_output("cmo")
+        result = validate_agent_artifact("cmo", valid, run)
+        self.assertEqual(result["artifact"]["budget_amount_eur"], 0)
+        for invalid_budget in (-0.01, 0.001, float("inf"), True):
+            with self.subTest(budget=invalid_budget):
+                invalid = task_artifact_output("cmo")
+                invalid["artifact"]["budget_amount_eur"] = invalid_budget
+                with self.assertRaisesRegex(AgentOutputError, "Campaign budget"):
+                    validate_agent_artifact("cmo", invalid, run)
 
     def test_cpo_market_research_requires_cited_evidence(self):
         result = task_artifact_output("cpo")

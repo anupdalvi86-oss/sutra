@@ -225,7 +225,8 @@ TASK_ARTIFACT_CONTRACTS = {
     "architect": {"technical_design": ("design", "components", "security_risks")},
     "coo": {"operations_plan": ("operational_dependencies", "readiness_checklist", "incident_plan")},
     "devops": {"release_plan": ("deployment_steps", "health_checks", "rollback_steps")},
-    "cmo": {"campaign_draft": ("audience", "positioning", "draft_copy", "claims", "success_metrics")},
+    "cmo": {"campaign_draft": ("campaign_name", "channel", "audience", "positioning", "draft_copy",
+                                "claims", "success_metrics", "budget_amount_eur", "budget_rationale")},
     "sales": {"sales_handoff": ("ideal_customer_profile", "lead_criteria", "qualification_questions", "first_contact_draft")},
     "governance_audit": {"governance_review": ("controls_checked", "findings", "recommendation")},
 }
@@ -308,7 +309,8 @@ class HermesAgentClient:
                 "Return JSON fields summary, recommendation, evidence (an array of source/url/claim objects), "
                 "task_acceptance (one object per assigned acceptance criterion with exact criterion and bounded "
                 f"evidence text), and artifact (an object with required fields {', '.join(contract)}). "
-                "Artifact-contract arrays contain 1-20 concise strings; all other artifact-contract fields are bounded strings. "
+                "Artifact-contract arrays contain 1-20 concise strings; all other string fields are bounded, "
+                "except a field explicitly documented as a numeric EUR amount, which must be non-negative and rounded to cents. "
                 "Use direct HTTPS sources for evidence. Do not claim an unverified result."
             )
             if role in {"cmo", "sales"}:
@@ -392,6 +394,19 @@ class HermesAgentClient:
                     "for a customer UUID named in this task can enter the private outbox. If the task calls "
                     "for a legal interpretation, contract, or binding commitment, include legal_escalation "
                     "instead; do not send that content."
+                )
+            elif role == "cmo":
+                project = run.get("project") if isinstance(run.get("project"), dict) else {}
+                initiative_budget = project.get("requested_budget")
+                role_output += (
+                    f" For campaign planning, include campaign_name (8-160 characters), channel (3-80 characters), "
+                    "audience, positioning, draft_copy, factual claims, success_metrics, budget_amount_eur (a "
+                    "non-negative EUR estimate to cents), and budget_rationale (8-500 characters). The campaign "
+                    f"is an internal draft only. The initiative all-in budget cap is EUR {initiative_budget}; "
+                    "consider that cap and active spending policies when estimating. The database compares the "
+                    "proposed campaign budget with remaining initiative funds and marks any over-cap or legally "
+                    "blocked proposal approval_required. Never publish, buy ads, reserve campaign spend, or state "
+                    "that a draft campaign is active."
                 )
                 if support_context is not None:
                     role_output += (
@@ -691,6 +706,24 @@ def validate_task_agent_artifact(role: str, value: dict[str, Any], context: dict
                     or any(not isinstance(entry, str) or not 1 <= len(entry.strip()) <= 1000 for entry in item)):
                 raise AgentOutputError(f"Task artifact {field} must contain 1 to 20 bounded strings")
             bounded_artifact[field] = [entry.strip() for entry in item]
+        elif field == "budget_amount_eur" and role == "cmo":
+            if (isinstance(item, bool) or not isinstance(item, (int, float))
+                    or not math.isfinite(item) or not 0 <= item <= 999999999999.99
+                    or round(item, 2) != item):
+                raise AgentOutputError("Campaign budget must be a non-negative EUR amount in cents")
+            bounded_artifact[field] = round(item, 2)
+        elif field == "campaign_name" and role == "cmo":
+            if not isinstance(item, str) or not 8 <= len(item.strip()) <= 160:
+                raise AgentOutputError("Campaign name must contain 8 to 160 characters")
+            bounded_artifact[field] = item.strip()
+        elif field == "channel" and role == "cmo":
+            if not isinstance(item, str) or not 3 <= len(item.strip()) <= 80:
+                raise AgentOutputError("Campaign channel must contain 3 to 80 characters")
+            bounded_artifact[field] = item.strip()
+        elif field == "budget_rationale" and role == "cmo":
+            if not isinstance(item, str) or not 8 <= len(item.strip()) <= 500:
+                raise AgentOutputError("Campaign budget rationale must contain 8 to 500 characters")
+            bounded_artifact[field] = item.strip()
         elif not isinstance(item, str) or not 8 <= len(item.strip()) <= 4000:
             raise AgentOutputError(f"Task artifact {field} must contain 8 to 4000 characters")
         else:
