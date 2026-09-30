@@ -4,7 +4,7 @@ select no_plan();
 insert into public.company_settings(key,value,governance_sensitive,founder_only,updated_by)
   values('founder_telegram_user_id','"12345678"'::jsonb,true,true,'test')
   on conflict(key) do update set value=excluded.value,governance_sensitive=true,founder_only=true;
-select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-6-luna',1,1,1000,1000,true);
+select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-6-luna',1,1,1000,7000,true);
 create temporary table cfo_retry_fixture on commit drop as
   select gen_random_uuid() as project_id,(select id from public.agents where slug='cfo' and active) as cfo_id,
     gen_random_uuid() as run_id,gen_random_uuid() as expense_id;
