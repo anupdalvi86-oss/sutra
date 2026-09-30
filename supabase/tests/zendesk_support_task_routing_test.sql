@@ -27,10 +27,10 @@ select ok(not (public.sutra_founder_get_zendesk_support_routing('12345678')->>'c
 
 create temporary table zendesk_routing_fixture on commit drop as
   select gen_random_uuid() as project_id,(select id from public.agents where slug='sales' and active) as sales_id;
-insert into public.projects(id,slug,name,description,status,requested_budget,currency,
+insert into public.projects(id,slug,name,description,status,requested_budget,currency,created_by,
     budget_assessment_status,budget_assessed_at,budget_assessment)
   select project_id,'support-routing-'||replace(project_id::text,'-',''),'Zendesk routing fixture',
-    'Database-only founder-approved support task routing fixture.','active',25,'EUR','within_cap',now(),
+    'Database-only founder-approved support task routing fixture.','active',25,'EUR','founder:12345678','within_cap',now(),
     '{"estimated_total_eur":20,"confidence":"high","recommended_action":"proceed_within_cap","line_items":[{"category":"support","amount_eur":20,"basis":"SQL policy test fixture only."}]}'::jsonb
   from zendesk_routing_fixture;
 insert into public.approvals(project_id,approval_type,requested_by,required_roles,decisions,
