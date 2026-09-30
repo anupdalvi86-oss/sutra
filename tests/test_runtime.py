@@ -1,4 +1,6 @@
 import unittest
+import io
+import json
 import urllib.error
 import urllib.request
 from unittest.mock import Mock, patch
@@ -52,9 +54,20 @@ def status_fixture():
                            "currency": "EUR"}],
         "campaigns": [{"id": "campaign-1", "project_id": "project-1", "name": "QA pilot positioning",
                        "channel": "internal", "status": "draft", "budget_amount": 0, "currency": "EUR"}],
+        "campaign_performance": [{"campaign_id": "campaign-1", "status": "draft", "sent_count": 0,
+                                   "queued_count": 0, "sending_count": 0, "unknown_count": 0,
+                                   "failed_count": 0, "reserved_cost_eur": 0,
+                                   "unknown_cost_eur": 0, "actual_cost_eur": 0}],
         "customers": [{"id": "lead-1", "name": "Synthetic lead", "company": "Example Co",
                        "source": "test fixture", "status": "qualified"}],
         "customer_email_actions": [],
+        "support_case_status": {
+            "total": 4, "open": 3,
+            "by_status": {"open": 2, "pending": 1, "solved": 1},
+            "open_by_priority": {"urgent": 2, "normal": 1},
+            "open_by_age": {"under_24h": 1, "24_to_72h": 1, "over_72h": 1},
+            "oldest_open_hours": 100,
+        },
         "legal_escalations": [],
         "github_dispatches": [],
     }
@@ -197,6 +210,130 @@ class FounderCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
             parse_founder_command(f"clear legal hold {project_id} because short")
 
+    def test_founder_can_record_or_withdraw_audited_customer_crm_consent(self):
+        customer_id = "00000000-0000-4000-8000-000000000031"
+        record = f"CEO, record CRM consent for {customer_id} because customer signed CRM sharing form 42."
+        parsed = parse_founder_command(record)
+        self.assertEqual(parsed.kind, "set_customer_crm_consent")
+        self.assertEqual(parsed.crm_customer_id, customer_id)
+        self.assertIs(parsed.crm_consent, True)
+        self.assertEqual(parsed.crm_consent_evidence, "customer signed CRM sharing form 42")
+        self.store.rpc.return_value = {"customer_id": customer_id, "crm_sync_consent": True, "changed": True}
+        self.assertIn("does not start a CRM sync", self.router.handle(FOUNDER, FOUNDER, record).text)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_customer_crm_consent", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_customer_id": customer_id,
+            "p_consent": True,
+            "p_evidence_source": "customer signed CRM sharing form 42",
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"customer_id": customer_id, "crm_sync_consent": False,
+                                      "queued_actions_cancelled": 2, "changed": True}
+        withdraw = f"withdraw customer CRM consent for {customer_id} because customer asked us to stop."
+        reply = self.router.handle(FOUNDER, FOUNDER, withdraw).text
+        self.assertIn("2 queued sync action(s) were cancelled", reply)
+        self.assertIn("reservations released", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_customer_crm_consent", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_customer_id": customer_id,
+            "p_consent": False,
+            "p_evidence_source": "customer asked us to stop",
+        })
+
+        self.store.rpc.reset_mock()
+        reply = self.router.handle("other-user", "other-user", record).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+        self.assertEqual(parse_founder_command("record CRM consent for not-a-uuid because invalid record").kind,
+                         "unsupported")
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command(f"record CRM consent for {customer_id} because short")
+
+    def test_zendesk_routing_commands_are_founder_only_and_database_gated(self):
+        project_id = "00000000-0000-4000-8000-000000000041"
+        route = f"CEO, route Zendesk tickets to initiative {project_id} because assessed support budget is approved."
+        parsed = parse_founder_command(route)
+        self.assertEqual(parsed.kind, "set_zendesk_support_routing")
+        self.assertEqual(parsed.zendesk_support_project_id, project_id)
+        self.assertIs(parsed.zendesk_support_routing_enabled, True)
+        self.assertEqual(parsed.zendesk_support_routing_reason, "assessed support budget is approved")
+        self.store.rpc.return_value = {"configured": True, "changed": True, "project_id": project_id}
+        reply = self.router.handle(FOUNDER, FOUNDER, route).text
+        self.assertIn(f"New and reopened Zendesk tickets now route to initiative {project_id}", reply)
+        self.assertIn("model work still needs its normal database reservation", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_zendesk_support_routing", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": project_id,
+            "p_reason": "assessed support budget is approved",
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"configured": False}
+        status = self.router.handle(FOUNDER, FOUNDER, "CEO, show Zendesk ticket routing.").text
+        self.assertIn("Zendesk ticket routing is disabled", status)
+        self.store.rpc.assert_called_once_with("sutra_founder_get_zendesk_support_routing", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
+        self.store.rpc.reset_mock()
+        stop = "CEO, stop Zendesk ticket routing because support ownership is changing."
+        parsed = parse_founder_command(stop)
+        self.assertIs(parsed.zendesk_support_routing_enabled, False)
+        self.store.rpc.return_value = {"configured": False, "changed": True}
+        reply = self.router.handle(FOUNDER, FOUNDER, stop).text
+        self.assertIn("routing is disabled and audit logged", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_zendesk_support_routing", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": None,
+            "p_reason": "support ownership is changing",
+        })
+
+        self.store.rpc.reset_mock()
+        reply = self.router.handle("987654321", "987654321", route).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+        with self.assertRaisesRegex(ValueError,"valid initiative UUID"):
+            parse_founder_command("route Zendesk tickets to initiative not-a-uuid because invalid project id")
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command(f"route Zendesk tickets to initiative {project_id} because short")
+
+    def test_zendesk_reply_ceiling_commands_are_founder_only_and_do_not_enable_sending(self):
+        command = "CEO, set Zendesk reply cost ceiling to €0.05 because reserve a bounded support reply cost."
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "set_zendesk_reply_cost_ceiling")
+        self.assertEqual(parsed.zendesk_reply_cost_ceiling, 0.05)
+        self.assertEqual(parsed.zendesk_reply_cost_reason, "reserve a bounded support reply cost")
+        self.store.rpc.return_value = {"changed": True, "max_reply_cost_eur": 0.05}
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("audit logged", reply)
+        self.assertIn("did not queue a reply or enable delivery", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_zendesk_reply_cost_ceiling", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_max_reply_cost_eur": 0.05,
+            "p_reason": "reserve a bounded support reply cost",
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"configured": False}
+        status = self.router.handle(FOUNDER, FOUNDER, "CEO, show Zendesk reply cost ceiling.").text
+        self.assertIn("blocked until you set", status)
+        self.store.rpc.assert_called_once_with("sutra_founder_get_zendesk_reply_cost_ceiling", {
+            "p_founder_telegram_user_id": FOUNDER,
+        })
+
+        self.store.rpc.reset_mock()
+        reply = self.router.handle("987654321", "987654321", command).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+        for malformed in (
+            "set Zendesk reply cost ceiling to €0 because invalid lower bound",
+            "set Zendesk reply cost ceiling to €0.055 because fraction must be cents",
+            "set Zendesk reply cost ceiling to €0.05 because short",
+        ):
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                parse_founder_command(malformed)
+
     def test_board_status_explains_blocked_work_waiting_on_proposed_project_approval(self):
         snapshot = status_fixture()
         snapshot["projects"].append({
@@ -245,8 +382,14 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Objective [active]: Validate buyer demand", reply)
         self.assertIn("Marketing pipeline", reply)
         self.assertIn("[draft] QA pilot positioning — internal", reply)
+        self.assertIn("Delivery: sent 0, queued 0, sending 0, unknown 0, failed 0", reply)
+        self.assertIn("email spend: reserved €0.00, unknown €0.00, actual €0.00", reply)
         self.assertIn("Customer communications", reply)
         self.assertIn("No budgeted customer email actions are queued or recorded", reply)
+        self.assertIn("Customer support queue", reply)
+        self.assertIn("3 open; 1 solved or closed; 4 total", reply)
+        self.assertIn("Open priority: normal: 1, urgent: 2", reply)
+        self.assertIn("Open case age (informational, not an SLA): under 24h: 1; 24–72h: 1; over 72h: 1; oldest: 100h", reply)
 
     def test_status_reports_customer_email_action_state_without_disclosing_content(self):
         snapshot = status_fixture()
@@ -274,6 +417,28 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Customer and lead pipeline", sales)
         self.assertNotIn("Marketing pipeline", sales)
         self.assertNotIn("Engineering delivery", sales)
+        self.assertIn("Customer support queue", sales)
+        self.assertNotIn("Customer support queue", marketing)
+
+    def test_support_status_is_scoped_to_operations_and_empty_queue_is_explicit(self):
+        snapshot = status_fixture()
+        snapshot["support_case_status"] = {
+            "total": 0, "open": 0, "by_status": {}, "open_by_priority": {},
+            "open_by_age": {"under_24h": 0, "24_to_72h": 0, "over_72h": 0},
+            "oldest_open_hours": 0,
+        }
+        company = render_status_brief(snapshot, "ceo")
+        operations = render_status_brief(snapshot, "coo")
+        developer = render_status_brief(snapshot, "developer")
+        self.assertIn("No support tickets recorded", company)
+        self.assertIn("No support tickets recorded", operations)
+        self.assertNotIn("Customer support queue", developer)
+
+    def test_support_status_failure_is_not_reported_as_an_empty_queue(self):
+        snapshot = status_fixture()
+        snapshot["support_case_status"] = None
+        reply = render_status_brief(snapshot, "ceo")
+        self.assertIn("Support queue data is unavailable; no case counts inferred", reply)
 
     def test_empty_marketing_and_sales_pipelines_are_explicit(self):
         snapshot = status_fixture()
@@ -615,6 +780,36 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("couldn't load company status", reply)
         self.assertIn("No company state was changed", reply)
 
+    def test_supabase_http_errors_expose_only_a_safe_status_category(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        upstream = urllib.error.HTTPError(
+            "https://sutra.example/rest/v1/rpc/secret", 403, "private database detail",
+            {}, None,
+        )
+        with patch("sutra.runtime.open_outbound_request", side_effect=upstream):
+            with self.assertRaises(IntegrationError) as caught:
+                store.request("rpc/sutra_claim_ready_code_release", "POST", {})
+
+        self.assertEqual(caught.exception.code, "supabase_http_403")
+        self.assertNotIn("private database detail", str(caught.exception))
+        self.assertNotIn("secret", str(caught.exception))
+
+    def test_supabase_database_errors_keep_only_allowlisted_sqlstate_category(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        private_body = json.dumps({
+            "code": "22023", "message": "private token count and request detail",
+        }).encode()
+        upstream = urllib.error.HTTPError(
+            "https://sutra.example/rest/v1/rpc/secret", 400, "Bad Request", {}, io.BytesIO(private_body),
+        )
+        with patch("sutra.runtime.open_outbound_request", side_effect=upstream):
+            with self.assertRaises(IntegrationError) as caught:
+                store.request("rpc/sutra_reconcile_agent_run_spend_from_usage", "POST", {})
+
+        self.assertEqual(caught.exception.code, "supabase_db_validation")
+        self.assertNotIn("private token count", str(caught.exception))
+        self.assertNotIn("secret", str(caught.exception))
+
     def test_status_snapshot_reads_projects_tasks_approvals_and_financial_controls(self):
         expected = status_fixture()
         expected["code_releases"] = []
@@ -625,7 +820,9 @@ class FounderCommandTests(unittest.TestCase):
             "agents", "departments", "budgets", "expenses", "budget_ledger", "campaigns",
             "customers", "customer_email_actions",
         )
-        store.request = Mock(side_effect=[expected[key] for key in request_order] + [expected["code_releases"]])
+        store.request = Mock(side_effect=[expected[key] for key in request_order] + [
+            expected["support_case_status"], expected["campaign_performance"], expected["code_releases"],
+        ])
         store.rpc = Mock(return_value={"dispatches": expected["github_dispatches"]})
         expected.pop("legal_escalations")
         self.assertEqual(store.company_status(), expected)
@@ -645,30 +842,58 @@ class FounderCommandTests(unittest.TestCase):
         self.assertTrue(any(path.startswith("customers?") and "email" not in path for path in requested_paths))
         self.assertTrue(any(path.startswith("customer_email_actions?") and "body_text" not in path
                             and "recipient_email" not in path for path in requested_paths))
+        self.assertIn("rpc/sutra_company_support_case_status", requested_paths)
+        self.assertIn("rpc/sutra_company_campaign_performance", requested_paths)
         self.assertEqual(store.request.call_args_list[-1], unittest.mock.call(
             "rpc/sutra_company_code_release_status", "POST", {}))
+        self.assertEqual(store.request.call_args_list[-2], unittest.mock.call(
+            "rpc/sutra_company_campaign_performance", "POST", {}))
         self.assertEqual(store.rpc.call_args_list, [
             unittest.mock.call("sutra_company_github_dispatch_status", {}),
         ])
 
     def test_status_snapshot_keeps_healthy_sections_when_one_source_is_unavailable(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        malformed_responses = [[] for _ in range(15)]
+        malformed_responses = [[] for _ in range(17)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
         store.rpc = Mock(return_value={"dispatches": []})
         status = store.company_status()
-        self.assertEqual(status["status_errors"], ["agents"])
+        self.assertEqual(status["status_errors"], ["agents", "support_cases"])
         self.assertEqual(status["agents"], [])
         self.assertEqual(status["projects"], [])
         self.assertEqual(status["code_releases"], [])
+
+    def test_status_snapshot_rejects_inconsistent_support_age_aggregate(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        malformed_support = {
+            "total": 1, "open": 1, "by_status": {"open": 1},
+            "open_by_priority": {"urgent": 1},
+            "open_by_age": {"under_24h": 0, "24_to_72h": 0, "over_72h": 0},
+            "oldest_open_hours": 50,
+        }
+        store.request = Mock(side_effect=[[] for _ in range(14)] + [malformed_support, [], []])
+        store.rpc = Mock(return_value={"dispatches": []})
+        status = store.company_status()
+        self.assertIsNone(status["support_case_status"])
+        self.assertIn("support_cases", status["status_errors"])
+
+    def test_status_snapshot_rejects_malformed_campaign_performance(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        malformed = [{"campaign_id": "campaign-1", "status": "active", "sent_count": True}]
+        support = status_fixture()["support_case_status"]
+        store.request = Mock(side_effect=[[] for _ in range(14)] + [support, malformed, []])
+        store.rpc = Mock(return_value={"dispatches": []})
+        status = store.company_status()
+        self.assertEqual(status["campaign_performance"], [])
+        self.assertIn("campaign_performance", status["status_errors"])
 
     def test_status_snapshot_records_failed_rpc_without_discarding_other_sources(self):
         store = SupabaseREST("https://sutra.example", "server-key")
         store.request = Mock(return_value=[])
         store.rpc = Mock(side_effect=IntegrationError("unavailable"))
         status = store.company_status()
-        self.assertEqual(status["status_errors"], ["github_dispatches"])
+        self.assertEqual(status["status_errors"], ["support_cases", "github_dispatches"])
         self.assertEqual(status["github_dispatches"], [])
         self.assertEqual(status["code_releases"], [])
 
@@ -1214,6 +1439,48 @@ class FounderCommandTests(unittest.TestCase):
         self.router.handle(FOUNDER, FOUNDER, "change everything")
         self.store.rpc.assert_not_called()
 
+    def test_follow_up_to_existing_initiative_preserves_its_budget(self):
+        project_id = "00000000-0000-4000-8000-000000000071"
+        command = f"Continue initiative {project_id}: Add an export flow for the pilot customers."
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "initiative_followup")
+        self.assertEqual(parsed.project_id, project_id)
+        self.assertEqual(parsed.initiative_followup, "Add an export flow for the pilot customers")
+
+        task_id = "00000000-0000-4000-8000-000000000072"
+        self.store.rpc.return_value = {
+            "status": "created", "project_id": project_id, "task_id": task_id,
+            "requested_budget": 500, "remaining_budget": 320, "currency": "EUR",
+            "budget_changed": False, "spend_reserved": False,
+        }
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn(f"Follow-up task {task_id}", reply)
+        self.assertIn("existing all-in budget remains €500.00 EUR", reply)
+        self.assertIn("€320.00 remains uncommitted", reply)
+        self.assertIn("No spend was reserved", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_add_initiative_followup", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": project_id,
+            "p_request": "Add an export flow for the pilot customers",
+        })
+
+    def test_follow_up_command_is_founder_only_and_validates_scope(self):
+        project_id = "00000000-0000-4000-8000-000000000071"
+        command = f"Continue initiative {project_id}: Add a usage report for the pilot team."
+        reply = self.router.handle("987654321", "987654321", command).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+
+        malformed = "Continue initiative not-a-uuid: Add a usage report for the pilot team."
+        self.assertEqual(parse_founder_command(malformed).kind, "budget_required")
+        with self.assertRaisesRegex(ValueError, "12 to 2000"):
+            parse_founder_command(f"Continue initiative {project_id}: too short")
+
+        self.store.rpc.side_effect = IntegrationError("legal hold")
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("approved initiative with a positive", reply)
+        self.assertIn("existing budget must remain unchanged", reply)
+
     def test_founder_can_change_initiative_budget_with_reason(self):
         project_id = "00000000-0000-4000-8000-000000000004"
         parsed = parse_founder_command(
@@ -1238,6 +1505,34 @@ class FounderCommandTests(unittest.TestCase):
             "p_new_budget": 750,
             "p_reason": "supplier estimate increased",
         })
+
+    def test_founder_can_queue_audited_cfo_assessment_without_changing_budget(self):
+        project_id = "00000000-0000-4000-8000-000000000004"
+        command = f"CFO, assess budget for initiative {project_id}: review the Sutra release sprint including model use, deployment, QA and rollback costs"
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "assess_initiative_budget")
+        self.assertEqual(parsed.project_id, project_id)
+        self.store.rpc.return_value = {
+            "project_id": project_id, "agent_run_id": "00000000-0000-4000-8000-000000000099",
+            "status": "queued", "budget_cap_eur": 17.60,
+        }
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("CFO all-in budget assessment queued", reply)
+        self.assertIn("unchanged €17.60 ceiling", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_queue_initiative_cfo_assessment", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": project_id,
+            "p_scope": "review the Sutra release sprint including model use, deployment, QA and rollback costs",
+        })
+
+    def test_malformed_cfo_assessment_command_is_not_routed(self):
+        self.assertEqual(parse_founder_command(
+            "CFO, assess budget for initiative not-a-uuid: please review this initiative budget"
+        ).kind, "budget_required")
+        with self.assertRaisesRegex(ValueError, "20 to 2000"):
+            parse_founder_command(
+                "CFO, assess budget for initiative 00000000-0000-4000-8000-000000000004: too short"
+            )
 
     def test_non_founder_cannot_change_initiative_budget(self):
         project_id = "00000000-0000-4000-8000-000000000004"

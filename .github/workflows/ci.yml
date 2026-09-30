@@ -96,6 +96,32 @@ jobs:
           assert status.get("ANON_KEY") and status.get("SERVICE_ROLE_KEY"), "local Auth keys missing"
           print("Local Supabase Auth and Data API are available")
           PY
+      - name: Report sanitized Supabase migration startup errors
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import os, re
+          path = os.path.join(os.environ["RUNNER_TEMP"], "sutra-supabase-start.log")
+          if not os.path.isfile(path):
+              print("Supabase startup log is unavailable")
+              raise SystemExit(0)
+          lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+          errors = [index for index, line in enumerate(lines) if re.search(r"\b(ERROR|FATAL):", line, re.I)]
+          if not errors:
+              errors = [index for index, line in enumerate(lines) if re.search(r"failed to (apply|run|execute)|migration .* failed", line, re.I)]
+          if errors:
+              center = errors[-1]
+              diagnostic_lines = lines[max(0, center - 12):min(len(lines), center + 8)]
+          else:
+              diagnostic_lines = [line for line in lines if re.search(r"migration", line, re.I)][-30:]
+          for line in diagnostic_lines:
+              line = re.sub(r"\b(SERVICE_ROLE_KEY|ANON_KEY|JWT_SECRET|DB_URL|POOLER_URL)\s*[:=]\s*\S+", r"\1=<redacted>", line, flags=re.I)
+              line = re.sub(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}", "<redacted-jwt>", line)
+              line = re.sub(r"postgres(?:ql)?://\S+", "postgresql://<redacted>", line, flags=re.I)
+              print(line[:800])
+          if not errors:
+              print("Supabase startup failed without a database error line")
+          PY
       - name: Supabase Auth, RLS, and Sutra draft API integration
         run: python3 scripts/draft_auth_e2e.py
       - name: SQL policy tests

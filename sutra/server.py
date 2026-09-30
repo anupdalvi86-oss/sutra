@@ -21,6 +21,10 @@ from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .codex_runner import CodexTaskRunner
 from .code_release import CodeReleaseWorker
 from .customer_email import CustomerEmailDeliveryWorker, ResendEmailProvider
+from .crm_hubspot import HubSpotContactClient, HubSpotContactSyncWorker
+from .customer_support import (ZendeskTaskContextProvider, ZendeskTicketReader,
+                               ZendeskReplyClient, ZendeskReplyDeliveryWorker,
+                               normalize_zendesk_ticket_event, verify_zendesk_signature)
 from .drafts import DraftNotFound, DraftRequestError, DraftService, UserScopedSupabase
 from .github_webhook import normalize_github_event, verify_github_signature
 from .runtime import (
@@ -108,8 +112,16 @@ class SutraApplication:
         self.code_release_status = "disabled"
         self.customer_email_worker_thread: threading.Thread | None = None
         self.customer_email_worker_status = "disabled"
+        self.zendesk_reply_worker_thread: threading.Thread | None = None
+        self.zendesk_reply_worker_status = "disabled"
+        self.hubspot_sync_worker_thread: threading.Thread | None = None
+        self.hubspot_sync_worker_status = "disabled"
+        self.hubspot_private_app_token = os.environ.get("HUBSPOT_PRIVATE_APP_TOKEN", "").strip()
         self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+        self.zendesk_webhook_secret = os.environ.get("ZENDESK_WEBHOOK_SECRET", "")
+        self.zendesk_support_context_provider: ZendeskTaskContextProvider | None = None
+        self.zendesk_support_context_status = "disabled"
         # Keep the synthetic prototype local-only, even if a hosted service is mislabeled.
         draft_supabase = urlsplit(self.supabase_url)
         local_draft_database = (
@@ -167,11 +179,25 @@ class SutraApplication:
                         self.agent_worker_status = "blocked_model_profile"
                         break
                 if self.agent_worker_status not in {"blocked_model_profile", "blocked_runtime_configuration"}:
+                    support_context_enabled = os.environ.get(
+                        "SUTRA_ENABLE_ZENDESK_SUPPORT_CONTEXT", "false").lower() == "true"
+                    if support_context_enabled:
+                        try:
+                            reader = ZendeskTicketReader(
+                                os.environ.get("ZENDESK_SUBDOMAIN", ""),
+                                os.environ.get("ZENDESK_AGENT_EMAIL", ""),
+                                os.environ.get("ZENDESK_API_TOKEN", ""),
+                            )
+                            self.zendesk_support_context_provider = ZendeskTaskContextProvider(self.store, reader)
+                            self.zendesk_support_context_status = "configured"
+                        except ValueError:
+                            self.zendesk_support_context_status = "blocked_runtime_configuration"
                     for slot in range(worker_concurrency):
                         # Each worker owns its own Hermes client because usage
                         # diagnostics are request-local mutable state.
                         hermes = HermesAgentClient(hermes_url, hermes_key, provider, model)
-                        worker = AgentWorker(self.store, hermes, provider, model, role_routes=role_routes)
+                        worker = AgentWorker(self.store, hermes, provider, model, role_routes=role_routes,
+                            support_context_provider=self.zendesk_support_context_provider)
                         thread = threading.Thread(
                             target=worker.run, args=(self.telegram_stop,), daemon=True,
                             name=f"sutra-agent-worker-{slot + 1}")
@@ -261,6 +287,40 @@ class SutraApplication:
                     self.customer_email_worker_status = "running"
                 except ValueError:
                     self.customer_email_worker_status = "blocked_runtime_configuration"
+        if os.environ.get("SUTRA_ENABLE_ZENDESK_REPLY_WORKER", "false").lower() == "true":
+            send_mode = os.environ.get("SUTRA_ZENDESK_REPLY_SEND_MODE", "disabled").strip().lower()
+            try:
+                reader = ZendeskTicketReader(
+                    os.environ.get("ZENDESK_SUBDOMAIN", ""),
+                    os.environ.get("ZENDESK_AGENT_EMAIL", ""),
+                    os.environ.get("ZENDESK_API_TOKEN", ""),
+                )
+                if not self.store or send_mode != "live":
+                    raise ValueError("Zendesk reply delivery needs Supabase and explicit live mode")
+                worker_id = "sutra-worker-zendesk" + uuid.uuid4().hex[:12]
+                worker = ZendeskReplyDeliveryWorker(self.store, ZendeskReplyClient(reader), worker_id)
+                self.zendesk_reply_worker_thread = threading.Thread(
+                    target=worker.run, args=(self.telegram_stop,), daemon=True,
+                    name="sutra-zendesk-reply-worker")
+                self.zendesk_reply_worker_thread.start()
+                self.zendesk_reply_worker_status = "running"
+            except ValueError:
+                self.zendesk_reply_worker_status = "blocked_runtime_configuration"
+        if os.environ.get("SUTRA_ENABLE_HUBSPOT_SYNC_WORKER", "false").lower() == "true":
+            if not self.store or not self.hubspot_private_app_token:
+                self.hubspot_sync_worker_status = "blocked_runtime_configuration"
+            else:
+                try:
+                    provider = HubSpotContactClient(self.hubspot_private_app_token)
+                    worker_id = "sutra-worker-hubspot" + uuid.uuid4().hex[:12]
+                    worker = HubSpotContactSyncWorker(self.store, provider, worker_id)
+                    self.hubspot_sync_worker_thread = threading.Thread(
+                        target=worker.run, args=(self.telegram_stop,), daemon=True,
+                        name="sutra-hubspot-contact-sync-worker")
+                    self.hubspot_sync_worker_thread.start()
+                    self.hubspot_sync_worker_status = "running"
+                except ValueError:
+                    self.hubspot_sync_worker_status = "blocked_runtime_configuration"
         if os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
             if not self.store or not self.router or not self.telegram_token:
                 self.telegram_status = "unconfigured"
@@ -307,6 +367,16 @@ class SutraApplication:
             except IntegrationError:
                 database = "unreachable"
         gateway = GatewayProbe.state()
+        zendesk_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
+        zendesk_state = (
+            "configured" if zendesk_enabled and self.zendesk_webhook_secret
+            else "blocked_runtime_configuration" if zendesk_enabled
+            else "disabled"
+        )
+        support_context_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_SUPPORT_CONTEXT", "false").lower() == "true"
+        support_context_state = (
+            self.zendesk_support_context_status if support_context_enabled else "disabled"
+        )
         return {
             "status": "ok" if self.store and database == "reachable" else "degraded",
             "service": "sutra",
@@ -318,7 +388,11 @@ class SutraApplication:
             "codex_runner": self.codex_runner_status,
             "code_release_worker": self.code_release_status,
             "customer_email_worker": self.customer_email_worker_status,
+            "zendesk_reply_worker": self.zendesk_reply_worker_status,
+            "hubspot_sync_worker": self.hubspot_sync_worker_status,
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
+            "zendesk_webhook": zendesk_state,
+            "zendesk_support_context": support_context_state,
         }
 
     def readiness(self) -> dict[str, Any]:
@@ -333,7 +407,11 @@ class SutraApplication:
             "codex_runner": health["codex_runner"],
             "code_release_worker": health["code_release_worker"],
             "customer_email_worker": health["customer_email_worker"],
+            "zendesk_reply_worker": health["zendesk_reply_worker"],
+            "hubspot_sync_worker": health["hubspot_sync_worker"],
             "github_webhook": health["github_webhook"],
+            "zendesk_webhook": health["zendesk_webhook"],
+            "zendesk_support_context": health["zendesk_support_context"],
         }
         blockers = []
         if health["database"] != "reachable":
@@ -344,6 +422,8 @@ class SutraApplication:
         codex_enabled = os.environ.get("SUTRA_ENABLE_CODEX_RUNNER", "false").lower() == "true"
         code_release_enabled = os.environ.get("SUTRA_ENABLE_CODE_RELEASE_WORKER", "false").lower() == "true"
         customer_email_enabled = os.environ.get("SUTRA_ENABLE_CUSTOMER_EMAIL_WORKER", "false").lower() == "true"
+        zendesk_reply_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_REPLY_WORKER", "false").lower() == "true"
+        hubspot_enabled = os.environ.get("SUTRA_ENABLE_HUBSPOT_SYNC_WORKER", "false").lower() == "true"
         if telegram_enabled and health["telegram"] != "running":
             blockers.append("telegram")
         if worker_enabled and health["agent_worker"] != "running":
@@ -361,6 +441,16 @@ class SutraApplication:
             blockers.append("code_release_worker")
         if customer_email_enabled and health["customer_email_worker"] != "running":
             blockers.append("customer_email_worker")
+        if zendesk_reply_enabled and health["zendesk_reply_worker"] != "running":
+            blockers.append("zendesk_reply_worker")
+        if hubspot_enabled and health["hubspot_sync_worker"] != "running":
+            blockers.append("hubspot_sync_worker")
+        zendesk_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
+        if zendesk_enabled and health["zendesk_webhook"] != "configured":
+            blockers.append("zendesk_webhook")
+        support_context_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_SUPPORT_CONTEXT", "false").lower() == "true"
+        if support_context_enabled and health["zendesk_support_context"] != "configured":
+            blockers.append("zendesk_support_context")
         ready = not blockers
         return {
             "status": "ready" if ready else "not_ready",
@@ -384,6 +474,10 @@ class SutraApplication:
             self.code_release_thread.join(timeout=2)
         if self.customer_email_worker_thread:
             self.customer_email_worker_thread.join(timeout=2)
+        if self.zendesk_reply_worker_thread:
+            self.zendesk_reply_worker_thread.join(timeout=2)
+        if self.hubspot_sync_worker_thread:
+            self.hubspot_sync_worker_thread.join(timeout=2)
 
 
 class SutraHandler(BaseHTTPRequestHandler):
@@ -446,10 +540,13 @@ class SutraHandler(BaseHTTPRequestHandler):
         if path == "/webhooks/github":
             self._github_webhook()
             return
+        if path == "/webhooks/zendesk":
+            self._zendesk_webhook()
+            return
         if path == "/v1/drafts":
             self._draft_request("POST", path)
             return
-        if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update", "/internal/task-review", "/internal/customer-email"}:
+        if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update", "/internal/task-review", "/internal/customer-email", "/internal/customer-crm-sync"}:
             self._json(404, {"error": "not_found"})
             return
         token = self.app.internal_token
@@ -462,7 +559,37 @@ class SutraHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_json()
-            if path == "/internal/customer-email":
+            if path == "/internal/customer-crm-sync":
+                if self.app.hubspot_sync_worker_status != "running":
+                    self._json(503, {"error": "crm_sync_worker_disabled"})
+                    return
+                if not isinstance(payload, dict):
+                    raise ValueError("Malformed customer CRM sync request")
+                allowed = {"actor_agent_id", "task_id", "project_id", "customer_id",
+                           "estimated_cost_eur", "idempotency_key"}
+                if set(payload) != allowed:
+                    raise ValueError("Malformed customer CRM sync request")
+                estimated_cost = payload["estimated_cost_eur"]
+                if (not isinstance(estimated_cost, (int, float)) or isinstance(estimated_cost, bool)
+                        or estimated_cost <= 0 or estimated_cost > 999999999999.99
+                        or (isinstance(estimated_cost, float) and not math.isfinite(estimated_cost))):
+                    raise ValueError("Estimated cost must be finite, positive EUR within the supported range")
+                idempotency_key = payload["idempotency_key"]
+                if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", idempotency_key):
+                    raise ValueError("CRM sync requires an 8 to 128 character idempotency key")
+                try:
+                    agent_id = str(uuid.UUID(str(payload["actor_agent_id"])))
+                    task_id = str(uuid.UUID(str(payload["task_id"])))
+                    project_id = str(uuid.UUID(str(payload["project_id"])))
+                    customer_id = str(uuid.UUID(str(payload["customer_id"])))
+                except (TypeError, ValueError, AttributeError) as exc:
+                    raise ValueError("Customer CRM sync IDs must be UUIDs") from exc
+                result = self.app.store.rpc("sutra_queue_customer_crm_sync", {
+                    "p_agent_id": agent_id, "p_task_id": task_id, "p_project_id": project_id,
+                    "p_customer_id": customer_id, "p_estimated_cost_eur": estimated_cost,
+                    "p_idempotency_key": idempotency_key,
+                })
+            elif path == "/internal/customer-email":
                 allowed = {
                     "actor_agent_id", "actor_agent_slug", "task_id", "project_id", "customer_id",
                     "purpose", "subject", "body_text", "estimated_cost_eur", "idempotency_key",
@@ -703,6 +830,36 @@ class SutraHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid_github_event"})
         except IntegrationError:
             self._json(503, {"error": "github_event_persistence_unavailable"})
+
+    def _zendesk_webhook(self) -> None:
+        enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
+        if not enabled or self.app.store is None or not self.app.zendesk_webhook_secret:
+            self._json(503, {"error": "zendesk_webhook_disabled"})
+            return
+        try:
+            raw = self._read_raw_json()
+            timestamp = self.headers.get("X-Zendesk-Webhook-Timestamp", "")
+            signature = self.headers.get("X-Zendesk-Webhook-Signature", "")
+            if not verify_zendesk_signature(self.app.zendesk_webhook_secret, timestamp, raw, signature):
+                self._json(401, {"error": "invalid_signature"})
+                return
+            payload = json.loads(raw)
+            normalized = normalize_zendesk_ticket_event(payload)
+            if normalized is None:
+                self._json(400, {"error": "invalid_ticket_event"})
+                return
+            result = self.app.store.rpc("sutra_ingest_zendesk_ticket_event", {
+                "p_ticket_id": normalized["ticket_id"],
+                "p_status": normalized["status"],
+                "p_priority": normalized["priority"],
+                "p_provider_updated_at": normalized["updated_at"],
+                "p_route_tasks": self.app.zendesk_support_context_provider is not None,
+            })
+            self._json(202, result)
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "invalid_ticket_event"})
+        except IntegrationError:
+            self._json(503, {"error": "support_event_persistence_unavailable"})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Exclude request bodies, credentials, and founder commands from logs.

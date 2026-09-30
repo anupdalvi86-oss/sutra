@@ -99,6 +99,44 @@ class InternalEndpointTests(unittest.TestCase):
             "p_idempotency_key": payload["idempotency_key"],
         })
 
+    def test_customer_crm_sync_requires_running_worker_and_queues_exact_scope(self):
+        previous_worker_status = self.app.hubspot_sync_worker_status
+        self.addCleanup(setattr, self.app, "hubspot_sync_worker_status", previous_worker_status)
+        payload = {
+            "actor_agent_id": AGENT_ID,
+            "task_id": "00000000-0000-4000-8000-000000000003",
+            "project_id": "00000000-0000-4000-8000-000000000004",
+            "customer_id": "00000000-0000-4000-8000-000000000005",
+            "estimated_cost_eur": 1.25,
+            "idempotency_key": "crm-action-0001",
+        }
+        self.app.hubspot_sync_worker_status = "disabled"
+        with self.assertRaises(HTTPError) as disabled:
+            self.post_path("/internal/customer-crm-sync", payload, "unit-test-only-token")
+        self.assertEqual(disabled.exception.code, 503)
+        self.app.hubspot_sync_worker_status = "running"
+        rpc = Mock(return_value={"status": "queued", "action_id": "crm-action"})
+        with patch.object(self.app.store, "rpc", rpc):
+            response = self.post_path("/internal/customer-crm-sync", payload, "unit-test-only-token")
+        self.assertEqual(json.loads(response.read()), {"status": "queued", "action_id": "crm-action"})
+        rpc.assert_called_once_with("sutra_queue_customer_crm_sync", {
+            "p_agent_id": AGENT_ID, "p_task_id": payload["task_id"],
+            "p_project_id": payload["project_id"], "p_customer_id": payload["customer_id"],
+            "p_estimated_cost_eur": 1.25, "p_idempotency_key": "crm-action-0001",
+        })
+        malformed = {**payload, "notes": "must not be exported"}
+        with patch.object(self.app.store, "rpc", rpc):
+            with self.assertRaises(HTTPError) as invalid:
+                self.post_path("/internal/customer-crm-sync", malformed, "unit-test-only-token")
+        self.assertEqual(invalid.exception.code, 400)
+        rpc.assert_called_once()
+        for malformed_json in ([], "not-an-object", 7, None):
+            with self.subTest(payload=malformed_json), patch.object(self.app.store, "rpc", rpc):
+                with self.assertRaises(HTTPError) as invalid:
+                    self.post_path("/internal/customer-crm-sync", malformed_json, "unit-test-only-token")
+                self.assertEqual(invalid.exception.code, 400)
+        rpc.assert_called_once()
+
     def test_customer_email_queue_rejects_malformed_scope_content_and_cost(self):
         payload = {
             "actor_agent_id": AGENT_ID,

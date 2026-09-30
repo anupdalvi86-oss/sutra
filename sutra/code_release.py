@@ -18,6 +18,10 @@ _SAFE_RELEASE_ERRORS = {
     "github_merge_conflict", "github_network_error", "github_permission_denied",
     "github_stale_head",
 }
+_SAFE_CYCLE_CODES = {
+    "integration_error", "supabase_http_error", "supabase_network_error",
+    "supabase_invalid_json",
+}
 
 
 class CodeReleaseWorker:
@@ -31,9 +35,12 @@ class CodeReleaseWorker:
         self.github = github
         self.worker_id = worker_id
         self.evidence_poller = GitHubEvidencePoller(store, github)
+        self._stage = "idle"
 
     def run_once(self) -> bool:
+        self._stage = "github_evidence_poll"
         self.evidence_poller.poll_once()
+        self._stage = "database_claim"
         claim = self.store.claim_ready_code_release(self.worker_id)
         if claim is None:
             return False
@@ -50,37 +57,47 @@ class CodeReleaseWorker:
                 or not re.fullmatch(r"[a-f0-9]{40}", expected_sha)):
             raise IntegrationError("Code release claim is malformed")
 
+        self._stage = "database_authorization"
         if not self.store.validate_code_release_claim(self.worker_id, attempt_id, token):
+            self._stage = "database_result"
             self.store.finish_code_release(self.worker_id, attempt_id, token, "blocked",
                                            detail_code="authorization_revoked")
             return False
 
         try:
+            self._stage = "github_pull_request_read"
             state = self.github.pull_request_release_state(pr_number)
             if state["merged"]:
                 # A prior merge whose response was lost is reconciled through the
                 # live PR state; the immutable tested head still has to match.
                 merge_sha = state.get("merge_commit_sha")
                 if not isinstance(merge_sha, str) or not re.fullmatch(r"[a-f0-9]{40}", merge_sha):
+                    self._stage = "database_result"
                     self.store.finish_code_release(self.worker_id, attempt_id, token, "blocked",
                                                    detail_code="github_stale_head")
                     return False
+                self._stage = "database_merge_reconciliation"
                 self.store.finish_code_release(self.worker_id, attempt_id, token, "merged",
                                                merge_commit_sha=merge_sha)
                 return True
             if (state["state"] != "open" or state["base_ref"] != "main"
                     or state["head_sha"] != expected_sha or state["draft"]):
                 detail = "github_closed_unmerged" if state["state"] == "closed" else "github_stale_head"
+                self._stage = "database_result"
                 self.store.finish_code_release(self.worker_id, attempt_id, token, "blocked",
                                                detail_code=detail)
                 return False
 
             # Recheck the audited grant immediately before the external write.
+            self._stage = "database_authorization"
             if not self.store.validate_code_release_claim(self.worker_id, attempt_id, token):
+                self._stage = "database_result"
                 self.store.finish_code_release(self.worker_id, attempt_id, token, "blocked",
                                                detail_code="authorization_revoked")
                 return False
+            self._stage = "github_merge"
             result = self.github.merge_pull_request(pr_number, expected_sha)
+            self._stage = "database_result"
             self.store.finish_code_release(self.worker_id, attempt_id, token, "merged",
                                            merge_commit_sha=result["merge_commit_sha"])
             logger.info("code_release_merged task_id=%s pull_request=%s head_sha=%s",
@@ -88,6 +105,7 @@ class CodeReleaseWorker:
             return True
         except GitHubAPIError as exc:
             detail = self._release_error_code(exc.code)
+            self._stage = "database_result"
             self.store.finish_code_release(self.worker_id, attempt_id, token, "blocked",
                                            detail_code=detail)
             logger.warning("code_release_blocked task_id=%s pull_request=%s error_code=%s",
@@ -109,11 +127,30 @@ class CodeReleaseWorker:
         return "github_api_error" if code in _SAFE_RELEASE_ERRORS else "github_api_error"
 
     def run(self, stop: threading.Event, idle_seconds: float = 30.0) -> None:
+        consecutive_failures = 0
         while not stop.is_set():
             try:
                 worked = self.run_once()
             except (IntegrationError, GitHubAPIError, OSError, ValueError) as exc:
-                logger.warning("code_release_cycle_failed error_type=%s", type(exc).__name__)
-                worked = False
+                consecutive_failures += 1
+                code = self._cycle_error_code(exc)
+                delay = min(max(idle_seconds, 1.0) * (2 ** min(consecutive_failures - 1, 4)), 300.0)
+                logger.warning("code_release_cycle_failed stage=%s error_code=%s retry_in_seconds=%s",
+                               self._stage, code, int(delay))
+                stop.wait(delay)
+                continue
+            self._stage = "idle"
+            consecutive_failures = 0
             if not worked:
                 stop.wait(idle_seconds)
+
+    @staticmethod
+    def _cycle_error_code(exc: Exception) -> str:
+        value = getattr(exc, "code", "integration_error")
+        if isinstance(value, str) and re.fullmatch(r"github_[a-z0-9_]{1,48}", value):
+            return value
+        if isinstance(value, str) and re.fullmatch(r"supabase_http_[1-5][0-9]{2}", value):
+            return value
+        if isinstance(value, str) and value in _SAFE_CYCLE_CODES:
+            return value
+        return "integration_error"

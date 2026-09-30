@@ -20,6 +20,28 @@ from typing import Any, Callable
 class IntegrationError(RuntimeError):
     """An external integration returned an invalid or unsuccessful response."""
 
+    def __init__(self, message: str, *, code: str = "integration_error"):
+        super().__init__(message)
+        # Callers may safely log this bounded category. Never log response bodies,
+        # request URLs, headers, or the exception's upstream message.
+        self.code = code if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code) else "integration_error"
+
+
+def _safe_supabase_database_error_code(body: bytes) -> str | None:
+    """Map PostgREST SQLSTATEs to safe categories without retaining error text."""
+    try:
+        payload = json.loads(body[:2048])
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "22023": "supabase_db_validation",
+        "42501": "supabase_db_authorization",
+        "23514": "supabase_db_policy",
+        "23505": "supabase_db_conflict",
+    }.get(payload.get("code"))
+
 
 def validate_outbound_request(request: urllib.request.Request) -> None:
     """Allow HTTPS integrations and only the private Railway HTTP network."""
@@ -75,8 +97,21 @@ class SupabaseREST:
                 if len(raw) > 1_000_000:
                     raise IntegrationError("Supabase response exceeded the size limit")
                 return json.loads(raw) if raw else None
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise IntegrationError("Supabase request failed") from exc
+        except urllib.error.HTTPError as exc:
+            status = exc.code if isinstance(exc.code, int) and 100 <= exc.code <= 599 else None
+            try:
+                error_body = exc.read(2048)
+            except (AttributeError, OSError):
+                error_body = b""
+            safe_database_code = _safe_supabase_database_error_code(error_body)
+            if safe_database_code is not None:
+                raise IntegrationError("Supabase database request was rejected", code=safe_database_code) from exc
+            code = f"supabase_http_{status}" if status is not None else "supabase_http_error"
+            raise IntegrationError("Supabase request failed", code=code) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise IntegrationError("Supabase request failed", code="supabase_network_error") from exc
+        except json.JSONDecodeError as exc:
+            raise IntegrationError("Supabase returned invalid JSON", code="supabase_invalid_json") from exc
 
     def rpc(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.request(f"rpc/{name}", "POST", payload)
@@ -292,6 +327,66 @@ class SupabaseREST:
             raise IntegrationError("Supabase returned an invalid customer email result")
         return result
 
+    def claim_zendesk_reply_action(self, worker_id: str) -> dict[str, Any] | None:
+        result = self.rpc("sutra_claim_zendesk_reply_action", {"p_worker_id": worker_id})
+        if result is None:
+            return None
+        if not isinstance(result, dict) or result.get("status") != "claimed":
+            raise IntegrationError("Supabase returned an invalid Zendesk reply claim")
+        return result
+
+    def validate_zendesk_reply_claim(self, worker_id: str, action_id: str,
+                                     claim_token: str) -> bool:
+        result = self.rpc("sutra_validate_zendesk_reply_claim", {
+            "p_worker_id": worker_id, "p_action_id": action_id, "p_claim_token": claim_token,
+        })
+        if not isinstance(result, bool):
+            raise IntegrationError("Supabase returned an invalid Zendesk reply authorization")
+        return result
+
+    def finish_zendesk_reply_action(self, worker_id: str, action_id: str, claim_token: str,
+                                    status: str, error_code: str | None,
+                                    actual_cost_eur: float | None, cost_known: bool) -> dict[str, Any]:
+        result = self.rpc("sutra_finish_zendesk_reply_action", {
+            "p_worker_id": worker_id, "p_action_id": action_id, "p_claim_token": claim_token,
+            "p_status": status, "p_error_code": error_code,
+            "p_actual_cost_eur": actual_cost_eur, "p_cost_known": cost_known,
+        })
+        if not isinstance(result, dict) or result.get("status") != status:
+            raise IntegrationError("Supabase returned an invalid Zendesk reply result")
+        return result
+
+    def claim_customer_crm_sync_action(self, worker_id: str) -> dict[str, Any] | None:
+        result = self.rpc("sutra_claim_customer_crm_sync_action", {"p_worker_id": worker_id})
+        if result is None:
+            return None
+        if not isinstance(result, dict) or result.get("status") != "claimed":
+            raise IntegrationError("Supabase returned an invalid CRM sync claim")
+        return result
+
+    def validate_customer_crm_sync_claim(self, worker_id: str, action_id: str,
+                                         claim_token: str) -> bool:
+        result = self.rpc("sutra_validate_customer_crm_sync_claim", {
+            "p_worker_id": worker_id, "p_action_id": action_id, "p_claim_token": claim_token,
+        })
+        if not isinstance(result, bool):
+            raise IntegrationError("Supabase returned an invalid CRM sync authorization")
+        return result
+
+    def finish_customer_crm_sync_action(self, worker_id: str, action_id: str,
+                                        claim_token: str, status: str,
+                                        external_contact_id: str | None, error_code: str | None,
+                                        actual_cost_eur: float | None, cost_known: bool) -> dict[str, Any]:
+        result = self.rpc("sutra_finish_customer_crm_sync_action", {
+            "p_worker_id": worker_id, "p_action_id": action_id, "p_claim_token": claim_token,
+            "p_status": status, "p_external_contact_id": external_contact_id,
+            "p_error_code": error_code, "p_actual_cost_eur": actual_cost_eur,
+            "p_cost_known": cost_known,
+        })
+        if not isinstance(result, dict) or result.get("status") != status:
+            raise IntegrationError("Supabase returned an invalid CRM sync result")
+        return result
+
     def fail_github_task(self, worker_id: str, task_id: str, lease_token: str,
                          error_code: str) -> dict[str, Any]:
         return self.rpc("sutra_fail_github_task_dispatch", {
@@ -329,6 +424,51 @@ class SupabaseREST:
                 # One failing integration/table must not hide the rest of the board report.
                 snapshot[key] = []
                 status_errors.append(key)
+        try:
+            support_status = self.request("rpc/sutra_company_support_case_status", "POST", {})
+            if not isinstance(support_status, dict):
+                raise IntegrationError("invalid support status")
+            total = support_status.get("total")
+            open_count = support_status.get("open")
+            by_status = support_status.get("by_status")
+            open_by_priority = support_status.get("open_by_priority")
+            open_by_age = support_status.get("open_by_age")
+            oldest_open_hours = support_status.get("oldest_open_hours")
+            if (type(total) is not int or total < 0 or type(open_count) is not int or open_count < 0
+                    or open_count > total or not isinstance(by_status, dict)
+                    or not isinstance(open_by_priority, dict)
+                    or any(not isinstance(key, str) or type(value) is not int or value < 0
+                           for key, value in (*by_status.items(), *open_by_priority.items()))
+                    or not isinstance(open_by_age, dict)
+                    or set(open_by_age) != {"under_24h", "24_to_72h", "over_72h"}
+                    or any(type(value) is not int or value < 0 for value in open_by_age.values())
+                    or sum(open_by_age.values()) != open_count
+                    or type(oldest_open_hours) is not int or oldest_open_hours < 0
+                    or (open_count == 0 and oldest_open_hours != 0)
+                    or sum(by_status.values()) != total or sum(open_by_priority.values()) != open_count):
+                raise IntegrationError("invalid support status")
+            snapshot["support_case_status"] = support_status
+        except IntegrationError:
+            snapshot["support_case_status"] = None
+            status_errors.append("support_cases")
+        try:
+            campaign_performance = self.request("rpc/sutra_company_campaign_performance", "POST", {})
+            if (not isinstance(campaign_performance, list) or len(campaign_performance) > 100
+                    or not all(isinstance(row, dict) for row in campaign_performance)):
+                raise IntegrationError("invalid campaign performance")
+            required_counts = ("sent_count", "queued_count", "sending_count", "unknown_count", "failed_count")
+            required_costs = ("reserved_cost_eur", "unknown_cost_eur", "actual_cost_eur")
+            for row in campaign_performance:
+                if (not isinstance(row.get("campaign_id"), str)
+                        or not isinstance(row.get("status"), str) or len(row["status"]) > 32
+                        or any(type(row.get(key)) is not int or row[key] < 0 for key in required_counts)
+                        or any(type(row.get(key)) not in (int, float) or not math.isfinite(row[key])
+                               or row[key] < 0 for key in required_costs)):
+                    raise IntegrationError("invalid campaign performance")
+            snapshot["campaign_performance"] = campaign_performance
+        except IntegrationError:
+            snapshot["campaign_performance"] = []
+            status_errors.append("campaign_performance")
         try:
             dispatch_status = self.rpc("sutra_company_github_dispatch_status", {})
             dispatches = dispatch_status.get("dispatches")
@@ -395,6 +535,16 @@ class FounderCommand:
     project_legal_hold: bool | None = None
     authorization_id: str | None = None
     authorization_reason: str = ""
+    crm_customer_id: str | None = None
+    crm_consent: bool | None = None
+    crm_consent_evidence: str = ""
+    zendesk_support_project_id: str | None = None
+    zendesk_support_routing_enabled: bool | None = None
+    zendesk_support_routing_reason: str = ""
+    zendesk_reply_cost_ceiling: float | None = None
+    zendesk_reply_cost_reason: str = ""
+    initiative_followup: str = ""
+    initiative_assessment_scope: str = ""
 
 
 @dataclass(frozen=True)
@@ -409,6 +559,14 @@ MONEY_PATTERNS = (
 )
 PROJECT_BUDGET_SET_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:increase|change|set)\s+(?:the\s+)?(?:all-in\s+)?(?:budget\s+(?:for\s+)?(?:initiative|project)|(?:initiative|project)\s+budget)\s+([0-9a-f-]{36})\s+to\s+(?:€|EUR\s*)?([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:€|EUR)?\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+INITIATIVE_FOLLOWUP_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:continue|add)(?:\s+work)?\s+(?:on\s+)?(?:initiative|project)\s+([0-9a-f-]{36})\s*:\s*(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+INITIATIVE_CFO_ASSESS_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:cfo[, :]\s*)?assess\s+(?:the\s+)?(?:all-in\s+)?budget\s+for\s+(?:initiative|project)\s+([0-9a-f-]{36})\s*:\s*(.+?)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 APPROVAL_RE = re.compile(r"^\s*(approve|reject)\s+([0-9a-f-]{36})(?:\s+(.*))?\s*$", re.IGNORECASE)
@@ -436,6 +594,26 @@ EMAIL_COST_CEILING_GET_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\s*[?.!]*\s*$",
     re.IGNORECASE,
 )
+ZENDESK_REPLY_COST_SET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?zendesk\s+reply\s+cost\s+ceiling\s+to\s+(?:€|EUR\s*)?([0-9]+(?:[.,][0-9]{1,6})?)\s*(?:€|EUR)?\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_REPLY_COST_GET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?zendesk\s+reply\s+cost\s+ceiling\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_SUPPORT_ROUTING_SET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?route\s+zendesk\s+tickets?\s+to\s+(?:initiative|project)\s+([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_SUPPORT_ROUTING_STOP_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:stop|disable)\s+zendesk\s+ticket\s+routing\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+ZENDESK_SUPPORT_ROUTING_GET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?zendesk\s+ticket\s+routing\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
 INITIATIVE_INTENT_RE = re.compile(
     r"\b(investigate|research|propose|product|initiative|launch|build|develop|create|market|sell|offer|provide|improve|start|deliver|support)\b",
     re.IGNORECASE,
@@ -458,6 +636,10 @@ LEGAL_DISPOSITION_RE = re.compile(
 )
 PROJECT_LEGAL_HOLD_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(set|clear)\s+(?:the\s+)?legal\s+hold\s+(?:for\s+)?([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+CUSTOMER_CRM_CONSENT_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(record|withdraw)\s+(?:customer\s+)?crm\s+consent\s+for\s+([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 CODE_AUTHORITY_STATUS_RE = re.compile(
@@ -500,6 +682,28 @@ def parse_founder_command(text: str) -> FounderCommand:
             raise ValueError("Initiative budget change reason must contain 8 to 500 characters")
         return FounderCommand("set_project_budget", text.strip(), project_id=project_id,
                               new_budget=amount, budget_reason=reason)
+    match = INITIATIVE_CFO_ASSESS_RE.fullmatch(text)
+    if match:
+        try:
+            project_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Initiative budget assessment needs a valid project ID") from exc
+        scope = match.group(2).strip()
+        if len(scope) < 20 or len(scope) > 2000 or any(ord(char) < 32 for char in scope):
+            raise ValueError("Initiative budget assessment scope must contain 20 to 2000 printable characters")
+        return FounderCommand("assess_initiative_budget", text.strip(), project_id=project_id,
+                              initiative_assessment_scope=scope)
+    match = INITIATIVE_FOLLOWUP_RE.fullmatch(text)
+    if match:
+        try:
+            project_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Initiative follow-up needs a valid project ID") from exc
+        request = match.group(2).strip()
+        if len(request) < 12 or len(request) > 2000 or any(ord(char) < 32 for char in request):
+            raise ValueError("Initiative follow-up must contain 12 to 2000 printable characters")
+        return FounderCommand("initiative_followup", text.strip(), project_id=project_id,
+                              initiative_followup=request)
     match = PM_RETRY_RE.fullmatch(text)
     if match:
         try:
@@ -578,6 +782,43 @@ def parse_founder_command(text: str) -> FounderCommand:
         return FounderCommand("get_email_cost_ceiling", text.strip())
     if re.match(r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\b", text, re.IGNORECASE):
         raise ValueError("Customer email cost ceiling must be EUR 0.01 to 100.00 in cents, followed by a reason")
+    match = ZENDESK_REPLY_COST_SET_RE.fullmatch(text)
+    if match:
+        amount = float(match.group(1).replace(",", "."))
+        reason = match.group(2).strip()
+        if not math.isfinite(amount) or not 0.01 <= amount <= 100 or round(amount, 2) != amount:
+            raise ValueError("Zendesk reply cost ceiling must be EUR 0.01 to 100.00 in cents")
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Zendesk reply cost ceiling reason must contain 8 to 500 characters")
+        return FounderCommand("set_zendesk_reply_cost_ceiling", text.strip(),
+                              zendesk_reply_cost_ceiling=amount, zendesk_reply_cost_reason=reason)
+    if ZENDESK_REPLY_COST_GET_RE.fullmatch(text):
+        return FounderCommand("get_zendesk_reply_cost_ceiling", text.strip())
+    if re.match(r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?zendesk\s+reply\s+cost\s+ceiling\b", text, re.IGNORECASE):
+        raise ValueError("Zendesk reply cost ceiling must be EUR 0.01 to 100.00 in cents, followed by a reason")
+    match = ZENDESK_SUPPORT_ROUTING_SET_RE.fullmatch(text)
+    if match:
+        try:
+            project_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Zendesk routing needs a valid initiative ID") from exc
+        reason = match.group(2).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Zendesk routing reason must contain 8 to 500 characters")
+        return FounderCommand("set_zendesk_support_routing", text.strip(),
+            zendesk_support_project_id=project_id,zendesk_support_routing_enabled=True,
+            zendesk_support_routing_reason=reason)
+    match = ZENDESK_SUPPORT_ROUTING_STOP_RE.fullmatch(text)
+    if match:
+        reason = match.group(1).strip()
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Zendesk routing reason must contain 8 to 500 characters")
+        return FounderCommand("set_zendesk_support_routing", text.strip(),
+            zendesk_support_routing_enabled=False,zendesk_support_routing_reason=reason)
+    if ZENDESK_SUPPORT_ROUTING_GET_RE.fullmatch(text):
+        return FounderCommand("get_zendesk_support_routing", text.strip())
+    if re.match(r"^\s*(?:ceo[, :]\s*)?route\s+zendesk\s+tickets?\b", text, re.IGNORECASE):
+        raise ValueError("Route Zendesk tickets with a valid initiative UUID and an 8 to 500 character reason")
     if CODE_AUTHORITY_STATUS_RE.fullmatch(text):
         return FounderCommand("code_authority_status", text.strip())
     match = CODE_AUTHORITY_REVOKE_RE.fullmatch(text)
@@ -617,6 +858,19 @@ def parse_founder_command(text: str) -> FounderCommand:
             raise ValueError("Review task reason must contain 8 to 500 characters")
         return FounderCommand("defer_review_chain", text.strip(), task_id=task_id, task_reason=reason)
     lowered = text.lower()
+    match = CUSTOMER_CRM_CONSENT_RE.fullmatch(text)
+    if match:
+        try:
+            customer_id = str(uuid.UUID(match.group(2)))
+        except ValueError as exc:
+            raise ValueError("CRM consent command needs a valid customer ID") from exc
+        evidence = match.group(3).strip()
+        if len(evidence) < 8 or len(evidence) > 500:
+            raise ValueError("CRM consent evidence or withdrawal reason must contain 8 to 500 characters")
+        return FounderCommand("set_customer_crm_consent", text.strip(),
+                              crm_customer_id=customer_id,
+                              crm_consent=match.group(1).lower() == "record",
+                              crm_consent_evidence=evidence)
     match = PROJECT_LEGAL_HOLD_RE.fullmatch(text)
     if match:
         try:
@@ -729,6 +983,25 @@ class FounderCommandRouter:
             lines.append("Record a disposition with: record legal case <case-id> as continue within budget, stop, or seek legal counsel because <reason>.")
             lines.append("Recording a disposition does not resume work or authorize contracts, legal commitments, or spending above the existing budget.")
             return FounderResponse("\n".join(lines))
+        if command.kind == "set_customer_crm_consent":
+            try:
+                result = self.store.rpc("sutra_founder_set_customer_crm_consent", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_customer_id": command.crm_customer_id,
+                    "p_consent": command.crm_consent,
+                    "p_evidence_source": command.crm_consent_evidence,
+                })
+            except IntegrationError:
+                action = "recorded" if command.crm_consent else "withdrawn"
+                return FounderResponse(f"CRM sharing consent was not {action}; only the configured founder can change a customer's audited consent record.")
+            if command.crm_consent:
+                return FounderResponse(
+                    f"CRM sharing consent recorded for customer {result.get('customer_id')}; the evidence source and founder action are audit logged. This does not start a CRM sync."
+                )
+            cancelled = result.get("queued_actions_cancelled", 0)
+            return FounderResponse(
+                f"CRM sharing consent withdrawn for customer {result.get('customer_id')}; {cancelled} queued sync action(s) were cancelled and their reservations released. Any in-flight provider call is not retried."
+            )
         if command.kind == "set_project_legal_hold":
             try:
                 result = self.store.rpc("sutra_founder_set_project_legal_hold", {
@@ -913,6 +1186,42 @@ class FounderCommandRouter:
                 f"€{result.get('old_budget', 0):,.2f} → €{result.get('new_budget', 0):,.2f}. "
                 f"€{result.get('committed', 0):,.2f} is committed; €{result.get('remaining_budget', 0):,.2f} remains."
             )
+        if command.kind == "assess_initiative_budget":
+            try:
+                result = self.store.rpc("sutra_founder_queue_initiative_cfo_assessment", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_project_id": command.project_id,
+                    "p_scope": command.initiative_assessment_scope,
+                })
+            except IntegrationError:
+                return FounderResponse("The CFO assessment was not queued. The database requires the configured founder, an existing EUR-budgeted initiative that has no prior review sequence, and an unassessed budget.")
+            return FounderResponse(
+                f"CFO all-in budget assessment queued for initiative {result.get('project_id')} "
+                f"(run {result.get('agent_run_id')}) against the unchanged €{result.get('budget_cap_eur', 0):,.2f} ceiling. "
+                "Sutra will use its normal reserved model-spend path; this does not raise the cap, retry any task, or authorize work beyond it."
+            )
+        if command.kind == "initiative_followup":
+            try:
+                result = self.store.rpc("sutra_founder_add_initiative_followup", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_project_id": command.project_id,
+                    "p_request": command.initiative_followup,
+                })
+            except IntegrationError:
+                return FounderResponse(
+                    "I couldn't add that follow-up. The database requires an approved initiative with a positive, "
+                    "CFO-assessed budget and no legal hold; the existing budget must remain unchanged."
+                )
+            budget = result.get("requested_budget")
+            remaining = result.get("remaining_budget")
+            currency = result.get("currency") if result.get("currency") == "EUR" else "EUR"
+            budget_text = f"€{budget:,.2f}" if isinstance(budget, (int, float)) and not isinstance(budget, bool) else "unchanged"
+            remaining_text = f"€{remaining:,.2f}" if isinstance(remaining, (int, float)) and not isinstance(remaining, bool) else "unknown"
+            return FounderResponse(
+                f"Follow-up task {result.get('task_id')} added to initiative {result.get('project_id')} and assigned to the Product Manager. "
+                f"The existing all-in budget remains {budget_text} {currency}; {remaining_text} remains uncommitted. "
+                "No spend was reserved. Any execution must pass the existing budget and legal checks."
+            )
         if command.kind == "proposal":
             try:
                 result = self.store.rpc("sutra_submit_proposal", {
@@ -935,7 +1244,8 @@ class FounderCommandRouter:
             return FounderResponse(
                 "Before starting an initiative, give Sutra one all-in EUR maximum covering model use, development, tools, hosting, marketing, and operations. "
                 "Example: Investigate an AI QA product. Maximum all-in budget €500. Prepare a proposal. "
-                "Sutra will assess whether the cap is realistic; any increase requires your decision."
+                "Sutra will assess whether the cap is realistic; any increase requires your decision. For work on an existing initiative, use: "
+                "Continue initiative <project-id>: <follow-up work>. That preserves its existing budget."
             )
         if command.kind == "approval":
             try:
@@ -1107,6 +1417,50 @@ class FounderCommandRouter:
             return FounderResponse(
                 f"Customer email maximum reserved cost per message {'changed' if result.get('changed') else 'already set'} to EUR {result.get('max_message_cost_eur')}. The change is audit logged; no email was sent and no queue was started."
             )
+        if command.kind == "get_zendesk_reply_cost_ceiling":
+            try:
+                result = self.store.rpc("sutra_founder_get_zendesk_reply_cost_ceiling", {
+                    "p_founder_telegram_user_id": user_id,
+                })
+            except IntegrationError:
+                return FounderResponse("I couldn't read the Zendesk reply cost ceiling. No setting changed; check the database connection and try again.")
+            if result.get("configured") is not True:
+                return FounderResponse("Zendesk reply delivery is blocked until you set its audited per-reply cost ceiling. The delivery worker is separately disabled by default.")
+            return FounderResponse(f"Zendesk reply maximum reserved cost is EUR {result.get('max_reply_cost_eur')}. This database ceiling does not enable the worker; live delivery also requires the private worker configuration.")
+        if command.kind == "set_zendesk_reply_cost_ceiling":
+            try:
+                result = self.store.rpc("sutra_founder_set_zendesk_reply_cost_ceiling", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_max_reply_cost_eur": command.zendesk_reply_cost_ceiling,
+                    "p_reason": command.zendesk_reply_cost_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("Zendesk reply cost ceiling unchanged. Only the configured founder can set EUR 0.01–100.00 with an 8–500 character reason; active replies or underfunded queued reservations can prevent the change.")
+            return FounderResponse(
+                f"Zendesk reply maximum reserved cost per message {'changed' if result.get('changed') else 'already set'} to EUR {result.get('max_reply_cost_eur')}. The change is audit logged; it did not queue a reply or enable delivery."
+            )
+        if command.kind == "get_zendesk_support_routing":
+            try:
+                result = self.store.rpc("sutra_founder_get_zendesk_support_routing", {
+                    "p_founder_telegram_user_id": user_id,
+                })
+            except IntegrationError:
+                return FounderResponse("I couldn't read Zendesk support routing. No setting changed; check the database connection and try again.")
+            if result.get("configured") is not True:
+                return FounderResponse("Zendesk ticket routing is disabled. Enable it with: CEO, route Zendesk tickets to initiative <project-id> because <reason>. The initiative must already be founder-approved, active, assessed within its all-in budget, and legally clear.")
+            return FounderResponse(f"New and reopened Zendesk tickets route to initiative {result.get('project_id')}. The change is audited. Disabling routing affects future webhook events; existing assigned tasks remain governed by their own initiative and spend checks.")
+        if command.kind == "set_zendesk_support_routing":
+            try:
+                result = self.store.rpc("sutra_founder_set_zendesk_support_routing", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_project_id": command.zendesk_support_project_id,
+                    "p_reason": command.zendesk_support_routing_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("Zendesk routing was not changed. The database requires a founder-approved initiative with a sufficient within-cap assessment, remaining funds, and no legal hold or open legal escalation.")
+            if result.get("configured") is not True:
+                return FounderResponse("Zendesk ticket routing is disabled and audit logged. Existing assigned tasks remain subject to their current spend and legal controls.")
+            return FounderResponse(f"New and reopened Zendesk tickets now route to initiative {result.get('project_id')}. The founder setting is audit logged; model work still needs its normal database reservation and customer messages are not sent.")
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
@@ -1126,10 +1480,17 @@ class FounderCommandRouter:
             "Use: CEO, set Codex no-request retry limit to <1-3> total attempts. This only changes the audited founder setting; it does not retry a task.\n"
             "Use: CEO, show customer email cost ceiling.\n"
             "Use: CEO, set customer email cost ceiling to €0.05 because <reason>. This is a founder-only, audit-logged database control; it sends no email.\n"
+            "Use: CEO, show Zendesk reply cost ceiling.\n"
+            "Use: CEO, set Zendesk reply cost ceiling to €0.05 because <reason>. This is a founder-only, audit-logged database control; it queues no reply and does not enable live delivery.\n"
+            "Use: CEO, show Zendesk ticket routing.\n"
+            "Use: CEO, route Zendesk tickets to initiative <project-id> because <reason>. The initiative must already be founder-approved, assessed within its all-in budget, and legally clear.\n"
+            "Use: CEO, stop Zendesk ticket routing because <reason>. This affects future webhook events; already assigned tasks remain subject to their own controls.\n"
             "Use: CEO, run one bounded Kimi usage probe. This authorizes one database-reserved request up to €0.10; it does not enable Kimi for role work.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
+            "Use: Continue initiative <project-id>: <follow-up work>. This preserves its existing budget.\n"
             "Use: Increase initiative budget <project-id> to €<amount> because <reason>. This is founder-only and audit logged.\n"
+            "Use: CFO, assess budget for initiative <project-id>: <all-in work scope>. This queues one audited CFO review against the existing budget without changing it.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
         )
 
@@ -1496,6 +1857,10 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     campaign_rows = snapshot.get("campaigns", []) if include_campaigns else []
     if include_campaigns:
         lines.extend(["", "Marketing pipeline"])
+        performance_by_id = {
+            item["campaign_id"]: item for item in snapshot.get("campaign_performance", [])
+            if isinstance(item, dict) and isinstance(item.get("campaign_id"), str)
+        }
         campaign_counts: dict[str, int] = {}
         for campaign in campaign_rows:
             campaign_status = str(campaign.get("status") or "unknown")
@@ -1509,6 +1874,15 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             budget = (f"; draft ceiling {str(campaign.get('currency') or 'EUR')[:3]} {amount}"
                       if isinstance(amount, (int, float)) and amount > 0 else "")
             lines.append(f"• [{campaign.get('status', 'unknown')}] {name} — {channel}{budget}")
+            performance = performance_by_id.get(campaign.get("id"))
+            if performance:
+                delivery = (f"sent {performance['sent_count']}, queued {performance['queued_count']}, "
+                            f"sending {performance['sending_count']}, unknown {performance['unknown_count']}, "
+                            f"failed {performance['failed_count']}")
+                costs = (f"reserved €{performance['reserved_cost_eur']:.2f}, "
+                         f"unknown €{performance['unknown_cost_eur']:.2f}, "
+                         f"actual €{performance['actual_cost_eur']:.2f}")
+                lines.append(f"  Delivery: {delivery}; email spend: {costs}.")
         if not campaign_rows:
             lines.append("• No campaign records are currently recorded.")
         if len(campaign_rows) > 5:
@@ -1550,6 +1924,36 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             for action in email_actions[:6]:
                 purpose = str(action.get("purpose") or "customer")[:24]
                 lines.append(f"• [{action.get('status', 'unknown')}] {purpose} email action — ID {action.get('id', 'unknown')}")
+    include_support_operations = is_company_wide or agent_slug in {"coo", "sales"}
+    if include_support_operations:
+        lines.extend(["", "Customer support queue"])
+        support_status = snapshot.get("support_case_status")
+        if not isinstance(support_status, dict):
+            lines.append("• Support queue data is unavailable; no case counts inferred.")
+        else:
+            total = support_status["total"]
+            open_count = support_status["open"]
+            resolved_count = total - open_count
+            if not total:
+                lines.append("• No support tickets recorded.")
+            else:
+                lines.append(f"• {open_count} open; {resolved_count} solved or closed; {total} total.")
+                statuses = support_status["by_status"]
+                if statuses:
+                    lines.append("• By status: " + ", ".join(
+                        f"{status}: {count}" for status, count in sorted(statuses.items())
+                    ))
+                priorities = support_status["open_by_priority"]
+                if priorities:
+                    lines.append("• Open priority: " + ", ".join(
+                        f"{priority}: {count}" for priority, count in sorted(priorities.items())
+                    ))
+                age = support_status["open_by_age"]
+                lines.append(
+                    "• Open case age (informational, not an SLA): "
+                    f"under 24h: {age['under_24h']}; 24–72h: {age['24_to_72h']}; "
+                    f"over 72h: {age['over_72h']}; oldest: {support_status['oldest_open_hours']}h."
+                )
     lines.extend(["", "Approvals requiring attention"])
     if not scoped_approvals:
         lines.append("• None pending.")

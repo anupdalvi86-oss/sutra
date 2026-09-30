@@ -121,8 +121,12 @@ def task_artifact_output(role="product_manager"):
         "architect": {"design": "A clear component and interface design.", "components": ["API service"], "security_risks": ["Protect service credentials"]},
         "coo": {"operational_dependencies": ["On-call owner"], "readiness_checklist": ["Recovery procedure"], "incident_plan": "Route incidents to the service owner."},
         "devops": {"deployment_steps": ["Deploy candidate"], "health_checks": ["Verify health endpoint"], "rollback_steps": ["Restore previous image"]},
-        "cmo": {"audience": "Engineering leaders evaluating quality tooling.", "positioning": "Reduce repetitive quality checks.", "draft_copy": "A draft for founder review only.", "claims": ["Supports this workflow"], "success_metrics": ["Qualified interest"]},
-        "sales": {"ideal_customer_profile": "Software teams with repeatable release processes.", "lead_criteria": ["Relevant team size"], "qualification_questions": ["How do you verify releases?"], "first_contact_draft": "Internal draft; do not send without approval."},
+        "cmo": {"campaign_name": "Engineering quality workflow discovery", "channel": "Owned email and product site",
+                "audience": "Engineering leaders evaluating quality tooling.", "positioning": "Reduce repetitive quality checks.",
+                "draft_copy": "A draft for internal planning only.", "claims": ["Supports this workflow"],
+                "success_metrics": ["Qualified interest"], "budget_amount_eur": 0,
+                "budget_rationale": "No external campaign will run during internal planning."},
+        "sales": {"ideal_customer_profile": "Software teams with repeatable release processes.", "lead_criteria": ["Relevant team size"], "qualification_questions": ["How do you verify releases?"], "first_contact_draft": "A concise introduction for an assigned, consented customer."},
         "governance_audit": {"controls_checked": ["Approval gate"], "findings": ["No open finding"], "recommendation": "Retain the existing founder approval gate."},
     }
     result = {
@@ -137,6 +141,8 @@ def task_artifact_output(role="product_manager"):
     }
     if role in {"cpo", "cmo"}:
         result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the campaign claim."}]
+    if role in {"cmo", "sales"}:
+        result["customer_actions"] = []
     if role == "product_manager":
         result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the product planning assumption."}]
     return result
@@ -162,6 +168,18 @@ class AgentArtifactTests(unittest.TestCase):
         with self.assertRaises(AgentOutputError):
             validate_agent_artifact("cmo", campaign, task_artifact_run("cmo"))
 
+    def test_campaign_drafts_require_bounded_channel_and_eur_budget_estimate(self):
+        run = task_artifact_run("cmo")
+        valid = task_artifact_output("cmo")
+        result = validate_agent_artifact("cmo", valid, run)
+        self.assertEqual(result["artifact"]["budget_amount_eur"], 0)
+        for invalid_budget in (-0.01, 0.001, float("inf"), True):
+            with self.subTest(budget=invalid_budget):
+                invalid = task_artifact_output("cmo")
+                invalid["artifact"]["budget_amount_eur"] = invalid_budget
+                with self.assertRaisesRegex(AgentOutputError, "Campaign budget"):
+                    validate_agent_artifact("cmo", invalid, run)
+
     def test_cpo_market_research_requires_cited_evidence(self):
         result = task_artifact_output("cpo")
         self.assertEqual(
@@ -178,7 +196,7 @@ class AgentArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(AgentOutputError, "at least one cited HTTPS source"):
             validate_agent_artifact("product_manager", result, task_artifact_run("product_manager"))
 
-    def test_task_artifact_prompt_has_no_external_action_authority(self):
+    def test_task_artifact_prompt_routes_outreach_through_database_authorized_actions(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("sales"))}}],
                     "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
         fake_response = Mock()
@@ -189,13 +207,101 @@ class AgentArtifactTests(unittest.TestCase):
             client = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-4o-mini")
             client.review(task_artifact_run("sales"), max_output_tokens=500)
         prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
-        self.assertIn("Do not invent actual leads, contact anyone, or send messages", prompt)
+        self.assertIn("customer_actions", prompt)
+        self.assertIn("does not need routine founder approval", prompt)
+        self.assertIn("The database must confirm current consent", prompt)
+        self.assertIn("You cannot call a provider directly", prompt)
         self.assertIn("task_acceptance", request.call_args.args[0].data.decode())
         self.assertIn('"ideal_customer_profile":"..."', prompt)
         self.assertIn('"lead_criteria":["..."]', prompt)
         self.assertIn('"qualification_questions":["..."]', prompt)
         self.assertIn('"first_contact_draft":"..."', prompt)
-        self.assertIn("do not identify or invent a real lead", prompt)
+        self.assertIn("customer UUID named in this task", prompt)
+
+    def test_sales_customer_actions_require_an_explicit_task_customer_and_exact_fields(self):
+        customer_id = "7ec8ac47-7265-4695-8cc4-f1c8b498e8c4"
+        run = task_artifact_run("sales")
+        run["task_artifact"]["description"] += f" Assigned customer ID: {customer_id}."
+        output = task_artifact_output("sales")
+        output["customer_actions"] = [{
+            "customer_id": customer_id, "purpose": "sales", "subject": "Product overview",
+            "body_text": "Would a short overview of this workflow be useful?",
+        }]
+        self.assertEqual(validate_agent_artifact("sales", output, run)["customer_actions"][0]["customer_id"], customer_id)
+        output["customer_actions"][0]["customer_id"] = "8ec8ac47-7265-4695-8cc4-f1c8b498e8c4"
+        with self.assertRaisesRegex(AgentOutputError, "named task customer"):
+            validate_agent_artifact("sales", output, run)
+        output["customer_actions"][0]["customer_id"] = customer_id
+        output["customer_actions"][0]["estimated_cost_eur"] = 0.01
+        with self.assertRaisesRegex(AgentOutputError, "only customer_id"):
+            validate_agent_artifact("sales", output, run)
+
+    def test_marketing_customer_actions_are_role_scoped_and_bounded(self):
+        customer_id = "7ec8ac47-7265-4695-8cc4-f1c8b498e8c4"
+        run = task_artifact_run("cmo")
+        run["task_artifact"]["description"] += f" Assigned customer ID: {customer_id}."
+        output = task_artifact_output("cmo")
+        output["customer_actions"] = [{
+            "customer_id": customer_id, "purpose": "sales", "subject": "Product overview",
+            "body_text": "Would a short overview be useful?",
+        }]
+        with self.assertRaisesRegex(AgentOutputError, "named task customer"):
+            validate_agent_artifact("cmo", output, run)
+        output["customer_actions"] = [{
+            "customer_id": customer_id, "purpose": "marketing", "subject": "Product overview",
+            "body_text": "Would a short overview be useful?",
+        }] * 6
+        with self.assertRaisesRegex(AgentOutputError, "at most five"):
+            validate_agent_artifact("cmo", output, run)
+
+    def test_cmo_prompt_names_campaign_ceiling_and_available_marketing_action(self):
+        response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("cmo"))}}],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+        fake_response = Mock()
+        fake_response.__enter__ = Mock(return_value=fake_response)
+        fake_response.__exit__ = Mock(return_value=False)
+        fake_response.read.return_value = json.dumps(response).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=fake_response) as request:
+            client = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-4o-mini")
+            client.review(task_artifact_run("cmo"), max_output_tokens=500)
+        prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
+        self.assertIn("hard limit for its linked marketing email actions", prompt)
+        self.assertIn("database will enforce consent and budgets", prompt)
+        self.assertIn("customer_actions", prompt)
+        self.assertIn("no ad-platform publishing or ad-buy integration", prompt)
+
+    def test_sales_legal_question_is_a_structured_founder_escalation(self):
+        run = task_artifact_run("sales")
+        output = task_artifact_output("sales")
+        output["legal_escalation"] = "A prospect requested a binding service-level guarantee."
+        validated = validate_agent_artifact("sales", output, run)
+        self.assertEqual(validated["legal_escalation"], output["legal_escalation"])
+        output["legal_escalation"] = "short"
+        with self.assertRaisesRegex(AgentOutputError, "founder decision needed"):
+            validate_agent_artifact("sales", output, run)
+        output = task_artifact_output("product_manager")
+        output["legal_escalation"] = "A contract requires legal review."
+        with self.assertRaisesRegex(AgentOutputError, "Only Sales or Marketing"):
+            validate_agent_artifact("product_manager", output, task_artifact_run("product_manager"))
+
+    def test_zendesk_reply_draft_requires_ephemeral_authorized_context_and_matching_id(self):
+        run = task_artifact_run("sales")
+        run["task_artifact"]["description"] = "Zendesk ticket ID: 123"
+        output = task_artifact_output("sales")
+        output["support_reply_draft"] = {"ticket_id": "123", "category": "access", "urgency": "high",
+                                          "reply_text": "Please try the password reset flow; I can help further."}
+        with self.assertRaisesRegex(AgentOutputError, "authorized ephemeral ticket context"):
+            validate_agent_artifact("sales", output, run)
+        run["task_artifact"]["zendesk_support_context"] = {"ticket_id": "123", "status": "open"}
+        validated = validate_agent_artifact("sales", output, run)
+        self.assertEqual(validated["support_reply_draft"]["ticket_id"], "123")
+        output["support_reply_draft"]["ticket_id"] = "456"
+        with self.assertRaisesRegex(AgentOutputError, "authorized ticket"):
+            validate_agent_artifact("sales", output, run)
+        output["support_reply_draft"]["ticket_id"] = "123"
+        output["legal_escalation"] = "The request asks for a binding service guarantee."
+        with self.assertRaisesRegex(AgentOutputError, "legal escalation must not include"):
+            validate_agent_artifact("sales", output, run)
 
     def test_architect_task_prompt_shows_exact_technical_design_contract(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("architect"))}}],
@@ -556,6 +662,38 @@ class AgentArtifactTests(unittest.TestCase):
             "status": "unknown" if _args[-1] is None else "reconciled"}
         return store
 
+    def test_assigned_ticket_task_requires_context_provider_before_any_model_request(self):
+        run = task_artifact_run("sales")
+        run["task_artifact"]["description"] = "Zendesk ticket ID: 123"
+        store = self.approved_store("sales")
+        store.claim_agent_run.return_value = run
+        hermes = Mock()
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna", worker_id="sutra-worker-12345678")
+        self.assertEqual(worker.run_once(), "failed_support_context_unavailable")
+        store.reserve_agent_run_spend.assert_not_called()
+        hermes.review.assert_not_called()
+        self.assertEqual(store.complete_agent_run.call_args.args[4], "zendesk_support_context_unavailable")
+
+    def test_assigned_ticket_task_passes_only_authorized_ephemeral_context_to_hermes(self):
+        run = task_artifact_run("sales")
+        run["task_artifact"]["description"] = "Zendesk ticket ID: 123"
+        store = self.approved_store("sales")
+        store.claim_agent_run.return_value = run
+        store.reconcile_agent_run_spend.return_value = {"status": "reconciled"}
+        store.submit_task_agent_artifact.return_value = {"status": "succeeded"}
+        context = {"ticket_id": "123", "status": "open", "subject": "Login failure",
+                   "description": "I cannot access my account.", "recent_public_comments": []}
+        provider = Mock(return_value=context)
+        hermes = Mock()
+        hermes.review.return_value = (task_artifact_output("sales"),
+                                      {"prompt_tokens": 20, "completion_tokens": 30})
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna", worker_id="sutra-worker-12345678",
+                             support_context_provider=provider)
+        self.assertEqual(worker.run_once(), "task_artifact_succeeded")
+        provider.assert_called_once_with(run)
+        self.assertEqual(hermes.review.call_args.kwargs["support_context"], context)
+        store.submit_task_agent_artifact.assert_called_once()
+
     def test_kimi_usage_probe_uses_one_exact_route_and_small_output_cap(self):
         run = claimed_run("ceo")
         run["attempt"] = 1
@@ -608,6 +746,35 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertEqual(store.complete_agent_run.call_args.args[2], "failed")
         self.assertNotEqual(store.complete_agent_run.call_args.args[2], "retry")
         self.assertEqual(store.complete_agent_run.call_args.args[3]["usage_envelope_shape"], "usage_missing")
+
+    def test_kimi_probe_keeps_only_safe_settlement_failure_categories(self):
+        run = claimed_run("ceo")
+        run["attempt"] = 1
+        run["input"]["provider_usage_probe"] = "kimi"
+        store = self.approved_store()
+        store.claim_agent_run.return_value = run
+        store.reconcile_agent_run_spend.side_effect = [
+            IntegrationError("private database response", code="supabase_db_validation"),
+            {"status": "unknown"},
+        ]
+        hermes = Mock()
+        hermes.review.return_value = (artifact("ceo"), {"prompt_tokens": 20, "completion_tokens": 10})
+        hermes.last_usage_diagnostics = {
+            "usage_envelope_shape": "usage_object:prompt_tokens=int,completion_tokens=int,total_tokens=int",
+            "response_context_shape": "keys=choices,usage,finish=stop",
+        }
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna",
+                             worker_id="sutra-worker-12345678")
+
+        self.assertEqual(worker.run_once(), "failed_unknown_spend")
+        output = store.complete_agent_run.call_args.args[3]
+        self.assertEqual(output["spend_status"], "unknown")
+        self.assertEqual(output["settlement_error_code"], "supabase_db_validation")
+        self.assertNotIn("private database response", json.dumps(output))
+        self.assertNotIn("20", json.dumps(output))
+        self.assertNotIn("10", json.dumps(output))
+        self.assertEqual(store.reconcile_agent_run_spend.call_count, 2)
+        self.assertIsNone(store.reconcile_agent_run_spend.call_args_list[1].args[-1])
 
     def test_unverified_malformed_hermes_artifact_persists_only_safe_response_shape(self):
         store = self.approved_store("ceo")

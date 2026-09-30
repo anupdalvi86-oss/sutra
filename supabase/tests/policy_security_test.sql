@@ -824,11 +824,15 @@ select is((pg_temp.run_task_artifact('devops',jsonb_build_object(
   'rollback_steps',jsonb_build_array('Restore the last known healthy Railway image')))->>'status'),
   'succeeded','DevOps persists a spend-gated release and rollback plan');
 select is((pg_temp.run_task_artifact('cmo',jsonb_build_object(
+  'campaign_name','Quality workflow awareness draft',
+  'channel','Owned email',
   'audience','Engineering leaders evaluating software quality workflows.',
   'positioning','Reduce repeated manual verification through a controlled workflow.',
   'draft_copy','Internal campaign draft for founder review only.',
   'claims',jsonb_build_array('Supports founder-approved workflow research'),
-  'success_metrics',jsonb_build_array('Qualified interest from target teams')))->>'status'),
+  'success_metrics',jsonb_build_array('Qualified interest from target teams'),
+  'budget_amount_eur',0,
+  'budget_rationale','No external publishing or campaign spending in this fixture.'))->>'status'),
   'succeeded','CMO persists a cited internal campaign draft without sending or publishing');
 select is((pg_temp.run_task_artifact('sales',jsonb_build_object(
   'ideal_customer_profile','Software teams with repeatable release and quality processes.',
