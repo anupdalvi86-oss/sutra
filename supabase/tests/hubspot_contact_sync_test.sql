@@ -106,7 +106,8 @@ create temporary table crm_claim on commit drop as
   select public.sutra_claim_customer_crm_sync_action('sutra-worker-hubspot1234') claim;
 select is((select claim->>'status' from crm_claim),'claimed','worker claims a reserved CRM action');
 select ok((select claim->'action' ?& array['email','name','company']
-  and jsonb_object_length(claim->'action')=3 from crm_claim),
+  and array(select jsonb_object_keys(claim->'action') order by 1)=array['company','email','name']::text[]
+  from crm_claim),
   'worker receives only allowlisted contact fields, without notes or free text');
 select ok(public.sutra_validate_customer_crm_sync_claim('sutra-worker-hubspot1234',
   ((select claim->>'action_id' from crm_claim))::uuid,((select claim->>'claim_token' from crm_claim))::uuid),
