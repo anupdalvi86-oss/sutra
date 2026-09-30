@@ -14,10 +14,10 @@ Updated: 2026-09-30
 
 ## Production and PR state
 
-- **Supabase:** Project `smqsrigsugjuvuombetq` is `ACTIVE_HEALTHY` in `eu-central-1` on PostgreSQL 17.6. Migration `20260930004959_customer_email_cost_ceiling` is applied after the private delivery-lease/result migration. The per-message ceiling is unset, which blocks customer email queueing and delivery.
-- **Railway:** The PR #219 API deployment is successful with `sutra-api` Online; Hermes `sutra` remained Online. Customer-email sending remains disabled; no provider credentials or sender are configured. No API public URL is configured.
-- **GitHub:** PRs [#209](https://github.com/anupdalvi86-oss/sutra/pull/209) and [#210](https://github.com/anupdalvi86-oss/sutra/pull/210) were already merged and were not recreated. PRs [#212](https://github.com/anupdalvi86-oss/sutra/pull/212) (same-head QA/Security release gate), [#213](https://github.com/anupdalvi86-oss/sutra/pull/213) (budgeted customer email queue and legal holds), [#214](https://github.com/anupdalvi86-oss/sutra/pull/214) (partial company-status reporting), [#215](https://github.com/anupdalvi86-oss/sutra/pull/215) (array-valued code-release status), [#217](https://github.com/anupdalvi86-oss/sutra/pull/217) (opt-in customer email delivery worker), [#218](https://github.com/anupdalvi86-oss/sutra/pull/218) (production migration version alignment), and [#219](https://github.com/anupdalvi86-oss/sutra/pull/219) (founder-governed email cost ceiling) are merged.
-- **Telegram:** The founder-only `CEO, show customer email cost ceiling.` command reaches production and reports that no ceiling is configured. That is the expected fail-closed state; no email was sent. Earlier CEO/CFO board-status commands also returned complete reports.
+- **Supabase:** Project `smqsrigsugjuvuombetq` is `ACTIVE_HEALTHY` in `eu-central-1` on PostgreSQL 17.6. Migration `20260930004959_customer_email_cost_ceiling` is applied; the ceiling remains unset and email queueing/delivery fail closed. The app connector requested reauthentication for a new live read in this session.
+- **Railway:** The PR #219 runtime deployment was verified successful with `sutra-api` Online and Hermes `sutra` Online. PR #220 aligned the migration filename and refreshed status documentation; it did not trigger a runtime deployment. This release has not yet been deployed.
+- **GitHub:** PRs [#209](https://github.com/anupdalvi86-oss/sutra/pull/209) and [#210](https://github.com/anupdalvi86-oss/sutra/pull/210) were already merged and were not recreated. PRs [#212](https://github.com/anupdalvi86-oss/sutra/pull/212) through [#220](https://github.com/anupdalvi86-oss/sutra/pull/220) are merged, covering same-head QA/Security release gates, all-in initiative budgeting, email delivery foundation and cost ceiling, legal holds, and operating-status improvements.
+- **Telegram:** After PR #219 deployed and the migration was applied, the founder-only cost-ceiling command returned the expected unset-policy block. CEO/CFO board-status commands had returned complete reports after PR #215. No email was sent.
 
 ## Current operating picture
 
@@ -27,14 +27,15 @@ The same report showed no campaign records, no customer/lead records, and no que
 
 ## Verification
 
+- The Supabase app connector requested reauthentication for this work session; no live database changes were made by this release branch.
+- Current code-only release-worker sprint: 118 focused Python tests and the full 268-test Python suite passed; `compileall`, `git diff --check`, and Bandit medium/high severity scan passed. Bandit reports only the existing B104 bind-all-interface warning for the Railway API server. This branch adds no database migration and made no production changes.
 - Customer-email worker/provider tests: **11 passed**.
-- Full Python suite: **265 passed**.
+- Full Python suite before this code-only sprint: **265 passed** on the PR #220 release state; **268 passed** with this sprint's changes.
 - `python3 -m compileall -q sutra tests`: passed.
 - `git diff --check`: passed.
-- Bandit 1.9.4 scan: no medium-or-higher findings.
-- PR #219 CI: all five checks passed — Python tests/compile/Bandit, Supabase migration and pgTAP tests/database lint, API and Hermes container builds/startup checks, change detection, and secret scan.
-- Production Supabase connectivity: project reports `ACTIVE_HEALTHY`; migrations and the new founder cost-control RPCs are applied.
-- Production smoke checks: Railway deployment successful and API Online; Telegram founder cost-ceiling command returned the expected unset-policy block.
+- Bandit 1.9.4 scan: no medium-or-higher findings (current local scan reports only the existing B104 Railway bind warning).
+- PRs #219 and #220 each passed all five required CI checks — Python tests/compile/Bandit, Supabase migration and pgTAP tests/database lint, API and Hermes container builds/startup checks, change detection, and secret scan. Current sprint CI is pending.
+- Production connectivity and smoke checks were previously successful: Supabase reported `ACTIVE_HEALTHY`; Railway was Online after PR #219; the Telegram email-ceiling command returned the expected unset-policy block. A fresh Supabase read now requires app reauthentication.
 - No real customer messages were sent and no paid integrations were activated.
 
 ## Remaining gaps and blockers
@@ -44,6 +45,7 @@ The same report showed no campaign records, no customer/lead records, and no que
 3. **Provider usage reconciliation:** two live Kimi probe runs and the blocked Architect/DevOps attempts have unknown usage reservations. Keep those reservations held; resolve the provider response/usage evidence before retrying. The €8 monthly inference hard stop and each initiative cap remain in force.
 4. **Quality handoffs:** four QA/Security reviews are recorded as deferred and incomplete. Restore them only through the founder workflow and when a fresh reservation fits the active project and monthly policy; no release may treat a deferral as a pass.
 5. **Operating company budget:** no company-wide operating budget is configured. The Sutra implementation initiative is capped at €0; paid work on a new initiative needs an explicit all-in ceiling and CFO assessment first.
+6. **Release worker diagnostic:** Railway previously showed repeated generic `IntegrationError` cycles while the API remained healthy. This branch adds safe stage/error categories and bounded retry backoff; the Supabase app connector currently requires reauthentication to recheck live release-attempt state.
 
 No additional founder decision is needed for the code changes merged in this sprint. To activate live customer communications and CRM/support synchronization later, the founder will need to choose providers, supply their scoped credentials and approve any all-in budget needed for paid tiers or usage. Legal cases, contracts and binding commitments remain founder escalations.
 
