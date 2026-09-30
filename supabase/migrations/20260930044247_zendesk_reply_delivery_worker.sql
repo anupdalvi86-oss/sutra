@@ -163,8 +163,7 @@ begin
     skip_reason:='support_context_not_authorized';
   elsif not exists(select 1 from public.approvals a where a.project_id=project_row.id
       and a.approval_type='project_budget' and a.status='approved'
-      and a.decisions #>> '{cfo,decision}'='approve'
-      and a.decisions #>> '{founder,decision}'='approve') then skip_reason:='initiative_approval_missing';
+      and a.decisions #>> '{cfo,decision}'='approve') then skip_reason:='initiative_approval_missing';
   end if;
   if skip_reason is not null then
     insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)
@@ -266,8 +265,7 @@ begin
       and artifact.artifact->'support_reply_draft'->>'ticket_id'=a.ticket_id
       and exists(select 1 from public.approvals ap where ap.project_id=p.id
         and ap.approval_type='project_budget' and ap.status='approved'
-        and ap.decisions #>> '{cfo,decision}'='approve'
-        and ap.decisions #>> '{founder,decision}'='approve')
+        and ap.decisions #>> '{cfo,decision}'='approve')
       and exists(select 1 from public.audit_log al where al.action='support.ticket_context_authorized'
         and al.resource_type='support_case' and al.resource_id=c.id::text
         and al.actor_id=g.id::text and al.details->>'task_id'=t.id::text)
@@ -330,8 +328,7 @@ begin
       and artifact.artifact->'support_reply_draft'->>'ticket_id'=action_row.ticket_id
       and exists(select 1 from public.approvals ap where ap.project_id=p.id
         and ap.approval_type='project_budget' and ap.status='approved'
-        and ap.decisions #>> '{cfo,decision}'='approve'
-        and ap.decisions #>> '{founder,decision}'='approve')
+        and ap.decisions #>> '{cfo,decision}'='approve')
       and exists(select 1 from public.audit_log al where al.action='support.ticket_context_authorized'
         and al.resource_type='support_case' and al.resource_id=c.id::text
         and al.actor_id=g.id::text and al.details->>'task_id'=t.id::text)
