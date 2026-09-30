@@ -6,7 +6,8 @@ create or replace function public.sutra_queue_automatic_codex_retry(
 declare execution_row public.codex_task_executions%rowtype; run_row public.agent_runs%rowtype;
   reservation_row public.agent_run_spend_reservations%rowtype; task_row public.tasks%rowtype;
   project_row public.projects%rowtype; scope_row public.approvals%rowtype;
-  developer_id uuid; retry_number smallint; retry_id uuid; retry_lease uuid;
+  developer_id uuid; retry_number smallint; max_total_attempts smallint;
+  retry_id uuid; retry_lease uuid;
   spend_result jsonb; new_reservation_id uuid; reserve_sqlstate text;
   retryable_codes text[]:=array['codex_process_failed','codex_process_timeout',
     'provider_rate_limited','provider_server_error','provider_connection_failed','provider_timeout'];
@@ -26,6 +27,8 @@ begin
   select id into developer_id from public.agents where slug='developer' and active;
   select * into scope_row from public.approvals where approval_type='developer_scope'
     and action_ref=task_row.id::text and project_id=task_row.project_id and status='approved';
+  select (value #>> '{}')::smallint into max_total_attempts
+    from public.company_settings where key='codex_no_request_retry_limit';
 
   if execution_row.status is distinct from 'failed' or execution_row.request_count is null
     or execution_row.request_count<1 or execution_row.input_tokens is null
@@ -67,15 +70,24 @@ begin
     values(execution_row.id,task_row.id,retry_number,run_row.id,reservation_row.id,
       execution_row.status,execution_row.request_count,execution_row.input_tokens,
       execution_row.output_tokens,'sutra:auto-retry');
-  if retry_number>=3 then
+  if max_total_attempts is null or max_total_attempts not between 1 and 3 then
+    insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)
+      values('system',p_worker_id,'codex.automatic_retry_stopped_by_retry_limit_policy',
+        'task',task_row.id::text,jsonb_build_object('execution_id',execution_row.id,
+          'prior_run_id',run_row.id,'attempt_number',retry_number,'max_total_attempts',max_total_attempts,
+          'prior_reservation_id',reservation_row.id,'prior_reservation_preserved',true,
+          'spending_authority_changed',false));
+    return jsonb_build_object('status','retry_limit_unavailable');
+  end if;
+  if retry_number>=max_total_attempts then
     insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)
       values('system',p_worker_id,'codex.automatic_retry_exhausted','task',task_row.id::text,
         jsonb_build_object('execution_id',execution_row.id,'prior_run_id',run_row.id,
-          'attempt_number',retry_number+1,'max_total_attempts',3,
+          'attempt_number',retry_number,'max_total_attempts',max_total_attempts,
           'prior_request_count',execution_row.request_count,'prior_input_tokens',execution_row.input_tokens,
           'prior_output_tokens',execution_row.output_tokens,'prior_reservation_id',reservation_row.id,
           'prior_reservation_preserved',true,'spending_authority_changed',false));
-    return jsonb_build_object('status','exhausted','max_total_attempts',3);
+    return jsonb_build_object('status','exhausted','max_total_attempts',max_total_attempts);
   end if;
 
   -- Isolate reservation errors so a hard stop preserves the completed failure,
@@ -89,7 +101,7 @@ begin
       values(retry_id,developer_id,task_row.project_id,task_row.id,'codex_execution','running',
         jsonb_build_object('task_id',task_row.id,'issue_number',execution_row.issue_number,
           'provider',execution_row.provider,'model',execution_row.model,
-          'automatic_retry_number',retry_number+1),
+          'automatic_retry_number',retry_number+1,'max_total_attempts',max_total_attempts),
         '{}'::jsonb,now(),retry_lease,now()+interval '2 hours',1);
     update public.codex_task_executions set agent_run_id=retry_id,reservation_id=null,approval_id=null,
       request_count=0,input_tokens=0,output_tokens=0,status='running',runner_claimed_at=null,updated_at=now()
@@ -108,10 +120,12 @@ begin
           jsonb_build_object('execution_id',execution_row.id,'prior_run_id',run_row.id,
             'new_run_id',retry_id,'new_reservation_id',new_reservation_id,
             'approval_id',spend_result->>'approval_id','attempt_number',retry_number+1,
+            'max_total_attempts',max_total_attempts,
             'prior_request_count',execution_row.request_count,
             'prior_input_tokens',execution_row.input_tokens,'prior_output_tokens',execution_row.output_tokens,
             'prior_reservation_preserved',true,'spending_authority_changed',false));
       return jsonb_build_object('status','awaiting_approval','attempt_number',retry_number+1,
+        'max_total_attempts',max_total_attempts,
         'approval_id',spend_result->>'approval_id');
     end if;
     insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)
@@ -119,26 +133,28 @@ begin
         jsonb_build_object('execution_id',execution_row.id,'prior_run_id',run_row.id,
           'new_run_id',retry_id,'prior_reservation_id',reservation_row.id,
           'new_reservation_id',new_reservation_id,'attempt_number',retry_number+1,
-          'max_total_attempts',3,'prior_request_count',execution_row.request_count,
+          'max_total_attempts',max_total_attempts,'prior_request_count',execution_row.request_count,
           'prior_input_tokens',execution_row.input_tokens,'prior_output_tokens',execution_row.output_tokens,
           'prior_actual_amount',reservation_row.actual_amount,'prior_reservation_preserved',true,
           'unknown_reservations_preserved',true,'spending_authority_changed',false,
           'merge_release_authority_changed',false));
     return jsonb_build_object('status','queued','attempt_number',retry_number+1,
-      'max_total_attempts',3,'run_id',retry_id,'reservation_id',new_reservation_id,
+      'max_total_attempts',max_total_attempts,'run_id',retry_id,'reservation_id',new_reservation_id,
       'prior_reservation_preserved',true,'spending_authority_changed',false);
   exception when others then
     get stacked diagnostics reserve_sqlstate=returned_sqlstate;
     insert into public.audit_log(actor_type,actor_id,action,resource_type,resource_id,details)
       values('system',p_worker_id,'codex.automatic_retry_stopped_by_spend_gate','task',task_row.id::text,
         jsonb_build_object('execution_id',execution_row.id,'prior_run_id',run_row.id,
-          'attempt_number',retry_number+1,'error_class',case when reserve_sqlstate='23514'
+          'attempt_number',retry_number+1,'max_total_attempts',max_total_attempts,
+          'error_class',case when reserve_sqlstate='23514'
             then 'budget_hard_stop' else 'authorization_or_policy_gate' end,
           'prior_request_count',execution_row.request_count,
           'prior_input_tokens',execution_row.input_tokens,'prior_output_tokens',execution_row.output_tokens,
           'prior_reservation_id',reservation_row.id,'prior_reservation_preserved',true,
           'spending_authority_changed',false));
     return jsonb_build_object('status','stopped_by_spend_gate','attempt_number',retry_number+1,
+      'max_total_attempts',max_total_attempts,
       'error_class',case when reserve_sqlstate='23514' then 'budget_hard_stop'
         else 'authorization_or_policy_gate' end);
   end;
