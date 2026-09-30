@@ -1506,6 +1506,34 @@ class FounderCommandTests(unittest.TestCase):
             "p_reason": "supplier estimate increased",
         })
 
+    def test_founder_can_queue_audited_cfo_assessment_without_changing_budget(self):
+        project_id = "00000000-0000-4000-8000-000000000004"
+        command = f"CFO, assess budget for initiative {project_id}: review the Sutra release sprint including model use, deployment, QA and rollback costs"
+        parsed = parse_founder_command(command)
+        self.assertEqual(parsed.kind, "assess_initiative_budget")
+        self.assertEqual(parsed.project_id, project_id)
+        self.store.rpc.return_value = {
+            "project_id": project_id, "agent_run_id": "00000000-0000-4000-8000-000000000099",
+            "status": "queued", "budget_cap_eur": 17.60,
+        }
+        reply = self.router.handle(FOUNDER, FOUNDER, command).text
+        self.assertIn("CFO all-in budget assessment queued", reply)
+        self.assertIn("unchanged €17.60 ceiling", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_queue_initiative_cfo_assessment", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_project_id": project_id,
+            "p_scope": "review the Sutra release sprint including model use, deployment, QA and rollback costs",
+        })
+
+    def test_malformed_cfo_assessment_command_is_not_routed(self):
+        self.assertEqual(parse_founder_command(
+            "CFO, assess budget for initiative not-a-uuid: please review this initiative budget"
+        ).kind, "budget_required")
+        with self.assertRaisesRegex(ValueError, "20 to 2000"):
+            parse_founder_command(
+                "CFO, assess budget for initiative 00000000-0000-4000-8000-000000000004: too short"
+            )
+
     def test_non_founder_cannot_change_initiative_budget(self):
         project_id = "00000000-0000-4000-8000-000000000004"
         response = self.router.handle("not-founder", "not-founder", "change budget").text

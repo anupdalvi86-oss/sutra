@@ -362,6 +362,19 @@ class HermesAgentClient:
                     "fields and assigned task_acceptance items. "
                     "This is internal research only; do not contact customers, create leads, publish, or spend."
                 )
+            elif role == "cfo":
+                role_output += (
+                    " For this all-in budget review, return exactly these top-level keys: summary, recommendation, "
+                    "evidence, assumptions, risks, decision, decision_rationale, and budget_estimate. The evidence "
+                    "value must be an array of zero to five objects, each containing exactly source, url, and claim. "
+                    "Use literal direct HTTPS URLs without markdown syntax or tracking/search reference tokens; if "
+                    "you cannot verify a public price, leave evidence empty and label the amount as an assumption in "
+                    "the cost-line basis. Do not invent a supplier quote. budget_estimate must contain estimated_total_eur, "
+                    "confidence, recommended_action, and 1-10 line_items. Each line item has exactly category, "
+                    "amount_eur, basis; amounts must sum exactly to estimated_total_eur and fit the founder's existing "
+                    "EUR ceiling. Do not change that ceiling, approve out-of-cap spend, start department reviews, "
+                    "or claim that the initiative is activated."
+                )
             elif role == "architect":
                 role_output += (
                     " For the technical_design artifact, return exactly these five top-level keys: summary, "

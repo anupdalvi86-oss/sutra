@@ -544,6 +544,7 @@ class FounderCommand:
     zendesk_reply_cost_ceiling: float | None = None
     zendesk_reply_cost_reason: str = ""
     initiative_followup: str = ""
+    initiative_assessment_scope: str = ""
 
 
 @dataclass(frozen=True)
@@ -562,6 +563,10 @@ PROJECT_BUDGET_SET_RE = re.compile(
 )
 INITIATIVE_FOLLOWUP_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:continue|add)(?:\s+work)?\s+(?:on\s+)?(?:initiative|project)\s+([0-9a-f-]{36})\s*:\s*(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+INITIATIVE_CFO_ASSESS_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:cfo[, :]\s*)?assess\s+(?:the\s+)?(?:all-in\s+)?budget\s+for\s+(?:initiative|project)\s+([0-9a-f-]{36})\s*:\s*(.+?)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 APPROVAL_RE = re.compile(r"^\s*(approve|reject)\s+([0-9a-f-]{36})(?:\s+(.*))?\s*$", re.IGNORECASE)
@@ -677,6 +682,17 @@ def parse_founder_command(text: str) -> FounderCommand:
             raise ValueError("Initiative budget change reason must contain 8 to 500 characters")
         return FounderCommand("set_project_budget", text.strip(), project_id=project_id,
                               new_budget=amount, budget_reason=reason)
+    match = INITIATIVE_CFO_ASSESS_RE.fullmatch(text)
+    if match:
+        try:
+            project_id = str(uuid.UUID(match.group(1)))
+        except ValueError as exc:
+            raise ValueError("Initiative budget assessment needs a valid project ID") from exc
+        scope = match.group(2).strip()
+        if len(scope) < 20 or len(scope) > 2000 or any(ord(char) < 32 for char in scope):
+            raise ValueError("Initiative budget assessment scope must contain 20 to 2000 printable characters")
+        return FounderCommand("assess_initiative_budget", text.strip(), project_id=project_id,
+                              initiative_assessment_scope=scope)
     match = INITIATIVE_FOLLOWUP_RE.fullmatch(text)
     if match:
         try:
@@ -1170,6 +1186,20 @@ class FounderCommandRouter:
                 f"€{result.get('old_budget', 0):,.2f} → €{result.get('new_budget', 0):,.2f}. "
                 f"€{result.get('committed', 0):,.2f} is committed; €{result.get('remaining_budget', 0):,.2f} remains."
             )
+        if command.kind == "assess_initiative_budget":
+            try:
+                result = self.store.rpc("sutra_founder_queue_initiative_cfo_assessment", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_project_id": command.project_id,
+                    "p_scope": command.initiative_assessment_scope,
+                })
+            except IntegrationError:
+                return FounderResponse("The CFO assessment was not queued. The database requires the configured founder, an existing EUR-budgeted initiative that has no prior review sequence, and an unassessed budget.")
+            return FounderResponse(
+                f"CFO all-in budget assessment queued for initiative {result.get('project_id')} "
+                f"(run {result.get('agent_run_id')}) against the unchanged €{result.get('budget_cap_eur', 0):,.2f} ceiling. "
+                "Sutra will use its normal reserved model-spend path; this does not raise the cap, retry any task, or authorize work beyond it."
+            )
         if command.kind == "initiative_followup":
             try:
                 result = self.store.rpc("sutra_founder_add_initiative_followup", {
@@ -1460,6 +1490,7 @@ class FounderCommandRouter:
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
             "Use: Continue initiative <project-id>: <follow-up work>. This preserves its existing budget.\n"
             "Use: Increase initiative budget <project-id> to €<amount> because <reason>. This is founder-only and audit logged.\n"
+            "Use: CFO, assess budget for initiative <project-id>: <all-in work scope>. This queues one audited CFO review against the existing budget without changing it.\n"
             "Use: approve <approval-id> [comment] or reject <approval-id> [comment]."
         )
 
