@@ -260,6 +260,38 @@ class SupabaseREST:
             raise IntegrationError("Supabase returned an invalid code release result")
         return result
 
+    def claim_customer_email_action(self, worker_id: str) -> dict[str, Any] | None:
+        result = self.rpc("sutra_claim_customer_email_action", {"p_worker_id": worker_id})
+        if result is None:
+            return None
+        if not isinstance(result, dict) or result.get("status") != "claimed":
+            raise IntegrationError("Supabase returned an invalid customer email claim")
+        return result
+
+    def validate_customer_email_claim(self, worker_id: str, action_id: str,
+                                      claim_token: str) -> bool:
+        result = self.rpc("sutra_validate_customer_email_claim", {
+            "p_worker_id": worker_id, "p_action_id": action_id,
+            "p_claim_token": claim_token,
+        })
+        if not isinstance(result, bool):
+            raise IntegrationError("Supabase returned an invalid customer email authorization")
+        return result
+
+    def finish_customer_email_action(self, worker_id: str, action_id: str,
+                                     claim_token: str, status: str,
+                                     provider_message_id: str | None, error_code: str | None,
+                                     actual_cost_eur: float | None, cost_known: bool) -> dict[str, Any]:
+        result = self.rpc("sutra_finish_customer_email_action", {
+            "p_worker_id": worker_id, "p_action_id": action_id,
+            "p_claim_token": claim_token, "p_status": status,
+            "p_provider_message_id": provider_message_id, "p_error_code": error_code,
+            "p_actual_cost_eur": actual_cost_eur, "p_cost_known": cost_known,
+        })
+        if not isinstance(result, dict) or result.get("status") != status:
+            raise IntegrationError("Supabase returned an invalid customer email result")
+        return result
+
     def fail_github_task(self, worker_id: str, task_id: str, lease_token: str,
                          error_code: str) -> dict[str, Any]:
         return self.rpc("sutra_fail_github_task_dispatch", {

@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .codex_runner import CodexTaskRunner
 from .code_release import CodeReleaseWorker
+from .customer_email import CustomerEmailDeliveryWorker, ResendEmailProvider
 from .drafts import DraftNotFound, DraftRequestError, DraftService, UserScopedSupabase
 from .github_webhook import normalize_github_event, verify_github_signature
 from .runtime import (
@@ -105,6 +106,8 @@ class SutraApplication:
         self.codex_runner_status = "disabled"
         self.code_release_thread: threading.Thread | None = None
         self.code_release_status = "disabled"
+        self.customer_email_worker_thread: threading.Thread | None = None
+        self.customer_email_worker_status = "disabled"
         self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
         # Keep the synthetic prototype local-only, even if a hosted service is mislabeled.
@@ -240,6 +243,24 @@ class SutraApplication:
                     self.code_release_status = "running"
                 except ValueError:
                     self.code_release_status = "blocked_runtime_configuration"
+        if os.environ.get("SUTRA_ENABLE_CUSTOMER_EMAIL_WORKER", "false").lower() == "true":
+            api_key = os.environ.get("RESEND_API_KEY", "").strip()
+            from_address = os.environ.get("SUTRA_CUSTOMER_EMAIL_FROM", "").strip()
+            send_mode = os.environ.get("SUTRA_CUSTOMER_EMAIL_SEND_MODE", "disabled").strip().lower()
+            if not self.store or not api_key or not from_address or send_mode != "live":
+                self.customer_email_worker_status = "blocked_runtime_configuration"
+            else:
+                try:
+                    provider = ResendEmailProvider(api_key, from_address)
+                    worker_id = "sutra-worker-email" + uuid.uuid4().hex[:12]
+                    worker = CustomerEmailDeliveryWorker(self.store, provider, worker_id)
+                    self.customer_email_worker_thread = threading.Thread(
+                        target=worker.run, args=(self.telegram_stop,), daemon=True,
+                        name="sutra-customer-email-worker")
+                    self.customer_email_worker_thread.start()
+                    self.customer_email_worker_status = "running"
+                except ValueError:
+                    self.customer_email_worker_status = "blocked_runtime_configuration"
         if os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
             if not self.store or not self.router or not self.telegram_token:
                 self.telegram_status = "unconfigured"
@@ -296,6 +317,7 @@ class SutraApplication:
             "github_dispatcher": self.github_dispatcher_status,
             "codex_runner": self.codex_runner_status,
             "code_release_worker": self.code_release_status,
+            "customer_email_worker": self.customer_email_worker_status,
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
         }
 
@@ -310,6 +332,7 @@ class SutraApplication:
             "github_dispatcher": health["github_dispatcher"],
             "codex_runner": health["codex_runner"],
             "code_release_worker": health["code_release_worker"],
+            "customer_email_worker": health["customer_email_worker"],
             "github_webhook": health["github_webhook"],
         }
         blockers = []
@@ -320,6 +343,7 @@ class SutraApplication:
         dispatcher_enabled = os.environ.get("SUTRA_ENABLE_GITHUB_DISPATCHER", "false").lower() == "true"
         codex_enabled = os.environ.get("SUTRA_ENABLE_CODEX_RUNNER", "false").lower() == "true"
         code_release_enabled = os.environ.get("SUTRA_ENABLE_CODE_RELEASE_WORKER", "false").lower() == "true"
+        customer_email_enabled = os.environ.get("SUTRA_ENABLE_CUSTOMER_EMAIL_WORKER", "false").lower() == "true"
         if telegram_enabled and health["telegram"] != "running":
             blockers.append("telegram")
         if worker_enabled and health["agent_worker"] != "running":
@@ -335,6 +359,8 @@ class SutraApplication:
             blockers.append("codex_runner")
         if code_release_enabled and health["code_release_worker"] != "running":
             blockers.append("code_release_worker")
+        if customer_email_enabled and health["customer_email_worker"] != "running":
+            blockers.append("customer_email_worker")
         ready = not blockers
         return {
             "status": "ready" if ready else "not_ready",
@@ -356,6 +382,8 @@ class SutraApplication:
             self.codex_runner_thread.join(timeout=2)
         if self.code_release_thread:
             self.code_release_thread.join(timeout=2)
+        if self.customer_email_worker_thread:
+            self.customer_email_worker_thread.join(timeout=2)
 
 
 class SutraHandler(BaseHTTPRequestHandler):
