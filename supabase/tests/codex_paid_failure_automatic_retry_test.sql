@@ -30,7 +30,7 @@ begin
       requested_budget,currency,created_by,budget_assessment_status,budget_assessed_at,budget_assessment)
     values('auto-paid-retry-'||gen_random_uuid(),'Codex paid retry fixture',
       'Founder-approved bounded retry fixture.','active',cap,'EUR',cap,'EUR','test',
-      'within_cap',now(),jsonb_build_object('estimated_total_eur',cap/2,
+      'within_cap',now(),jsonb_build_object('estimated_total_eur',round(cap/2,2),
         'recommended_action','proceed_within_cap')) returning id into project_id;
     insert into public.approvals(project_id,approval_type,action_ref,requested_by,required_roles,
         decisions,amount,currency,summary,status,payload,decided_by,decided_at)
