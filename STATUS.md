@@ -39,6 +39,10 @@ The production initiative ledger has 40 `actual` entries totaling €0.40 and 16
 - Production connectivity and smoke checks were previously successful: the Supabase dashboard reports `Healthy`; Railway was Online after PR #219; the Telegram email-ceiling command returned the expected unset-policy block. This sprint has not deployed, so no post-merge Railway check has been run.
 - No real customer messages were sent and no paid integrations were activated.
 
+## Current sprint additions
+
+- Added one bounded automatic retry for exhausted malformed task artifacts only after spend usage reconciles. It requires an active founder-approved initiative assessed within its all-in budget, no legal hold, and the same assigned agent. Unknown reservations are untouched, the next provider call still needs a fresh existing-policy reservation, and each task can receive this automatic requeue only once. Focused database test is included; verification is pending.
+
 ## Remaining gaps and blockers
 
 1. **Customer email activation:** PR #221 wires Sales/Marketing task artifacts to the private outbox, but the Resend worker is intentionally disabled and this branch is not deployed. The production database ceiling remains unset; after the initiative has an adequate all-in cap, the founder can set the per-message ceiling with `CEO, set customer email cost ceiling to €0.05 because <reason>.` Live delivery also requires a Resend account, verified sender/domain, private `RESEND_API_KEY`, and explicit live runtime flags. Provider billing reconciliation is still required because sent and ambiguous actions retain unknown reservations until reconciled. No real message was sent during this implementation.
