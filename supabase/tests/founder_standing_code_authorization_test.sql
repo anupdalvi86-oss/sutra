@@ -11,7 +11,7 @@ select throws_ok($$select public.sutra_founder_record_code_authorization('876543
   '42501',null,'non-founder cannot record standing code authority');
 
 create temporary table standing_code_fixture(
-  authorization_id uuid,task_id uuid,project_id uuid,qa_task_id uuid,security_task_id uuid
+  authorization_id uuid,task_id uuid,project_id uuid,qa_task_id uuid,security_task_id uuid,assessed_task_id uuid
 ) on commit drop;
 insert into standing_code_fixture(authorization_id)
 select (public.sutra_founder_record_code_authorization('12345678',
@@ -57,6 +57,70 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder'
   and action='founder.standing_code_task_created'
   and resource_id=(select task_id::text from standing_code_fixture)),
   'fresh Developer task and zero budget are recorded in the audit log');
+
+-- A founder-approved positive cap may support new task records only after an
+-- in-cap assessment. Creating a task must leave both cap and assessment intact.
+update public.projects set budget_amount=17.60,budget_currency='EUR',
+  requested_budget=17.60,currency='EUR',budget_assessment_status='within_cap',
+  budget_assessed_at=now(),budget_assessment=jsonb_build_object(
+    'estimated_total_eur',15.97,'recommendation','proceed_within_cap',
+    'recommended_action','proceed_within_cap')
+where id=(select project_id from standing_code_fixture);
+insert into public.approvals(project_id,approval_type,action_ref,requested_by,required_roles,
+  decisions,amount,currency,summary,status,payload,decided_by,decided_at)
+select project_id,'project_budget',project_id::text,'founder:12345678',array['founder'],
+  jsonb_build_object('founder',jsonb_build_object('decision','approve','comment','Founder-approved test cap')),
+  17.60,'EUR','Founder-approved all-in test cap','approved',
+  jsonb_build_object('all_in_budget',17.60,'currency','EUR'),'founder:12345678',now()
+from standing_code_fixture;
+
+create temporary table assessed_code_result(payload jsonb) on commit drop;
+insert into assessed_code_result
+select public.sutra_founder_create_standing_code_task(
+  '12345678','Continue work within assessed Sutra budget',
+  'Create a Developer task under the existing founder-approved cap and completed within-cap assessment. Do not alter financial authority.',
+  '["Task remains within repository authorization","Existing project cap and CFO assessment stay unchanged"]'::jsonb
+);
+update standing_code_fixture set assessed_task_id=(payload->>'task_id')::uuid
+from assessed_code_result;
+select is((select payload->>'project_budget_eur' from assessed_code_result),
+  '17.60','task creation reports the existing assessed all-in cap');
+select is((select payload->>'budget_assessment_status' from assessed_code_result),
+  'within_cap','task creation reports the completed within-cap assessment');
+select is((select budget_amount from public.projects where id=(select project_id from standing_code_fixture)),
+  17.60::numeric,'standing-authorized task creation never changes the existing project cap');
+select is((select budget_assessment_status from public.projects where id=(select project_id from standing_code_fixture)),
+  'within_cap','task creation preserves the completed CFO assessment');
+select is((select amount from public.approvals where approval_type='developer_scope'
+  and action_ref=(select assessed_task_id::text from standing_code_fixture)),
+  0::numeric,'standing code task approval carries no spending amount');
+select is((select payload->>'project_all_in_cap_eur' from public.approvals where approval_type='developer_scope'
+  and action_ref=(select assessed_task_id::text from standing_code_fixture)),
+  '17.60','task scope record snapshots the existing cap');
+select is((select payload->>'budget_assessment_status' from public.approvals where approval_type='developer_scope'
+  and action_ref=(select assessed_task_id::text from standing_code_fixture)),
+  'within_cap','task scope record snapshots the passing assessment');
+select ok(exists(select 1 from public.audit_log where actor_type='founder'
+  and action='founder.standing_code_task_created'
+  and resource_id=(select assessed_task_id::text from standing_code_fixture)
+  and details->>'project_budget_eur'='17.60'
+  and details->>'spending_authority_changed'='false'),
+  'task creation under an assessed cap is audit logged without granting spend authority');
+
+update public.projects set budget_assessment_status='unassessed'
+where id=(select project_id from standing_code_fixture);
+select throws_ok($$select public.sutra_founder_create_standing_code_task('12345678',
+  'Reject unassessed budget task','This paid-budget project has no current within-cap assessment.',
+  '["No task is created"]'::jsonb)$$,'42501',null,
+  'positive budget without a current within-cap assessment cannot receive a new task');
+update public.projects set budget_assessment_status='within_cap',legal_hold=true
+where id=(select project_id from standing_code_fixture);
+select throws_ok($$select public.sutra_founder_create_standing_code_task('12345678',
+  'Reject legally held budget task','This assessed initiative is on legal hold.',
+  '["No task is created"]'::jsonb)$$,'42501',null,
+  'legal hold prevents new standing-authorized tasks');
+update public.projects set legal_hold=false
+where id=(select project_id from standing_code_fixture);
 
 select ok(not (select has_table_privilege('service_role','public.code_release_attempts','select')),
   'service role cannot bypass release authorization through direct table access');
