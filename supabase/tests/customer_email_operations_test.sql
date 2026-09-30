@@ -26,7 +26,9 @@ select ok(to_regclass('public.customer_email_actions_task_idx') is not null,
 
 insert into public.company_settings(key,value,governance_sensitive,founder_only,updated_by)
   values('founder_telegram_user_id','"12345678"'::jsonb,true,true,'test')
-  on conflict(key) do update set value=excluded.value;
+  on conflict(key) do update set value=excluded.value,founder_only=true,governance_sensitive=true;
+select public.sutra_founder_set_customer_email_cost_ceiling('12345678',0.05,
+  'Bound provider delivery cost per message for this database fixture.');
 select public.sutra_set_agent_model_spend_profile('12345678','openai','gpt-6-luna',1,1,1000,1000,true);
 create temporary table customer_email_fixture on commit drop as
   select (public.sutra_submit_proposal('12345678','Customer email fixture',
@@ -48,6 +50,12 @@ insert into public.customers(id,name,email,status,marketing_email_consent,servic
   select customer_id,'Consenting customer','fixture@example.test','lead',true,true,now(),'fixture signup checkbox'
   from customer_email_ids;
 
+select throws_ok($$select public.sutra_queue_customer_email(
+  (select agent_id from customer_email_ids),'sales',(select task_id from customer_email_ids),
+  (select project_id from customer_email_ids),(select customer_id from customer_email_ids),
+  'sales','Underfunded email','Must not enter the queue',0.01,'email-action-underfunded')$$,
+  '23514','customer email reservation is below the configured per-message ceiling',
+  'database blocks an email whose shared-ledger reservation is below the founder ceiling');
 select is((public.sutra_queue_customer_email(
   (select agent_id from customer_email_ids),'sales',(select task_id from customer_email_ids),
   (select project_id from customer_email_ids),(select customer_id from customer_email_ids),
@@ -58,6 +66,10 @@ select is((select count(*)::integer from public.customer_email_actions where ide
 select is((select status from public.initiative_budget_ledger where id=(
   select initiative_ledger_id from public.customer_email_actions where idempotency_key='email-action-0001')),
   'reserved','the customer email is backed by an all-in initiative reservation');
+select throws_ok($$select public.sutra_founder_set_customer_email_cost_ceiling('12345678',0.06,
+  'Do not exceed existing per-action reservations')$$,'55000',
+  'customer email ceiling cannot change while sends are active or queued reservations are below the new ceiling',
+  'raising the ceiling cannot strand an already queued email below its unit-cost reservation');
 select ok(exists(select 1 from public.audit_log where action='customer.email_queued'
   and resource_id=(select id::text from public.customer_email_actions where idempotency_key='email-action-0001')),
   'queue creation records an audit event without copying message content');
