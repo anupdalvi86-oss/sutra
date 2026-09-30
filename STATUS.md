@@ -28,9 +28,9 @@ The same report showed no campaign records, no customer/lead records, and no que
 ## Verification
 
 - The Supabase app connector requested reauthentication for this work session; no live database changes were made by this release branch.
-- Sprint PR #221 is open and unmerged. Its last recorded CI run [#36656757190](https://github.com/anupdalvi86-oss/sutra/actions/runs/36656757190) passed all five checks on earlier commit `b94a071`; current HubSpot queue changes still need to be committed, pushed and validated by fresh final-head CI. If merge triggers Railway deployment, check health and smoke test once; inspect logs only if deployment or smoke fails.
+- Sprint PR #221 is open and unmerged. Final code head `a7866ec` passed all five required checks in CI run [#36658734710](https://github.com/anupdalvi86-oss/sutra/actions/runs/36658734710): secret scan, change detection, Python/security, migrations/pgTAP/database lint, and containers. This run includes the HubSpot queue migration and all policy tests. If merge triggers Railway deployment, check health and smoke test once; inspect logs only if deployment or smoke fails.
 - Customer-email worker/provider tests: **11 passed**.
-- Full Python suite after current CRM queue/worker additions: **283 passed**. Focused CRM/server/runtime suite: **150 passed**. `compileall`, `git diff --check`, and Bandit medium/high scan pass; Bandit reports only the existing B104 bind-address warning. The new HubSpot pgTAP test has not yet run; final PR database CI must apply all migrations and pass it before merge.
+- Full Python suite after current CRM queue/worker additions: **283 passed**. Focused CRM/server/runtime suite: **150 passed**. `compileall`, `git diff --check`, and Bandit medium/high scan pass; Bandit reports only the existing B104 bind-address warning. Hosted pgTAP passed all 36 new HubSpot policy assertions, and database lint passed.
 - `python3 -m compileall -q sutra tests`: passed.
 - `git diff --check`: passed.
 - Bandit 1.9.4 scan: no medium-or-higher findings (current local scan reports only the existing B104 Railway bind warning).
