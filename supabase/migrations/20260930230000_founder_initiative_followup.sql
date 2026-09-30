@@ -31,13 +31,16 @@ begin
   if project_row.currency<>'EUR' or project_row.requested_budget is null or project_row.requested_budget<=0
     or project_row.budget_assessment_status<>'within_cap'
     or project_row.budget_assessment->>'recommended_action' is distinct from 'proceed_within_cap'
-    or case when jsonb_typeof(project_row.budget_assessment->'estimated_total_eur')='number'
-      then (project_row.budget_assessment->>'estimated_total_eur')::numeric>project_row.requested_budget
-      else true end
     or not exists(select 1 from public.approvals a where a.project_id=p_project_id
       and a.approval_type='project_budget' and a.status='approved'
       and a.decisions #>> '{cfo,decision}'='approve') then
     raise exception 'follow-up requires a positive budget assessed within cap and approved by CFO' using errcode='23514';
+  end if;
+  if jsonb_typeof(project_row.budget_assessment->'estimated_total_eur') is distinct from 'number' then
+    raise exception 'follow-up requires a numeric assessed total within the approved budget' using errcode='23514';
+  end if;
+  if (project_row.budget_assessment->>'estimated_total_eur')::numeric>project_row.requested_budget then
+    raise exception 'follow-up requires an assessed total within the approved budget' using errcode='23514';
   end if;
   if project_row.legal_hold or exists(select 1 from public.legal_escalations e
       where e.project_id=p_project_id and e.status='open') then
