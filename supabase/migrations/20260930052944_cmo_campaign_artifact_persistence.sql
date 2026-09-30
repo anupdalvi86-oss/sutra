@@ -14,7 +14,7 @@ create index campaigns_project_status_idx
 
 create or replace function public.sutra_validate_task_artifact(p_role text,p_artifact jsonb)
 returns boolean language plpgsql immutable security invoker set search_path=pg_catalog,public as $$
-declare field record; item jsonb; expected_fields text[]; value jsonb;
+declare field record; item jsonb; expected_fields text[]; value jsonb; min_length integer; max_length integer;
 begin
   if p_artifact is null or jsonb_typeof(p_artifact)<>'object' or octet_length(p_artifact::text)>12000 then return false; end if;
   expected_fields:=case p_role
@@ -40,9 +40,10 @@ begin
     value:=p_artifact->field.key;
     if value is null or jsonb_typeof(value)<>field.value_type then return false; end if;
     if field.value_type='string' then
-      if length(btrim(value#>>'{}'))<case when field.key='channel' then 3 else 8 end
-        or length(btrim(value#>>'{}'))>case when field.key='campaign_name' then 160
-          when field.key='channel' then 80 when field.key='budget_rationale' then 500 else 4000 end then
+      min_length:=case when field.key='channel' then 3 else 8 end;
+      max_length:=case when field.key='campaign_name' then 160
+        when field.key='channel' then 80 when field.key='budget_rationale' then 500 else 4000 end;
+      if length(btrim(value#>>'{}'))<min_length or length(btrim(value#>>'{}'))>max_length then
         return false;
       end if;
     elsif field.value_type='number' then
