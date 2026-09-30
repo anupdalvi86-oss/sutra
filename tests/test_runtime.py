@@ -59,6 +59,8 @@ def status_fixture():
             "total": 4, "open": 3,
             "by_status": {"open": 2, "pending": 1, "solved": 1},
             "open_by_priority": {"urgent": 2, "normal": 1},
+            "open_by_age": {"under_24h": 1, "24_to_72h": 1, "over_72h": 1},
+            "oldest_open_hours": 100,
         },
         "legal_escalations": [],
         "github_dispatches": [],
@@ -295,6 +297,7 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Customer support queue", reply)
         self.assertIn("3 open; 1 solved or closed; 4 total", reply)
         self.assertIn("Open priority: normal: 1, urgent: 2", reply)
+        self.assertIn("Open case age (informational, not an SLA): under 24h: 1; 24–72h: 1; over 72h: 1; oldest: 100h", reply)
 
     def test_status_reports_customer_email_action_state_without_disclosing_content(self):
         snapshot = status_fixture()
@@ -329,6 +332,8 @@ class FounderCommandTests(unittest.TestCase):
         snapshot = status_fixture()
         snapshot["support_case_status"] = {
             "total": 0, "open": 0, "by_status": {}, "open_by_priority": {},
+            "open_by_age": {"under_24h": 0, "24_to_72h": 0, "over_72h": 0},
+            "oldest_open_hours": 0,
         }
         company = render_status_brief(snapshot, "ceo")
         operations = render_status_brief(snapshot, "coo")
@@ -747,6 +752,20 @@ class FounderCommandTests(unittest.TestCase):
         self.assertEqual(status["agents"], [])
         self.assertEqual(status["projects"], [])
         self.assertEqual(status["code_releases"], [])
+
+    def test_status_snapshot_rejects_inconsistent_support_age_aggregate(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        malformed_support = {
+            "total": 1, "open": 1, "by_status": {"open": 1},
+            "open_by_priority": {"urgent": 1},
+            "open_by_age": {"under_24h": 0, "24_to_72h": 0, "over_72h": 0},
+            "oldest_open_hours": 50,
+        }
+        store.request = Mock(side_effect=[[] for _ in range(14)] + [malformed_support, []])
+        store.rpc = Mock(return_value={"dispatches": []})
+        status = store.company_status()
+        self.assertIsNone(status["support_case_status"])
+        self.assertIn("support_cases", status["status_errors"])
 
     def test_status_snapshot_records_failed_rpc_without_discarding_other_sources(self):
         store = SupabaseREST("https://sutra.example", "server-key")

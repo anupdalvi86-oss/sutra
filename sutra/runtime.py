@@ -380,11 +380,19 @@ class SupabaseREST:
             open_count = support_status.get("open")
             by_status = support_status.get("by_status")
             open_by_priority = support_status.get("open_by_priority")
+            open_by_age = support_status.get("open_by_age")
+            oldest_open_hours = support_status.get("oldest_open_hours")
             if (type(total) is not int or total < 0 or type(open_count) is not int or open_count < 0
                     or open_count > total or not isinstance(by_status, dict)
                     or not isinstance(open_by_priority, dict)
                     or any(not isinstance(key, str) or type(value) is not int or value < 0
                            for key, value in (*by_status.items(), *open_by_priority.items()))
+                    or not isinstance(open_by_age, dict)
+                    or set(open_by_age) != {"under_24h", "24_to_72h", "over_72h"}
+                    or any(type(value) is not int or value < 0 for value in open_by_age.values())
+                    or sum(open_by_age.values()) != open_count
+                    or type(oldest_open_hours) is not int or oldest_open_hours < 0
+                    or (open_count == 0 and oldest_open_hours != 0)
                     or sum(by_status.values()) != total or sum(open_by_priority.values()) != open_count):
                 raise IntegrationError("invalid support status")
             snapshot["support_case_status"] = support_status
@@ -1675,6 +1683,12 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
                     lines.append("• Open priority: " + ", ".join(
                         f"{priority}: {count}" for priority, count in sorted(priorities.items())
                     ))
+                age = support_status["open_by_age"]
+                lines.append(
+                    "• Open case age (informational, not an SLA): "
+                    f"under 24h: {age['under_24h']}; 24–72h: {age['24_to_72h']}; "
+                    f"over 72h: {age['over_72h']}; oldest: {support_status['oldest_open_hours']}h."
+                )
     lines.extend(["", "Approvals requiring attention"])
     if not scoped_approvals:
         lines.append("• None pending.")
