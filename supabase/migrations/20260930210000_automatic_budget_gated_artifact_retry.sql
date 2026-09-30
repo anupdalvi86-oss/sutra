@@ -102,7 +102,7 @@ begin
       and not exists(select 1 from public.task_agent_artifacts x where x.task_id=t.id)
       and not exists(select 1 from public.agent_runs r where r.task_id=t.id and r.trigger_type='task_artifact'
         and r.status in ('succeeded','queued','running'))
-    order by t.created_at,t.id limit 1 for update of t skip locked;
+    order by case when a.slug='cpo' then 1 else 0 end,t.created_at,t.id limit 1 for update of t skip locked;
     if not found then return null; end if;
     select * into agent_row from public.agents a where a.id=task_row.owner_agent_id and a.active;
     insert into public.agent_runs(agent_id,project_id,task_id,trigger_type,status,input,output,

@@ -41,11 +41,11 @@ begin
     returning id into run_id;
   insert into public.expenses(project_id,category,description,amount,actual_amount,currency,status,
       requested_by,approved_at,incurred_at)
-    values(project_id,'ai_inference','Reconciled retry fixture',1,0.01,'EUR','paid','test',now(),now())
+    values(project_id,'ai_inference','Reconciled retry fixture',0.08,0.01,'EUR','paid','test',now(),now())
     returning id into expense_id;
   insert into public.agent_run_spend_reservations(agent_run_id,attempt,expense_id,provider,model,
       reserved_amount,actual_amount,usage,status,settled_at)
-    values(run_id,3,expense_id,'openai','gpt-6-luna',1,0.01,
+    values(run_id,3,expense_id,'openai','gpt-6-luna',0.08,0.01,
       '{"input_tokens":1,"output_tokens":1}'::jsonb,'reconciled',now());
   insert into automatic_retry_fixture values(task_id,project_id,run_id);
 end;
