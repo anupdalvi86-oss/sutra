@@ -57,7 +57,7 @@ begin
     end if;
   end loop;
   return true;
-end
+end;
 $$;
 revoke all on function public.sutra_validate_task_artifact(text,jsonb) from public,anon,authenticated,service_role;
 
