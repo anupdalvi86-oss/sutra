@@ -197,6 +197,46 @@ class FounderCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
             parse_founder_command(f"clear legal hold {project_id} because short")
 
+    def test_founder_can_record_or_withdraw_audited_customer_crm_consent(self):
+        customer_id = "00000000-0000-4000-8000-000000000031"
+        record = f"CEO, record CRM consent for {customer_id} because customer signed CRM sharing form 42."
+        parsed = parse_founder_command(record)
+        self.assertEqual(parsed.kind, "set_customer_crm_consent")
+        self.assertEqual(parsed.crm_customer_id, customer_id)
+        self.assertIs(parsed.crm_consent, True)
+        self.assertEqual(parsed.crm_consent_evidence, "customer signed CRM sharing form 42")
+        self.store.rpc.return_value = {"customer_id": customer_id, "crm_sync_consent": True, "changed": True}
+        self.assertIn("does not start a CRM sync", self.router.handle(FOUNDER, FOUNDER, record).text)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_customer_crm_consent", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_customer_id": customer_id,
+            "p_consent": True,
+            "p_evidence_source": "customer signed CRM sharing form 42",
+        })
+
+        self.store.rpc.reset_mock()
+        self.store.rpc.return_value = {"customer_id": customer_id, "crm_sync_consent": False,
+                                      "queued_actions_cancelled": 2, "changed": True}
+        withdraw = f"withdraw customer CRM consent for {customer_id} because customer asked us to stop."
+        reply = self.router.handle(FOUNDER, FOUNDER, withdraw).text
+        self.assertIn("2 queued sync action(s) were cancelled", reply)
+        self.assertIn("reservations released", reply)
+        self.store.rpc.assert_called_once_with("sutra_founder_set_customer_crm_consent", {
+            "p_founder_telegram_user_id": FOUNDER,
+            "p_customer_id": customer_id,
+            "p_consent": False,
+            "p_evidence_source": "customer asked us to stop",
+        })
+
+        self.store.rpc.reset_mock()
+        reply = self.router.handle("other-user", "other-user", record).text
+        self.assertIn("restricted", reply)
+        self.store.rpc.assert_not_called()
+        self.assertEqual(parse_founder_command("record CRM consent for not-a-uuid because invalid record").kind,
+                         "unsupported")
+        with self.assertRaisesRegex(ValueError, "8 to 500 characters"):
+            parse_founder_command(f"record CRM consent for {customer_id} because short")
+
     def test_board_status_explains_blocked_work_waiting_on_proposed_project_approval(self):
         snapshot = status_fixture()
         snapshot["projects"].append({

@@ -21,6 +21,7 @@ from .github_dispatch import GitHubIssues, GitHubTaskDispatcher
 from .codex_runner import CodexTaskRunner
 from .code_release import CodeReleaseWorker
 from .customer_email import CustomerEmailDeliveryWorker, ResendEmailProvider
+from .crm_hubspot import HubSpotContactClient, HubSpotContactSyncWorker
 from .customer_support import normalize_zendesk_ticket_event, verify_zendesk_signature
 from .drafts import DraftNotFound, DraftRequestError, DraftService, UserScopedSupabase
 from .github_webhook import normalize_github_event, verify_github_signature
@@ -109,6 +110,9 @@ class SutraApplication:
         self.code_release_status = "disabled"
         self.customer_email_worker_thread: threading.Thread | None = None
         self.customer_email_worker_status = "disabled"
+        self.hubspot_sync_worker_thread: threading.Thread | None = None
+        self.hubspot_sync_worker_status = "disabled"
+        self.hubspot_private_app_token = os.environ.get("HUBSPOT_PRIVATE_APP_TOKEN", "").strip()
         self.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         self.github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
         self.zendesk_webhook_secret = os.environ.get("ZENDESK_WEBHOOK_SECRET", "")
@@ -263,6 +267,21 @@ class SutraApplication:
                     self.customer_email_worker_status = "running"
                 except ValueError:
                     self.customer_email_worker_status = "blocked_runtime_configuration"
+        if os.environ.get("SUTRA_ENABLE_HUBSPOT_SYNC_WORKER", "false").lower() == "true":
+            if not self.store or not self.hubspot_private_app_token:
+                self.hubspot_sync_worker_status = "blocked_runtime_configuration"
+            else:
+                try:
+                    provider = HubSpotContactClient(self.hubspot_private_app_token)
+                    worker_id = "sutra-worker-hubspot" + uuid.uuid4().hex[:12]
+                    worker = HubSpotContactSyncWorker(self.store, provider, worker_id)
+                    self.hubspot_sync_worker_thread = threading.Thread(
+                        target=worker.run, args=(self.telegram_stop,), daemon=True,
+                        name="sutra-hubspot-contact-sync-worker")
+                    self.hubspot_sync_worker_thread.start()
+                    self.hubspot_sync_worker_status = "running"
+                except ValueError:
+                    self.hubspot_sync_worker_status = "blocked_runtime_configuration"
         if os.environ.get("SUTRA_ENABLE_TELEGRAM", "false").lower() == "true":
             if not self.store or not self.router or not self.telegram_token:
                 self.telegram_status = "unconfigured"
@@ -326,6 +345,7 @@ class SutraApplication:
             "codex_runner": self.codex_runner_status,
             "code_release_worker": self.code_release_status,
             "customer_email_worker": self.customer_email_worker_status,
+            "hubspot_sync_worker": self.hubspot_sync_worker_status,
             "github_webhook": "configured" if self.github_webhook_secret and self.github_repository else "unconfigured",
             "zendesk_webhook": zendesk_state,
         }
@@ -342,6 +362,7 @@ class SutraApplication:
             "codex_runner": health["codex_runner"],
             "code_release_worker": health["code_release_worker"],
             "customer_email_worker": health["customer_email_worker"],
+            "hubspot_sync_worker": health["hubspot_sync_worker"],
             "github_webhook": health["github_webhook"],
             "zendesk_webhook": health["zendesk_webhook"],
         }
@@ -354,6 +375,7 @@ class SutraApplication:
         codex_enabled = os.environ.get("SUTRA_ENABLE_CODEX_RUNNER", "false").lower() == "true"
         code_release_enabled = os.environ.get("SUTRA_ENABLE_CODE_RELEASE_WORKER", "false").lower() == "true"
         customer_email_enabled = os.environ.get("SUTRA_ENABLE_CUSTOMER_EMAIL_WORKER", "false").lower() == "true"
+        hubspot_enabled = os.environ.get("SUTRA_ENABLE_HUBSPOT_SYNC_WORKER", "false").lower() == "true"
         if telegram_enabled and health["telegram"] != "running":
             blockers.append("telegram")
         if worker_enabled and health["agent_worker"] != "running":
@@ -371,6 +393,8 @@ class SutraApplication:
             blockers.append("code_release_worker")
         if customer_email_enabled and health["customer_email_worker"] != "running":
             blockers.append("customer_email_worker")
+        if hubspot_enabled and health["hubspot_sync_worker"] != "running":
+            blockers.append("hubspot_sync_worker")
         zendesk_enabled = os.environ.get("SUTRA_ENABLE_ZENDESK_WEBHOOK", "false").lower() == "true"
         if zendesk_enabled and health["zendesk_webhook"] != "configured":
             blockers.append("zendesk_webhook")
@@ -397,6 +421,8 @@ class SutraApplication:
             self.code_release_thread.join(timeout=2)
         if self.customer_email_worker_thread:
             self.customer_email_worker_thread.join(timeout=2)
+        if self.hubspot_sync_worker_thread:
+            self.hubspot_sync_worker_thread.join(timeout=2)
 
 
 class SutraHandler(BaseHTTPRequestHandler):
@@ -465,7 +491,7 @@ class SutraHandler(BaseHTTPRequestHandler):
         if path == "/v1/drafts":
             self._draft_request("POST", path)
             return
-        if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update", "/internal/task-review", "/internal/customer-email"}:
+        if path not in {"/internal/spend", "/internal/role-approval", "/internal/task-update", "/internal/task-review", "/internal/customer-email", "/internal/customer-crm-sync"}:
             self._json(404, {"error": "not_found"})
             return
         token = self.app.internal_token
@@ -478,7 +504,35 @@ class SutraHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_json()
-            if path == "/internal/customer-email":
+            if path == "/internal/customer-crm-sync":
+                if self.app.hubspot_sync_worker_status != "running":
+                    self._json(503, {"error": "crm_sync_worker_disabled"})
+                    return
+                allowed = {"actor_agent_id", "task_id", "project_id", "customer_id",
+                           "estimated_cost_eur", "idempotency_key"}
+                if set(payload) != allowed:
+                    raise ValueError("Malformed customer CRM sync request")
+                estimated_cost = payload["estimated_cost_eur"]
+                if (not isinstance(estimated_cost, (int, float)) or isinstance(estimated_cost, bool)
+                        or estimated_cost <= 0 or estimated_cost > 999999999999.99
+                        or (isinstance(estimated_cost, float) and not math.isfinite(estimated_cost))):
+                    raise ValueError("Estimated cost must be finite, positive EUR within the supported range")
+                idempotency_key = payload["idempotency_key"]
+                if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", idempotency_key):
+                    raise ValueError("CRM sync requires an 8 to 128 character idempotency key")
+                try:
+                    agent_id = str(uuid.UUID(str(payload["actor_agent_id"])))
+                    task_id = str(uuid.UUID(str(payload["task_id"])))
+                    project_id = str(uuid.UUID(str(payload["project_id"])))
+                    customer_id = str(uuid.UUID(str(payload["customer_id"])))
+                except (TypeError, ValueError, AttributeError) as exc:
+                    raise ValueError("Customer CRM sync IDs must be UUIDs") from exc
+                result = self.app.store.rpc("sutra_queue_customer_crm_sync", {
+                    "p_agent_id": agent_id, "p_task_id": task_id, "p_project_id": project_id,
+                    "p_customer_id": customer_id, "p_estimated_cost_eur": estimated_cost,
+                    "p_idempotency_key": idempotency_key,
+                })
+            elif path == "/internal/customer-email":
                 allowed = {
                     "actor_agent_id", "actor_agent_slug", "task_id", "project_id", "customer_id",
                     "purpose", "subject", "body_text", "estimated_cost_eur", "idempotency_key",

@@ -1,8 +1,12 @@
 import json
+import os
 import unittest
 import urllib.error
+from unittest.mock import Mock
+from unittest.mock import patch
 
-from sutra.crm_hubspot import HubSpotContactClient
+from sutra.crm_hubspot import HubSpotContactClient, HubSpotContactSyncWorker, HubSpotSyncResult
+from sutra.server import SutraApplication
 
 
 class FakeResponse:
@@ -71,6 +75,69 @@ class HubSpotContactClientTests(unittest.TestCase):
             urllib.error.HTTPError("https://api.hubapi.com/", 429, "throttled", {}, None))
         result = self.client.upsert_contact({"email": "a@example.test", "name": "A", "company": None})
         self.assertEqual((result.outcome, result.error_code), ("unknown", "provider_outcome_unknown"))
+
+
+class HubSpotSyncWorkerTests(unittest.TestCase):
+    def setUp(self):
+        self.store = Mock()
+        self.provider = Mock()
+        self.worker = HubSpotContactSyncWorker(self.store, self.provider)
+        self.claim = {"status": "claimed", "action_id": "action-1", "claim_token": "claim-1",
+                      "ledger_id": "ledger-1", "action": {"email": "a@example.test", "name": "A",
+                                                                "company": None}}
+        self.store.claim_customer_crm_sync_action.return_value = self.claim
+
+    def test_idle_worker_makes_no_provider_call(self):
+        self.store.claim_customer_crm_sync_action.return_value = None
+        self.assertFalse(self.worker.run_once())
+        self.provider.upsert_contact.assert_not_called()
+
+    def test_rechecks_authorization_before_provider_request(self):
+        self.store.validate_customer_crm_sync_claim.return_value = False
+        self.assertTrue(self.worker.run_once())
+        self.provider.upsert_contact.assert_not_called()
+        self.store.finish_customer_crm_sync_action.assert_called_once_with(
+            self.worker.worker_id, "action-1", "claim-1", "failed", None,
+            "authorization_revoked", 0, True,
+        )
+
+    def test_success_settles_actual_cost_and_persists_provider_id(self):
+        self.store.validate_customer_crm_sync_claim.return_value = True
+        self.provider.upsert_contact.return_value = HubSpotSyncResult("synced", contact_id="hubspot-123")
+        self.assertTrue(self.worker.run_once())
+        self.provider.upsert_contact.assert_called_once_with(self.claim["action"])
+        self.store.finish_customer_crm_sync_action.assert_called_once_with(
+            self.worker.worker_id, "action-1", "claim-1", "synced", "hubspot-123", None, 0, True,
+        )
+
+    def test_ambiguous_provider_outcome_keeps_unknown_reservation(self):
+        self.store.validate_customer_crm_sync_claim.return_value = True
+        self.provider.upsert_contact.return_value = HubSpotSyncResult(
+            "unknown", error_code="provider_outcome_unknown")
+        self.assertTrue(self.worker.run_once())
+        self.store.finish_customer_crm_sync_action.assert_called_once_with(
+            self.worker.worker_id, "action-1", "claim-1", "unknown", None,
+            "provider_outcome_unknown", None, False,
+        )
+
+
+class HubSpotWorkerConfigurationTests(unittest.TestCase):
+    def test_worker_and_external_writes_stay_disabled_without_explicit_flag(self):
+        app = SutraApplication()
+        app.store = Mock()
+        with patch.dict(os.environ, {
+            "SUTRA_ENABLE_HUBSPOT_SYNC_WORKER": "false",
+            "SUTRA_ENABLE_TELEGRAM": "false",
+            "SUTRA_ENABLE_AGENT_WORKER": "false",
+            "SUTRA_ENABLE_GITHUB_DISPATCHER": "false",
+            "SUTRA_ENABLE_CODEX_RUNNER": "false",
+            "SUTRA_ENABLE_CODE_RELEASE_WORKER": "false",
+            "SUTRA_ENABLE_CUSTOMER_EMAIL_WORKER": "false",
+        }, clear=True):
+            app.start()
+            self.assertEqual(app.hubspot_sync_worker_status, "disabled")
+            self.assertIsNone(app.hubspot_sync_worker_thread)
+            app.close()
 
 
 if __name__ == "__main__":

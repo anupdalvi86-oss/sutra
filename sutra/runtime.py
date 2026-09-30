@@ -304,6 +304,37 @@ class SupabaseREST:
             raise IntegrationError("Supabase returned an invalid customer email result")
         return result
 
+    def claim_customer_crm_sync_action(self, worker_id: str) -> dict[str, Any] | None:
+        result = self.rpc("sutra_claim_customer_crm_sync_action", {"p_worker_id": worker_id})
+        if result is None:
+            return None
+        if not isinstance(result, dict) or result.get("status") != "claimed":
+            raise IntegrationError("Supabase returned an invalid CRM sync claim")
+        return result
+
+    def validate_customer_crm_sync_claim(self, worker_id: str, action_id: str,
+                                         claim_token: str) -> bool:
+        result = self.rpc("sutra_validate_customer_crm_sync_claim", {
+            "p_worker_id": worker_id, "p_action_id": action_id, "p_claim_token": claim_token,
+        })
+        if not isinstance(result, bool):
+            raise IntegrationError("Supabase returned an invalid CRM sync authorization")
+        return result
+
+    def finish_customer_crm_sync_action(self, worker_id: str, action_id: str,
+                                        claim_token: str, status: str,
+                                        external_contact_id: str | None, error_code: str | None,
+                                        actual_cost_eur: float | None, cost_known: bool) -> dict[str, Any]:
+        result = self.rpc("sutra_finish_customer_crm_sync_action", {
+            "p_worker_id": worker_id, "p_action_id": action_id, "p_claim_token": claim_token,
+            "p_status": status, "p_external_contact_id": external_contact_id,
+            "p_error_code": error_code, "p_actual_cost_eur": actual_cost_eur,
+            "p_cost_known": cost_known,
+        })
+        if not isinstance(result, dict) or result.get("status") != status:
+            raise IntegrationError("Supabase returned an invalid CRM sync result")
+        return result
+
     def fail_github_task(self, worker_id: str, task_id: str, lease_token: str,
                          error_code: str) -> dict[str, Any]:
         return self.rpc("sutra_fail_github_task_dispatch", {
@@ -407,6 +438,9 @@ class FounderCommand:
     project_legal_hold: bool | None = None
     authorization_id: str | None = None
     authorization_reason: str = ""
+    crm_customer_id: str | None = None
+    crm_consent: bool | None = None
+    crm_consent_evidence: str = ""
 
 
 @dataclass(frozen=True)
@@ -470,6 +504,10 @@ LEGAL_DISPOSITION_RE = re.compile(
 )
 PROJECT_LEGAL_HOLD_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(set|clear)\s+(?:the\s+)?legal\s+hold\s+(?:for\s+)?([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+CUSTOMER_CRM_CONSENT_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(record|withdraw)\s+(?:customer\s+)?crm\s+consent\s+for\s+([0-9a-f-]{36})\s+because\s+(.+?)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 CODE_AUTHORITY_STATUS_RE = re.compile(
@@ -629,6 +667,19 @@ def parse_founder_command(text: str) -> FounderCommand:
             raise ValueError("Review task reason must contain 8 to 500 characters")
         return FounderCommand("defer_review_chain", text.strip(), task_id=task_id, task_reason=reason)
     lowered = text.lower()
+    match = CUSTOMER_CRM_CONSENT_RE.fullmatch(text)
+    if match:
+        try:
+            customer_id = str(uuid.UUID(match.group(2)))
+        except ValueError as exc:
+            raise ValueError("CRM consent command needs a valid customer ID") from exc
+        evidence = match.group(3).strip()
+        if len(evidence) < 8 or len(evidence) > 500:
+            raise ValueError("CRM consent evidence or withdrawal reason must contain 8 to 500 characters")
+        return FounderCommand("set_customer_crm_consent", text.strip(),
+                              crm_customer_id=customer_id,
+                              crm_consent=match.group(1).lower() == "record",
+                              crm_consent_evidence=evidence)
     match = PROJECT_LEGAL_HOLD_RE.fullmatch(text)
     if match:
         try:
@@ -741,6 +792,25 @@ class FounderCommandRouter:
             lines.append("Record a disposition with: record legal case <case-id> as continue within budget, stop, or seek legal counsel because <reason>.")
             lines.append("Recording a disposition does not resume work or authorize contracts, legal commitments, or spending above the existing budget.")
             return FounderResponse("\n".join(lines))
+        if command.kind == "set_customer_crm_consent":
+            try:
+                result = self.store.rpc("sutra_founder_set_customer_crm_consent", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_customer_id": command.crm_customer_id,
+                    "p_consent": command.crm_consent,
+                    "p_evidence_source": command.crm_consent_evidence,
+                })
+            except IntegrationError:
+                action = "recorded" if command.crm_consent else "withdrawn"
+                return FounderResponse(f"CRM sharing consent was not {action}; only the configured founder can change a customer's audited consent record.")
+            if command.crm_consent:
+                return FounderResponse(
+                    f"CRM sharing consent recorded for customer {result.get('customer_id')}; the evidence source and founder action are audit logged. This does not start a CRM sync."
+                )
+            cancelled = result.get("queued_actions_cancelled", 0)
+            return FounderResponse(
+                f"CRM sharing consent withdrawn for customer {result.get('customer_id')}; {cancelled} queued sync action(s) were cancelled and their reservations released. Any in-flight provider call is not retried."
+            )
         if command.kind == "set_project_legal_hold":
             try:
                 result = self.store.rpc("sutra_founder_set_project_legal_hold", {
