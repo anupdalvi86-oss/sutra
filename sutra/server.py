@@ -508,6 +508,8 @@ class SutraHandler(BaseHTTPRequestHandler):
                 if self.app.hubspot_sync_worker_status != "running":
                     self._json(503, {"error": "crm_sync_worker_disabled"})
                     return
+                if not isinstance(payload, dict):
+                    raise ValueError("Malformed customer CRM sync request")
                 allowed = {"actor_agent_id", "task_id", "project_id", "customer_id",
                            "estimated_cost_eur", "idempotency_key"}
                 if set(payload) != allowed:

@@ -130,6 +130,12 @@ class InternalEndpointTests(unittest.TestCase):
                 self.post_path("/internal/customer-crm-sync", malformed, "unit-test-only-token")
         self.assertEqual(invalid.exception.code, 400)
         rpc.assert_called_once()
+        for malformed_json in ([], "not-an-object", 7, None):
+            with self.subTest(payload=malformed_json), patch.object(self.app.store, "rpc", rpc):
+                with self.assertRaises(HTTPError) as invalid:
+                    self.post_path("/internal/customer-crm-sync", malformed_json, "unit-test-only-token")
+                self.assertEqual(invalid.exception.code, 400)
+        rpc.assert_called_once()
 
     def test_customer_email_queue_rejects_malformed_scope_content_and_cost(self):
         payload = {
