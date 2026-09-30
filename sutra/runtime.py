@@ -27,6 +27,22 @@ class IntegrationError(RuntimeError):
         self.code = code if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code) else "integration_error"
 
 
+def _safe_supabase_database_error_code(body: bytes) -> str | None:
+    """Map PostgREST SQLSTATEs to safe categories without retaining error text."""
+    try:
+        payload = json.loads(body[:2048])
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "22023": "supabase_db_validation",
+        "42501": "supabase_db_authorization",
+        "23514": "supabase_db_policy",
+        "23505": "supabase_db_conflict",
+    }.get(payload.get("code"))
+
+
 def validate_outbound_request(request: urllib.request.Request) -> None:
     """Allow HTTPS integrations and only the private Railway HTTP network."""
     try:
@@ -83,6 +99,13 @@ class SupabaseREST:
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
             status = exc.code if isinstance(exc.code, int) and 100 <= exc.code <= 599 else None
+            try:
+                error_body = exc.read(2048)
+            except (AttributeError, OSError):
+                error_body = b""
+            safe_database_code = _safe_supabase_database_error_code(error_body)
+            if safe_database_code is not None:
+                raise IntegrationError("Supabase database request was rejected", code=safe_database_code) from exc
             code = f"supabase_http_{status}" if status is not None else "supabase_http_error"
             raise IntegrationError("Supabase request failed", code=code) from exc
         except (urllib.error.URLError, TimeoutError) as exc:

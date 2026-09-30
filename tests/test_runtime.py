@@ -1,4 +1,6 @@
 import unittest
+import io
+import json
 import urllib.error
 import urllib.request
 from unittest.mock import Mock, patch
@@ -790,6 +792,22 @@ class FounderCommandTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "supabase_http_403")
         self.assertNotIn("private database detail", str(caught.exception))
+        self.assertNotIn("secret", str(caught.exception))
+
+    def test_supabase_database_errors_keep_only_allowlisted_sqlstate_category(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        private_body = json.dumps({
+            "code": "22023", "message": "private token count and request detail",
+        }).encode()
+        upstream = urllib.error.HTTPError(
+            "https://sutra.example/rest/v1/rpc/secret", 400, "Bad Request", {}, io.BytesIO(private_body),
+        )
+        with patch("sutra.runtime.open_outbound_request", side_effect=upstream):
+            with self.assertRaises(IntegrationError) as caught:
+                store.request("rpc/sutra_reconcile_agent_run_spend_from_usage", "POST", {})
+
+        self.assertEqual(caught.exception.code, "supabase_db_validation")
+        self.assertNotIn("private token count", str(caught.exception))
         self.assertNotIn("secret", str(caught.exception))
 
     def test_status_snapshot_reads_projects_tasks_approvals_and_financial_controls(self):

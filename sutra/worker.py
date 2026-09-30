@@ -910,13 +910,20 @@ class AgentWorker:
         self.role_routes = role_routes or {}
         self.support_context_provider = support_context_provider
         self.worker_id = worker_id or "sutra-worker-" + uuid.uuid4().hex[:16]
+        self._last_settlement_error_code: str | None = None
 
     def _settle_spend(self, run: dict[str, Any], reservation_id: str,
                       usage: dict[str, Any] | None, provider: str, model: str) -> str:
+        self._last_settlement_error_code = None
         try:
             settled = self.store.reconcile_agent_run_spend(
                 self.worker_id, run, reservation_id, provider, model, usage)
-        except IntegrationError:
+        except IntegrationError as exc:
+            if exc.code in {
+                "supabase_db_validation", "supabase_db_authorization",
+                "supabase_db_policy", "supabase_db_conflict",
+            }:
+                self._last_settlement_error_code = exc.code
             if usage is None:
                 raise
             settled = self.store.reconcile_agent_run_spend(
@@ -1046,6 +1053,10 @@ class AgentWorker:
                     response_shape = diagnostics.get("response_context_shape")
                     if isinstance(response_shape, str) and len(response_shape) <= 160:
                         output["response_context_shape"] = response_shape
+                if is_kimi_probe and spend_status in {"unknown", "overrun"}:
+                    output["spend_status"] = spend_status
+                if is_kimi_probe and self._last_settlement_error_code is not None:
+                    output["settlement_error_code"] = self._last_settlement_error_code
                 self.store.complete_agent_run(self.worker_id, run, "failed",
                     output, "unknown_or_overrun_spend")
                 return "failed_unknown_spend"
@@ -1119,6 +1130,10 @@ class AgentWorker:
                     value = diagnostics.get(key)
                     if isinstance(value, str) and len(value) <= 160:
                         output[key] = value
+            if is_kimi_probe and spend_status in {"unknown", "overrun"}:
+                output["spend_status"] = spend_status
+            if is_kimi_probe and self._last_settlement_error_code is not None:
+                output["settlement_error_code"] = self._last_settlement_error_code
             self.store.complete_agent_run(self.worker_id, run, "failed",
                 output, "unknown_or_overrun_spend")
             return "failed_unknown_spend"

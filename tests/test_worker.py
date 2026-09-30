@@ -747,6 +747,35 @@ class AgentArtifactTests(unittest.TestCase):
         self.assertNotEqual(store.complete_agent_run.call_args.args[2], "retry")
         self.assertEqual(store.complete_agent_run.call_args.args[3]["usage_envelope_shape"], "usage_missing")
 
+    def test_kimi_probe_keeps_only_safe_settlement_failure_categories(self):
+        run = claimed_run("ceo")
+        run["attempt"] = 1
+        run["input"]["provider_usage_probe"] = "kimi"
+        store = self.approved_store()
+        store.claim_agent_run.return_value = run
+        store.reconcile_agent_run_spend.side_effect = [
+            IntegrationError("private database response", code="supabase_db_validation"),
+            {"status": "unknown"},
+        ]
+        hermes = Mock()
+        hermes.review.return_value = (artifact("ceo"), {"prompt_tokens": 20, "completion_tokens": 10})
+        hermes.last_usage_diagnostics = {
+            "usage_envelope_shape": "usage_object:prompt_tokens=int,completion_tokens=int,total_tokens=int",
+            "response_context_shape": "keys=choices,usage,finish=stop",
+        }
+        worker = AgentWorker(store, hermes, "openai", "gpt-6-luna",
+                             worker_id="sutra-worker-12345678")
+
+        self.assertEqual(worker.run_once(), "failed_unknown_spend")
+        output = store.complete_agent_run.call_args.args[3]
+        self.assertEqual(output["spend_status"], "unknown")
+        self.assertEqual(output["settlement_error_code"], "supabase_db_validation")
+        self.assertNotIn("private database response", json.dumps(output))
+        self.assertNotIn("20", json.dumps(output))
+        self.assertNotIn("10", json.dumps(output))
+        self.assertEqual(store.reconcile_agent_run_spend.call_count, 2)
+        self.assertIsNone(store.reconcile_agent_run_spend.call_args_list[1].args[-1])
+
     def test_unverified_malformed_hermes_artifact_persists_only_safe_response_shape(self):
         store = self.approved_store("ceo")
         store.reconcile_agent_run_spend.side_effect = lambda *_args: {"status": "unknown"}
