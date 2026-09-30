@@ -64,6 +64,26 @@ select is((select status from public.campaigns where source_task_id=(select task
 select ok(exists(select 1 from public.audit_log where action='marketing.campaign_delivery_started'
   and resource_id=(select id::text from public.campaigns where source_task_id=(select task_id from campaign_email_fixture))),
   'first campaign delivery is audit logged');
+select ok(has_function_privilege('service_role','public.sutra_company_campaign_performance()','EXECUTE')
+  and not has_function_privilege('anon','public.sutra_company_campaign_performance()','EXECUTE')
+  and not has_function_privilege('authenticated','public.sutra_company_campaign_performance()','EXECUTE'),
+  'campaign performance is service-only');
+select is((select (performance->>'sent_count')::integer
+    from jsonb_array_elements(public.sutra_company_campaign_performance()) performance
+    where performance->>'campaign_id'=(select id::text from public.campaigns
+      where source_task_id=(select task_id from campaign_email_fixture))),1,
+  'campaign performance reports sent delivery count');
+select is((select (performance->>'unknown_cost_eur')::numeric
+    from jsonb_array_elements(public.sutra_company_campaign_performance()) performance
+    where performance->>'campaign_id'=(select id::text from public.campaigns
+      where source_task_id=(select task_id from campaign_email_fixture))),0.05::numeric,
+  'campaign performance keeps unknown provider usage reserved as unknown cost');
+select ok((select performance::text not like '%campaign@example.test%'
+    and performance::text not like '%Campaign message one%'
+    from jsonb_array_elements(public.sutra_company_campaign_performance()) performance
+    where performance->>'campaign_id'=(select id::text from public.campaigns
+      where source_task_id=(select task_id from campaign_email_fixture))),
+  'campaign status output excludes recipient and message content');
 
 select throws_ok($$select public.sutra_queue_customer_email(
   (select cmo_id from campaign_email_fixture),'cmo',(select task_id from campaign_email_fixture),

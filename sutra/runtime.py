@@ -429,6 +429,24 @@ class SupabaseREST:
             snapshot["support_case_status"] = None
             status_errors.append("support_cases")
         try:
+            campaign_performance = self.request("rpc/sutra_company_campaign_performance", "POST", {})
+            if (not isinstance(campaign_performance, list) or len(campaign_performance) > 100
+                    or not all(isinstance(row, dict) for row in campaign_performance)):
+                raise IntegrationError("invalid campaign performance")
+            required_counts = ("sent_count", "queued_count", "sending_count", "unknown_count", "failed_count")
+            required_costs = ("reserved_cost_eur", "unknown_cost_eur", "actual_cost_eur")
+            for row in campaign_performance:
+                if (not isinstance(row.get("campaign_id"), str)
+                        or not isinstance(row.get("status"), str) or len(row["status"]) > 32
+                        or any(type(row.get(key)) is not int or row[key] < 0 for key in required_counts)
+                        or any(type(row.get(key)) not in (int, float) or not math.isfinite(row[key])
+                               or row[key] < 0 for key in required_costs)):
+                    raise IntegrationError("invalid campaign performance")
+            snapshot["campaign_performance"] = campaign_performance
+        except IntegrationError:
+            snapshot["campaign_performance"] = []
+            status_errors.append("campaign_performance")
+        try:
             dispatch_status = self.rpc("sutra_company_github_dispatch_status", {})
             dispatches = dispatch_status.get("dispatches")
             if not isinstance(dispatches, list) or not all(isinstance(row, dict) for row in dispatches):
@@ -1745,6 +1763,10 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
     campaign_rows = snapshot.get("campaigns", []) if include_campaigns else []
     if include_campaigns:
         lines.extend(["", "Marketing pipeline"])
+        performance_by_id = {
+            item["campaign_id"]: item for item in snapshot.get("campaign_performance", [])
+            if isinstance(item, dict) and isinstance(item.get("campaign_id"), str)
+        }
         campaign_counts: dict[str, int] = {}
         for campaign in campaign_rows:
             campaign_status = str(campaign.get("status") or "unknown")
@@ -1758,6 +1780,15 @@ def render_status_brief(snapshot: dict[str, list[dict[str, Any]]], requested_rol
             budget = (f"; draft ceiling {str(campaign.get('currency') or 'EUR')[:3]} {amount}"
                       if isinstance(amount, (int, float)) and amount > 0 else "")
             lines.append(f"• [{campaign.get('status', 'unknown')}] {name} — {channel}{budget}")
+            performance = performance_by_id.get(campaign.get("id"))
+            if performance:
+                delivery = (f"sent {performance['sent_count']}, queued {performance['queued_count']}, "
+                            f"sending {performance['sending_count']}, unknown {performance['unknown_count']}, "
+                            f"failed {performance['failed_count']}")
+                costs = (f"reserved €{performance['reserved_cost_eur']:.2f}, "
+                         f"unknown €{performance['unknown_cost_eur']:.2f}, "
+                         f"actual €{performance['actual_cost_eur']:.2f}")
+                lines.append(f"  Delivery: {delivery}; email spend: {costs}.")
         if not campaign_rows:
             lines.append("• No campaign records are currently recorded.")
         if len(campaign_rows) > 5:

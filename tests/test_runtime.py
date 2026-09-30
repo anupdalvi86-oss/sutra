@@ -52,6 +52,10 @@ def status_fixture():
                            "currency": "EUR"}],
         "campaigns": [{"id": "campaign-1", "project_id": "project-1", "name": "QA pilot positioning",
                        "channel": "internal", "status": "draft", "budget_amount": 0, "currency": "EUR"}],
+        "campaign_performance": [{"campaign_id": "campaign-1", "status": "draft", "sent_count": 0,
+                                   "queued_count": 0, "sending_count": 0, "unknown_count": 0,
+                                   "failed_count": 0, "reserved_cost_eur": 0,
+                                   "unknown_cost_eur": 0, "actual_cost_eur": 0}],
         "customers": [{"id": "lead-1", "name": "Synthetic lead", "company": "Example Co",
                        "source": "test fixture", "status": "qualified"}],
         "customer_email_actions": [],
@@ -376,6 +380,8 @@ class FounderCommandTests(unittest.TestCase):
         self.assertIn("Objective [active]: Validate buyer demand", reply)
         self.assertIn("Marketing pipeline", reply)
         self.assertIn("[draft] QA pilot positioning — internal", reply)
+        self.assertIn("Delivery: sent 0, queued 0, sending 0, unknown 0, failed 0", reply)
+        self.assertIn("email spend: reserved €0.00, unknown €0.00, actual €0.00", reply)
         self.assertIn("Customer communications", reply)
         self.assertIn("No budgeted customer email actions are queued or recorded", reply)
         self.assertIn("Customer support queue", reply)
@@ -797,7 +803,7 @@ class FounderCommandTests(unittest.TestCase):
             "customers", "customer_email_actions",
         )
         store.request = Mock(side_effect=[expected[key] for key in request_order] + [
-            expected["support_case_status"], expected["code_releases"],
+            expected["support_case_status"], expected["campaign_performance"], expected["code_releases"],
         ])
         store.rpc = Mock(return_value={"dispatches": expected["github_dispatches"]})
         expected.pop("legal_escalations")
@@ -819,15 +825,18 @@ class FounderCommandTests(unittest.TestCase):
         self.assertTrue(any(path.startswith("customer_email_actions?") and "body_text" not in path
                             and "recipient_email" not in path for path in requested_paths))
         self.assertIn("rpc/sutra_company_support_case_status", requested_paths)
+        self.assertIn("rpc/sutra_company_campaign_performance", requested_paths)
         self.assertEqual(store.request.call_args_list[-1], unittest.mock.call(
             "rpc/sutra_company_code_release_status", "POST", {}))
+        self.assertEqual(store.request.call_args_list[-2], unittest.mock.call(
+            "rpc/sutra_company_campaign_performance", "POST", {}))
         self.assertEqual(store.rpc.call_args_list, [
             unittest.mock.call("sutra_company_github_dispatch_status", {}),
         ])
 
     def test_status_snapshot_keeps_healthy_sections_when_one_source_is_unavailable(self):
         store = SupabaseREST("https://sutra.example", "server-key")
-        malformed_responses = [[] for _ in range(16)]
+        malformed_responses = [[] for _ in range(17)]
         malformed_responses[6] = None
         store.request = Mock(side_effect=malformed_responses)
         store.rpc = Mock(return_value={"dispatches": []})
@@ -845,11 +854,21 @@ class FounderCommandTests(unittest.TestCase):
             "open_by_age": {"under_24h": 0, "24_to_72h": 0, "over_72h": 0},
             "oldest_open_hours": 50,
         }
-        store.request = Mock(side_effect=[[] for _ in range(14)] + [malformed_support, []])
+        store.request = Mock(side_effect=[[] for _ in range(14)] + [malformed_support, [], []])
         store.rpc = Mock(return_value={"dispatches": []})
         status = store.company_status()
         self.assertIsNone(status["support_case_status"])
         self.assertIn("support_cases", status["status_errors"])
+
+    def test_status_snapshot_rejects_malformed_campaign_performance(self):
+        store = SupabaseREST("https://sutra.example", "server-key")
+        malformed = [{"campaign_id": "campaign-1", "status": "active", "sent_count": True}]
+        support = status_fixture()["support_case_status"]
+        store.request = Mock(side_effect=[[] for _ in range(14)] + [support, malformed, []])
+        store.rpc = Mock(return_value={"dispatches": []})
+        status = store.company_status()
+        self.assertEqual(status["campaign_performance"], [])
+        self.assertIn("campaign_performance", status["status_errors"])
 
     def test_status_snapshot_records_failed_rpc_without_discarding_other_sources(self):
         store = SupabaseREST("https://sutra.example", "server-key")
