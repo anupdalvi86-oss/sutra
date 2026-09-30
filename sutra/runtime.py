@@ -384,6 +384,8 @@ class FounderCommand:
     task_reason: str = ""
     status_role: str = "company"
     retry_limit: int | None = None
+    email_cost_ceiling: float | None = None
+    email_cost_reason: str = ""
     project_id: str | None = None
     new_budget: float | None = None
     budget_reason: str = ""
@@ -424,6 +426,14 @@ CODEX_RETRY_LIMIT_SET_RE = re.compile(
 )
 CODEX_RETRY_LIMIT_GET_RE = re.compile(
     r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?codex\s+no-request\s+retry\s+limit\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+EMAIL_COST_CEILING_SET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\s+to\s+(?:€|EUR\s*)?([0-9]+(?:[.,][0-9]{1,6})?)\s*(?:€|EUR)?\s+because\s+(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+EMAIL_COST_CEILING_GET_RE = re.compile(
+    r"^\s*(?:ceo[, :]\s*)?(?:show(?:\s+me)?|what\s+is)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\s*[?.!]*\s*$",
     re.IGNORECASE,
 )
 INITIATIVE_INTENT_RE = re.compile(
@@ -554,6 +564,20 @@ def parse_founder_command(text: str) -> FounderCommand:
         return FounderCommand("set_codex_retry_limit", text.strip(), retry_limit=total_attempts)
     if CODEX_RETRY_LIMIT_GET_RE.fullmatch(text):
         return FounderCommand("get_codex_retry_limit", text.strip())
+    match = EMAIL_COST_CEILING_SET_RE.fullmatch(text)
+    if match:
+        amount = float(match.group(1).replace(",", "."))
+        reason = match.group(2).strip()
+        if not math.isfinite(amount) or not 0.01 <= amount <= 100 or round(amount, 2) != amount:
+            raise ValueError("Customer email cost ceiling must be EUR 0.01 to 100.00 in cents")
+        if len(reason) < 8 or len(reason) > 500:
+            raise ValueError("Customer email ceiling change reason must contain 8 to 500 characters")
+        return FounderCommand("set_email_cost_ceiling", text.strip(),
+                              email_cost_ceiling=amount, email_cost_reason=reason)
+    if EMAIL_COST_CEILING_GET_RE.fullmatch(text):
+        return FounderCommand("get_email_cost_ceiling", text.strip())
+    if re.match(r"^\s*(?:ceo[, :]\s*)?(?:set|change)\s+(?:the\s+)?customer\s+email\s+cost\s+ceiling\b", text, re.IGNORECASE):
+        raise ValueError("Customer email cost ceiling must be EUR 0.01 to 100.00 in cents, followed by a reason")
     if CODE_AUTHORITY_STATUS_RE.fullmatch(text):
         return FounderCommand("code_authority_status", text.strip())
     match = CODE_AUTHORITY_REVOKE_RE.fullmatch(text)
@@ -1059,6 +1083,30 @@ class FounderCommandRouter:
             return FounderResponse(
                 f"Codex no-request retry limit {'changed' if changed else 'already set'}: {result.get('max_total_attempts')} total attempts per execution. {change_note} Existing spend policy, monthly hard cap, task scope, merge, and release authority are unchanged."
             )
+        if command.kind == "get_email_cost_ceiling":
+            try:
+                result = self.store.rpc("sutra_founder_get_customer_email_cost_ceiling", {
+                    "p_founder_telegram_user_id": user_id,
+                })
+            except IntegrationError:
+                return FounderResponse("I couldn't read the customer email cost ceiling. No setting changed; check the database connection and try again.")
+            if not result.get("configured"):
+                return FounderResponse("Customer email sending is blocked: no per-message cost ceiling is configured. Set one with: CEO, set customer email cost ceiling to €0.05 because <reason>. This changes audited database policy and sends no email.")
+            return FounderResponse(
+                f"Customer email maximum reserved cost per message: EUR {result.get('max_message_cost_eur')}. Only a founder can change it (EUR 0.01–100.00); raising it is blocked while sends are active or queued reservations are too small."
+            )
+        if command.kind == "set_email_cost_ceiling":
+            try:
+                result = self.store.rpc("sutra_founder_set_customer_email_cost_ceiling", {
+                    "p_founder_telegram_user_id": user_id,
+                    "p_max_message_cost_eur": command.email_cost_ceiling,
+                    "p_reason": command.email_cost_reason,
+                })
+            except IntegrationError:
+                return FounderResponse("Customer email cost ceiling unchanged. Only the configured founder can set EUR 0.01–100.00 with an 8–500 character reason; active sends or underfunded queued actions can prevent the change.")
+            return FounderResponse(
+                f"Customer email maximum reserved cost per message {'changed' if result.get('changed') else 'already set'} to EUR {result.get('max_message_cost_eur')}. The change is audit logged; no email was sent and no queue was started."
+            )
         return FounderResponse(
             "I can report company status, list founder approvals, prepare a budgeted proposal, or decide an approval.\n"
             "Use: CEO, give me company status.\n"
@@ -1076,6 +1124,8 @@ class FounderCommandRouter:
             "Use: retry Codex task <task-id> after a verified no-request runner failure.\n"
             "Use: CEO, show Codex no-request retry limit.\n"
             "Use: CEO, set Codex no-request retry limit to <1-3> total attempts. This only changes the audited founder setting; it does not retry a task.\n"
+            "Use: CEO, show customer email cost ceiling.\n"
+            "Use: CEO, set customer email cost ceiling to €0.05 because <reason>. This is a founder-only, audit-logged database control; it sends no email.\n"
             "Use: CEO, run one bounded Kimi usage probe. This authorizes one database-reserved request up to €0.10; it does not enable Kimi for role work.\n"
             "Use: retry agent review <run-id> for a bounded failed CEO/CPO/CTO/CFO stage.\n"
             "Use: Investigate <idea>. Maximum budget €<amount>. Prepare a proposal.\n"
