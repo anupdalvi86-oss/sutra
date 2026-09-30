@@ -28,13 +28,13 @@ The same report showed no campaign records, no customer/lead records, and no que
 ## Verification
 
 - The Supabase app connector requested reauthentication for this work session; no live database changes were made by this release branch.
-- Current code-only release-worker sprint: 118 focused Python tests and the full 268-test Python suite passed; `compileall`, `git diff --check`, and Bandit medium/high severity scan passed. Bandit reports only the existing B104 bind-all-interface warning for the Railway API server. PR #221's first hosted run passed all five checks; this status-only update will receive a final-head CI run. The branch adds no database migration and made no production changes.
+- Current code-only release-worker sprint is PR #221, open and unmerged. The 118 focused Python tests and full 268-test suite passed; `compileall`, `git diff --check`, and Bandit medium/high severity scan passed. Bandit reports only the existing B104 bind-all-interface warning for the Railway API server. PR #221's final-head CI run #36653943124 passed all five checks after one database-job rerun: the first run failed during local Supabase startup before migrations or SQL tests, and the retry passed. The branch adds no database migration and made no production changes.
 - Customer-email worker/provider tests: **11 passed**.
 - Full Python suite before this code-only sprint: **265 passed** on the PR #220 release state; **268 passed** with this sprint's changes.
 - `python3 -m compileall -q sutra tests`: passed.
 - `git diff --check`: passed.
 - Bandit 1.9.4 scan: no medium-or-higher findings (current local scan reports only the existing B104 Railway bind warning).
-- PRs #219 and #220 each passed all five required CI checks — Python tests/compile/Bandit, Supabase migration and pgTAP tests/database lint, API and Hermes container builds/startup checks, change detection, and secret scan. PR #221 first run #36653751582 also passed all five checks; CI will rerun on the final status-documentation commit.
+- PRs #219 and #220 each passed all five required CI checks — Python tests/compile/Bandit, Supabase migration and pgTAP tests/database lint, API and Hermes container builds/startup checks, change detection, and secret scan. PR #221's final-head checks are recorded above.
 - Production connectivity and smoke checks were previously successful: Supabase reported `ACTIVE_HEALTHY`; Railway was Online after PR #219; the Telegram email-ceiling command returned the expected unset-policy block. A fresh Supabase read now requires app reauthentication.
 - No real customer messages were sent and no paid integrations were activated.
 
