@@ -122,7 +122,7 @@ def task_artifact_output(role="product_manager"):
         "coo": {"operational_dependencies": ["On-call owner"], "readiness_checklist": ["Recovery procedure"], "incident_plan": "Route incidents to the service owner."},
         "devops": {"deployment_steps": ["Deploy candidate"], "health_checks": ["Verify health endpoint"], "rollback_steps": ["Restore previous image"]},
         "cmo": {"audience": "Engineering leaders evaluating quality tooling.", "positioning": "Reduce repetitive quality checks.", "draft_copy": "A draft for founder review only.", "claims": ["Supports this workflow"], "success_metrics": ["Qualified interest"]},
-        "sales": {"ideal_customer_profile": "Software teams with repeatable release processes.", "lead_criteria": ["Relevant team size"], "qualification_questions": ["How do you verify releases?"], "first_contact_draft": "Internal draft; do not send without approval."},
+        "sales": {"ideal_customer_profile": "Software teams with repeatable release processes.", "lead_criteria": ["Relevant team size"], "qualification_questions": ["How do you verify releases?"], "first_contact_draft": "A concise introduction for an assigned, consented customer."},
         "governance_audit": {"controls_checked": ["Approval gate"], "findings": ["No open finding"], "recommendation": "Retain the existing founder approval gate."},
     }
     result = {
@@ -137,6 +137,8 @@ def task_artifact_output(role="product_manager"):
     }
     if role in {"cpo", "cmo"}:
         result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the campaign claim."}]
+    if role in {"cmo", "sales"}:
+        result["customer_actions"] = []
     if role == "product_manager":
         result["evidence"] = [{"source": "Primary source", "url": "https://example.com/product", "claim": "The source supports the product planning assumption."}]
     return result
@@ -178,7 +180,7 @@ class AgentArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(AgentOutputError, "at least one cited HTTPS source"):
             validate_agent_artifact("product_manager", result, task_artifact_run("product_manager"))
 
-    def test_task_artifact_prompt_has_no_external_action_authority(self):
+    def test_task_artifact_prompt_routes_outreach_through_database_authorized_actions(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("sales"))}}],
                     "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
         fake_response = Mock()
@@ -189,13 +191,66 @@ class AgentArtifactTests(unittest.TestCase):
             client = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-4o-mini")
             client.review(task_artifact_run("sales"), max_output_tokens=500)
         prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
-        self.assertIn("Do not invent actual leads, contact anyone, or send messages", prompt)
+        self.assertIn("customer_actions", prompt)
+        self.assertIn("does not need routine founder approval", prompt)
+        self.assertIn("The database must confirm current consent", prompt)
+        self.assertIn("You cannot call a provider directly", prompt)
         self.assertIn("task_acceptance", request.call_args.args[0].data.decode())
         self.assertIn('"ideal_customer_profile":"..."', prompt)
         self.assertIn('"lead_criteria":["..."]', prompt)
         self.assertIn('"qualification_questions":["..."]', prompt)
         self.assertIn('"first_contact_draft":"..."', prompt)
-        self.assertIn("do not identify or invent a real lead", prompt)
+        self.assertIn("customer UUID named in this task", prompt)
+
+    def test_sales_customer_actions_require_an_explicit_task_customer_and_exact_fields(self):
+        customer_id = "7ec8ac47-7265-4695-8cc4-f1c8b498e8c4"
+        run = task_artifact_run("sales")
+        run["task_artifact"]["description"] += f" Assigned customer ID: {customer_id}."
+        output = task_artifact_output("sales")
+        output["customer_actions"] = [{
+            "customer_id": customer_id, "purpose": "sales", "subject": "Product overview",
+            "body_text": "Would a short overview of this workflow be useful?",
+        }]
+        self.assertEqual(validate_agent_artifact("sales", output, run)["customer_actions"][0]["customer_id"], customer_id)
+        output["customer_actions"][0]["customer_id"] = "8ec8ac47-7265-4695-8cc4-f1c8b498e8c4"
+        with self.assertRaisesRegex(AgentOutputError, "named task customer"):
+            validate_agent_artifact("sales", output, run)
+        output["customer_actions"][0]["customer_id"] = customer_id
+        output["customer_actions"][0]["estimated_cost_eur"] = 0.01
+        with self.assertRaisesRegex(AgentOutputError, "only customer_id"):
+            validate_agent_artifact("sales", output, run)
+
+    def test_marketing_customer_actions_are_role_scoped_and_bounded(self):
+        customer_id = "7ec8ac47-7265-4695-8cc4-f1c8b498e8c4"
+        run = task_artifact_run("cmo")
+        run["task_artifact"]["description"] += f" Assigned customer ID: {customer_id}."
+        output = task_artifact_output("cmo")
+        output["customer_actions"] = [{
+            "customer_id": customer_id, "purpose": "sales", "subject": "Product overview",
+            "body_text": "Would a short overview be useful?",
+        }]
+        with self.assertRaisesRegex(AgentOutputError, "named task customer"):
+            validate_agent_artifact("cmo", output, run)
+        output["customer_actions"] = [{
+            "customer_id": customer_id, "purpose": "marketing", "subject": "Product overview",
+            "body_text": "Would a short overview be useful?",
+        }] * 6
+        with self.assertRaisesRegex(AgentOutputError, "at most five"):
+            validate_agent_artifact("cmo", output, run)
+
+    def test_sales_legal_question_is_a_structured_founder_escalation(self):
+        run = task_artifact_run("sales")
+        output = task_artifact_output("sales")
+        output["legal_escalation"] = "A prospect requested a binding service-level guarantee."
+        validated = validate_agent_artifact("sales", output, run)
+        self.assertEqual(validated["legal_escalation"], output["legal_escalation"])
+        output["legal_escalation"] = "short"
+        with self.assertRaisesRegex(AgentOutputError, "founder decision needed"):
+            validate_agent_artifact("sales", output, run)
+        output = task_artifact_output("product_manager")
+        output["legal_escalation"] = "A contract requires legal review."
+        with self.assertRaisesRegex(AgentOutputError, "Only Sales or Marketing"):
+            validate_agent_artifact("product_manager", output, task_artifact_run("product_manager"))
 
     def test_architect_task_prompt_shows_exact_technical_design_contract(self):
         response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("architect"))}}],
