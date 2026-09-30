@@ -1,9 +1,10 @@
 begin;
 select no_plan();
 
-insert into public.company_settings(key,value,governance_sensitive,updated_by)
-values('founder_telegram_user_id','"12345678"'::jsonb,true,'paid-retry-test')
-on conflict(key) do update set value=excluded.value,governance_sensitive=true,updated_by='paid-retry-test';
+insert into public.company_settings(key,value,founder_only,governance_sensitive,updated_by)
+values('founder_telegram_user_id','"12345678"'::jsonb,true,true,'paid-retry-test')
+on conflict(key) do update set value=excluded.value,founder_only=true,
+  governance_sensitive=true,updated_by='paid-retry-test';
 select public.sutra_set_agent_model_spend_profile(
   '12345678','openai','gpt-6-luna',0.2,0.5,20000,12000,true
 );
