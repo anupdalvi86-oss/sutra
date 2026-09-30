@@ -254,6 +254,22 @@ class AgentArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(AgentOutputError, "at most five"):
             validate_agent_artifact("cmo", output, run)
 
+    def test_cmo_prompt_names_campaign_ceiling_and_available_marketing_action(self):
+        response = {"choices": [{"message": {"content": json.dumps(task_artifact_output("cmo"))}}],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+        fake_response = Mock()
+        fake_response.__enter__ = Mock(return_value=fake_response)
+        fake_response.__exit__ = Mock(return_value=False)
+        fake_response.read.return_value = json.dumps(response).encode()
+        with patch("sutra.worker.urllib.request.urlopen", return_value=fake_response) as request:
+            client = HermesAgentClient("https://hermes.example", "hermes-key", "openai", "gpt-4o-mini")
+            client.review(task_artifact_run("cmo"), max_output_tokens=500)
+        prompt = json.loads(request.call_args.args[0].data)["messages"][0]["content"]
+        self.assertIn("hard limit for its linked marketing email actions", prompt)
+        self.assertIn("database will enforce consent and budgets", prompt)
+        self.assertIn("customer_actions", prompt)
+        self.assertIn("no ad-platform publishing or ad-buy integration", prompt)
+
     def test_sales_legal_question_is_a_structured_founder_escalation(self):
         run = task_artifact_run("sales")
         output = task_artifact_output("sales")

@@ -405,8 +405,13 @@ class HermesAgentClient:
                     f"is an internal draft only. The initiative all-in budget cap is EUR {initiative_budget}; "
                     "consider that cap and active spending policies when estimating. The database compares the "
                     "proposed campaign budget with remaining initiative funds and marks any over-cap or legally "
-                    "blocked proposal approval_required. Never publish, buy ads, reserve campaign spend, or state "
-                    "that a draft campaign is active."
+                    "blocked proposal approval_required. The campaign budget is a hard limit for its linked "
+                    "marketing email actions; the database reserves against both the campaign and initiative "
+                    "ledgers, including unknown delivery outcomes. If the assigned task explicitly names customer "
+                    "UUIDs and calls for opted-in campaign email, use bounded customer_actions only for those IDs; "
+                    "the database will enforce consent and budgets, and a queued action may send when the worker "
+                    "is enabled. Do not claim an email was sent unless the persisted action reports sent. There is "
+                    "no ad-platform publishing or ad-buy integration, so do not claim ads were launched."
                 )
                 if support_context is not None:
                     role_output += (
