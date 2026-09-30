@@ -11,7 +11,8 @@ select throws_ok($$select public.sutra_founder_record_code_authorization('876543
   '42501',null,'non-founder cannot record standing code authority');
 
 create temporary table standing_code_fixture(
-  authorization_id uuid,task_id uuid,project_id uuid,qa_task_id uuid,security_task_id uuid,assessed_task_id uuid
+  authorization_id uuid,task_id uuid,architect_task_id uuid,project_id uuid,qa_task_id uuid,
+  security_task_id uuid,assessed_task_id uuid,assessed_architect_task_id uuid
 ) on commit drop;
 insert into standing_code_fixture(authorization_id)
 select (public.sutra_founder_record_code_authorization('12345678',
@@ -30,6 +31,7 @@ select ok(not (select has_table_privilege('service_role','public.founder_code_au
   'service_role cannot bypass the audited authorization RPC with direct table reads');
 
 update standing_code_fixture set task_id=(result->>'task_id')::uuid,
+  architect_task_id=(result->>'architect_task_id')::uuid,
   project_id=(result->>'project_id')::uuid
 from (select public.sutra_founder_create_standing_code_task(
   '12345678','Implement Sutra autonomous code-to-release path',
@@ -43,6 +45,12 @@ select is((select p.status from public.projects p join standing_code_fixture f o
   'active','fresh implementation project is recorded active');
 select is((select a.slug from public.tasks t join public.agents a on a.id=t.assigned_agent_id
   join standing_code_fixture f on f.task_id=t.id),'developer','fresh task is assigned to the Developer');
+select is((select status from public.tasks where id=(select task_id from standing_code_fixture)),
+  'backlog','Developer work remains unavailable until its design is complete');
+select is((select status from public.tasks where id=(select architect_task_id from standing_code_fixture)),
+  'ready','the Architect task is ready first');
+select is((select parent_task_id from public.tasks where id=(select task_id from standing_code_fixture)),
+  (select architect_task_id from standing_code_fixture),'Developer task is a child of its Architect design task');
 select is((select status from public.approvals where approval_type='developer_scope'
   and action_ref=(select task_id::text from standing_code_fixture)),'approved',
   'task scope approval is recorded through the standing authorization');
@@ -82,6 +90,7 @@ select public.sutra_founder_create_standing_code_task(
   '["Task remains within repository authorization","Existing project cap and CFO assessment stay unchanged"]'::jsonb
 );
 update standing_code_fixture set assessed_task_id=(payload->>'task_id')::uuid
+  ,assessed_architect_task_id=(payload->>'architect_task_id')::uuid
 from assessed_code_result;
 select is((select payload->>'project_budget_eur' from assessed_code_result),
   '17.60','task creation reports the existing assessed all-in cap');
@@ -107,6 +116,87 @@ select ok(exists(select 1 from public.audit_log where actor_type='founder'
   and details->>'spending_authority_changed'='false'),
   'task creation under an assessed cap is audit logged without granting spend authority');
 
+select is((select status from public.tasks where id=(select assessed_task_id from standing_code_fixture)),
+  'backlog','assessed Developer task waits in backlog behind the Architect');
+select is((select status from public.tasks where id=(select assessed_architect_task_id from standing_code_fixture)),
+  'ready','assessed initiative can immediately run its Architect task');
+insert into public.agent_runs(agent_id,project_id,task_id,trigger_type,status,input,output,started_at,finished_at)
+select architect.id,architect_task.project_id,architect_task.id,'task_artifact','succeeded','{}'::jsonb,
+  '{"artifact":{"design":"Use bounded task dispatch with approval and budget checks","components":["database gate","worker"],"security_risks":["stale approval"]}}'::jsonb,
+  now(),now()
+from public.tasks architect_task join public.agents architect on architect.id=architect_task.assigned_agent_id
+where architect_task.id=(select assessed_architect_task_id from standing_code_fixture);
+insert into public.task_agent_artifacts(task_id,agent_run_id,agent_id,artifact_type,artifact)
+select architect_task.id,run.id,architect.id,'technical_design',
+  '{"artifact":{"design":"Use bounded task dispatch with approval and budget checks","components":["database gate","worker"],"security_risks":["stale approval"]}}'::jsonb
+from public.tasks architect_task join public.agents architect on architect.id=architect_task.assigned_agent_id
+join public.agent_runs run on run.task_id=architect_task.id and run.trigger_type='task_artifact'
+where architect_task.id=(select assessed_architect_task_id from standing_code_fixture);
+update public.tasks set status='done'
+where id=(select assessed_architect_task_id from standing_code_fixture);
+select is((select status from public.tasks where id=(select assessed_task_id from standing_code_fixture)),
+  'ready','valid Architect design releases the Developer task without another founder prompt');
+select is((select status from public.approvals where approval_type='developer_scope'
+  and action_ref=(select assessed_task_id::text from standing_code_fixture)),
+  'approved','standing founder authorization remains approved after the design handoff');
+select ok((select payload #>> '{technical_design,design}' is not null from public.approvals
+  where approval_type='developer_scope'
+    and action_ref=(select assessed_task_id::text from standing_code_fixture)),
+  'the approved Developer scope record carries the exact Architect design');
+select ok(exists(select 1 from public.audit_log where action='developer.scope.standing_authorization_applied'
+  and resource_id=(select assessed_task_id::text from standing_code_fixture)
+  and details->>'technical_design_present'='true'
+  and details->>'spending_authority_changed'='false'),
+  'design handoff is audited without changing spending authority');
+
+-- Exercise the audited repair for the one stale task that predates the cap.
+create temporary table prepare_task_fixture(task_id uuid,architect_task_id uuid) on commit drop;
+insert into prepare_task_fixture values(null,null);
+insert into public.tasks(project_id,title,description,status,assigned_agent_id,owner_agent_id,priority,
+  acceptance_criteria,task_type)
+select p.id,'Rebase the untouched pre-cap Developer task',
+  'The initiative all-in budget is EUR 0; paid work remains subject to a founder-approved budget.',
+  'in_progress',developer.id,developer.id,1,
+  '["Keep work within the EUR 0 budget","Preserve the existing scope"]'::jsonb,'engineering'
+from public.projects p join public.agents developer on developer.slug='developer'
+where p.id=(select project_id from standing_code_fixture);
+update prepare_task_fixture set task_id=(select id from public.tasks
+  where title='Rebase the untouched pre-cap Developer task' order by created_at desc limit 1);
+insert into public.approvals(project_id,approval_type,action_ref,requested_by,required_roles,
+  decisions,amount,currency,summary,status,payload,decided_by,decided_at)
+select project_id,'developer_scope',id::text,'founder_standing_authorization',array['founder'],
+  jsonb_build_object('standing_authorization',jsonb_build_object('authorization_id',
+    (select authorization_id from standing_code_fixture),'repository','anupdalvi86-oss/sutra')),
+  0,'EUR','Existing founder standing authorization','approved',
+  jsonb_build_object('task_id',id,'authorization_id',(select authorization_id from standing_code_fixture)),
+  'founder:standing-authorization',now()
+from public.tasks where id=(select task_id from prepare_task_fixture);
+create temporary table prepare_result(payload jsonb) on commit drop;
+insert into prepare_result select public.sutra_founder_prepare_standing_code_task(
+  '12345678',(select task_id from prepare_task_fixture),
+  'Founder-authorized repair of the untouched task description and required design gate');
+update prepare_task_fixture set architect_task_id=(payload->>'architect_task_id')::uuid from prepare_result;
+select is((select status from public.tasks where id=(select task_id from prepare_task_fixture)),
+  'backlog','audited preparation blocks the old Developer task behind architecture');
+select is((select status from public.tasks where id=(select architect_task_id from prepare_task_fixture)),
+  'ready','audited preparation creates a ready Architect parent');
+select ok((select description like '%EUR 17.60%' and description not like '%EUR 0;%'
+  from public.tasks where id=(select task_id from prepare_task_fixture)),
+  'audited preparation replaces stale zero-budget wording with the approved cap');
+select ok((select acceptance_criteria::text like '%EUR 17.60%'
+  from public.tasks where id=(select task_id from prepare_task_fixture)),
+  'audited preparation updates the budget criterion');
+select ok(exists(select 1 from public.audit_log where actor_type='founder'
+  and action='founder.standing_code_task_prepared_for_architecture'
+  and resource_id=(select task_id::text from prepare_task_fixture)
+  and details->>'usage_or_reservations_changed'='false'
+  and details->>'spending_authority_changed'='false'),
+  'task repair records before/after context without touching usage, reservations, or authority');
+select throws_ok(format($q$select public.sutra_founder_prepare_standing_code_task('87654321','%s',
+  'Nonfounder must not prepare this standing authorized task')$q$,
+  (select task_id from prepare_task_fixture)),'42501',null,
+  'nonfounder cannot prepare a standing-authorized task');
+
 update public.projects set budget_assessment_status='unassessed'
 where id=(select project_id from standing_code_fixture);
 select throws_ok($$select public.sutra_founder_create_standing_code_task('12345678',
@@ -122,10 +212,18 @@ select throws_ok($$select public.sutra_founder_create_standing_code_task('123456
 update public.projects set legal_hold=false
 where id=(select project_id from standing_code_fixture);
 
+-- The release pipeline below exercises the Architect-released Developer task.
+update standing_code_fixture set task_id=assessed_task_id;
+
 select ok(not (select has_table_privilege('service_role','public.code_release_attempts','select')),
   'service role cannot bypass release authorization through direct table access');
 select is(public.sutra_claim_ready_code_release('sutra-worker-release1234')::text,null::text,
   'a standing grant alone cannot claim a merge without CI and independent reviews');
+
+-- A real GitHub issue dispatch moves the Developer task into execution before
+-- QA/Security can claim a review against its open PR.
+update public.tasks set status='in_progress'
+where id=(select task_id from standing_code_fixture);
 
 insert into public.tasks(project_id,title,description,acceptance_criteria,task_type,status,
   owner_agent_id,assigned_agent_id,parent_task_id)
