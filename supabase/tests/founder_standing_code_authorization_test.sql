@@ -220,6 +220,11 @@ select ok(not (select has_table_privilege('service_role','public.code_release_at
 select is(public.sutra_claim_ready_code_release('sutra-worker-release1234')::text,null::text,
   'a standing grant alone cannot claim a merge without CI and independent reviews');
 
+-- A real GitHub issue dispatch moves the Developer task into execution before
+-- QA/Security can claim a review against its open PR.
+update public.tasks set status='in_progress'
+where id=(select task_id from standing_code_fixture);
+
 insert into public.tasks(project_id,title,description,acceptance_criteria,task_type,status,
   owner_agent_id,assigned_agent_id,parent_task_id)
 select d.project_id,'Review tested PR acceptance criteria','Run bounded pre-merge QA for this PR.',
