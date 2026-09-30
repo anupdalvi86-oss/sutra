@@ -1,5 +1,5 @@
 begin;
-select plan(30);
+select plan(35);
 
 select ok((select relrowsecurity from pg_class where oid='public.customer_email_actions'::regclass),
   'customer email actions have row level security enabled');
@@ -49,6 +49,38 @@ insert into public.customers(id,name,email,status,marketing_email_consent,servic
   email_consent_recorded_at,email_consent_source)
   select customer_id,'Consenting customer','fixture@example.test','lead',true,true,now(),'fixture signup checkbox'
   from customer_email_ids;
+
+update public.projects set budget_assessment_status='unassessed',budget_assessment='{}'::jsonb
+  where id=(select project_id from customer_email_ids);
+select throws_ok($$select public.sutra_queue_customer_email(
+  (select agent_id from customer_email_ids),'sales',(select task_id from customer_email_ids),
+  (select project_id from customer_email_ids),(select customer_id from customer_email_ids),
+  'sales','Unassessed email','Must not be reserved',0.05,'email-action-unassessed')$$,
+  '42501','customer email requires an active initiative with a within-cap CFO assessment',
+  'customer email queue requires an assessed within-cap initiative');
+select is((select count(*)::integer from public.customer_email_actions
+  where idempotency_key='email-action-unassessed'),0,
+  'an unassessed initiative cannot persist a customer email action');
+select is((select count(*)::integer from public.initiative_budget_ledger
+  where project_id=(select project_id from customer_email_ids)
+    and description='Budgeted customer email action'),0,
+  'a rejected unassessed email rolls back its attempted ledger reservation');
+update public.projects set budget_assessment_status='within_cap',budget_assessment=
+  '{"estimated_total_eur":25,"confidence":"medium","recommended_action":"request_budget_increase","line_items":[{"category":"sales","amount_eur":25,"basis":"Database authorization test fixture."}]}'::jsonb
+  where id=(select project_id from customer_email_ids);
+select throws_ok($$select public.sutra_queue_customer_email(
+  (select agent_id from customer_email_ids),'sales',(select task_id from customer_email_ids),
+  (select project_id from customer_email_ids),(select customer_id from customer_email_ids),
+  'sales','Budget gap email','Must not be reserved',0.05,'email-action-budget-gap')$$,
+  '42501','customer email requires an active initiative with a within-cap CFO assessment',
+  'a budget increase recommendation blocks customer email even if project state is inconsistent');
+select is((select count(*)::integer from public.initiative_budget_ledger
+  where project_id=(select project_id from customer_email_ids)
+    and description='Budgeted customer email action'),0,
+  'a rejected budget-gap email rolls back its attempted ledger reservation');
+update public.projects set budget_assessment_status='within_cap',budget_assessment=
+  '{"estimated_total_eur":20,"confidence":"medium","recommended_action":"proceed_within_cap","line_items":[{"category":"sales","amount_eur":20,"basis":"Database authorization test fixture."}]}'::jsonb
+  where id=(select project_id from customer_email_ids);
 
 select throws_ok($$select public.sutra_queue_customer_email(
   (select agent_id from customer_email_ids),'sales',(select task_id from customer_email_ids),
