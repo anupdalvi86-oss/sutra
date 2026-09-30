@@ -149,7 +149,7 @@ begin
   if ceiling_eur is null then skip_reason:='reply_cost_ceiling_unconfigured';
   elsif agent_row.id is null or task_row.id is null or artifact_row.agent_id is distinct from task_row.owner_agent_id
       or artifact_row.agent_id is distinct from task_row.assigned_agent_id
-      or task_row.status not in ('in_progress','review','completed') then skip_reason:='task_assignment_invalid';
+      or task_row.status not in ('in_progress','review','done') then skip_reason:='task_assignment_invalid';
   elsif project_row.id is null or project_row.status<>'active'
       or project_row.budget_assessment_status<>'within_cap'
       or project_row.budget_assessment->>'recommended_action'<>'proceed_within_cap'
@@ -260,7 +260,7 @@ begin
       and p.budget_assessment->>'recommended_action'='proceed_within_cap' and not p.legal_hold
       and not exists(select 1 from public.legal_escalations e where e.project_id=p.id and e.status='open')
       and t.project_id=p.id and t.owner_agent_id=g.id and t.assigned_agent_id=g.id
-      and t.status in ('in_progress','review','completed') and g.active and g.slug='sales'
+      and t.status in ('in_progress','review','done') and g.active and g.slug='sales'
       and c.provider='zendesk' and c.external_ticket_id=a.ticket_id and c.status in ('new','open')
       and artifact.artifact_type='sales_handoff'
       and artifact.artifact->'support_reply_draft'->>'ticket_id'=a.ticket_id
@@ -324,7 +324,7 @@ begin
       and not p.legal_hold
       and not exists(select 1 from public.legal_escalations e where e.project_id=p.id and e.status='open')
       and t.project_id=p.id and t.owner_agent_id=g.id and t.assigned_agent_id=g.id
-      and t.status in ('in_progress','review','completed') and g.active and g.slug='sales'
+      and t.status in ('in_progress','review','done') and g.active and g.slug='sales'
       and c.provider='zendesk' and c.external_ticket_id=action_row.ticket_id and c.status in ('new','open')
       and artifact.artifact_type='sales_handoff'
       and artifact.artifact->'support_reply_draft'->>'ticket_id'=action_row.ticket_id
